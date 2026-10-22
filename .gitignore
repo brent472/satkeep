@@ -1,0 +1,23 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Wallets, keys and secrets — never commit these
+*.key
+*.wif
+*.xprv
+*.seed
+*mnemonic*.txt
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+wallet-data/
+bitcoin-data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
