@@ -15,6 +15,20 @@ pub enum Error {
     DuplicateKey(Role, Role),
     #[error("Twofold only runs on test networks for now; mainnet is refused")]
     Mainnet,
+    #[error("input {input} needs {needed} confirmations before it can be spent this way, and has {has}")]
+    TooEarly { input: usize, needed: u16, has: u32 },
+    #[error("input {input} uses a time-based delay; Savings only uses block-based delays")]
+    TimeBasedDelay { input: usize },
+    #[error("input {input} spends a coin this wallet doesn't know")]
+    UnknownCoin { input: usize },
+    #[error("not enough keys have approved this payment")]
+    NotEnoughApprovals,
+    #[error("BDK could not build the payment: {0}")]
+    Build(#[from] bdk_wallet::error::CreateTxError),
+    #[error("BDK could not finalize the payment: {0}")]
+    Finalize(#[from] bdk_wallet::signer::SignerError),
+    #[error("could not extract the finished transaction: {0}")]
+    Extract(#[from] crate::bitcoin::psbt::ExtractTxError),
     #[error("miniscript rejected the Savings descriptor: {0}")]
     Miniscript(#[from] crate::miniscript::Error),
 }

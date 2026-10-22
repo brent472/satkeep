@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Holder, Leaf, Node, Savings};
+use common::{Holder, Node, Path, Savings};
 use twofold_savings::Delays;
 use twofold_savings::bitcoin::Amount;
 
@@ -23,8 +23,8 @@ fn hand_built_witness_with_enough_signatures_is_accepted() {
     let node = Node::start();
     let mut savings = Savings::new(Delays::new(10, 20).unwrap());
     savings.fund(&node, Amount::from_btc(1.0).unwrap());
-    let mut psbt = savings.spend_through(Leaf::TwoOfThree, &node.new_address());
+    let mut psbt = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
     savings.sign(&mut psbt, &[Holder::Phone, Holder::Helper]);
-    assert_eq!(node.accepts(&savings.forced(&psbt, Leaf::TwoOfThree)), Ok(()));
+    assert_eq!(node.accepts(&savings.forced(&psbt, Path::TwoOfThree)), Ok(()));
 }
 

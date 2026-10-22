@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Holder, Leaf, Node, Savings};
+use common::{Holder, Node, Path, Savings};
 use twofold_savings::Delays;
 use twofold_savings::bitcoin::Amount;
 
@@ -15,14 +15,14 @@ fn one_btc() -> Amount {
     Amount::from_btc(1.0).unwrap()
 }
 
-/// Signs with `holders`, lets BDK finalize, and checks the network accepts
-/// and mines the spend.
-fn spends(savings: &mut Savings, node: &Node, leaf: Leaf, holders: &[Holder]) {
-    let mut psbt = savings.spend_through(leaf, &node.new_address());
+/// Signs with `holders`, finalizes through the Twofold library, and checks
+/// the network accepts and mines the spend.
+fn spends(savings: &mut Savings, node: &Node, path: Path, holders: &[Holder]) {
+    let mut psbt = savings.build(path, &node.new_address()).expect("Twofold builds the spend");
     savings.sign(&mut psbt, holders);
-    let tx = savings.bdk_finalize(&psbt).unwrap_or_else(|| panic!("BDK refused {holders:?} through {leaf:?}"));
-    assert_eq!(savings.leaf_used(&tx), leaf, "BDK chose a different leaf");
-    assert_eq!(node.accepts(&tx), Ok(()), "{holders:?} through {leaf:?}");
+    let tx = savings.finalize(&psbt).unwrap_or_else(|e| panic!("Twofold refused {holders:?} through {path:?}: {e}"));
+    assert_eq!(savings.path_used(&tx), path, "finalized through a different path");
+    assert_eq!(node.accepts(&tx), Ok(()), "{holders:?} through {path:?}");
     node.broadcast_and_confirm(&tx);
     savings.sync(node);
     assert_eq!(savings.wallet.balance().total(), Amount::ZERO, "Savings should be empty");
@@ -33,7 +33,7 @@ fn phone_and_device_can_spend() {
     let node = Node::start();
     let mut savings = Savings::new(short_delays());
     savings.fund(&node, one_btc());
-    spends(&mut savings, &node, Leaf::TwoOfThree, &[Holder::Phone, Holder::Device]);
+    spends(&mut savings, &node, Path::TwoOfThree, &[Holder::Phone, Holder::Device]);
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn phone_and_helper_can_spend() {
     let node = Node::start();
     let mut savings = Savings::new(short_delays());
     savings.fund(&node, one_btc());
-    spends(&mut savings, &node, Leaf::TwoOfThree, &[Holder::Phone, Holder::Helper]);
+    spends(&mut savings, &node, Path::TwoOfThree, &[Holder::Phone, Holder::Helper]);
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn device_and_helper_can_spend() {
     let node = Node::start();
     let mut savings = Savings::new(short_delays());
     savings.fund(&node, one_btc());
-    spends(&mut savings, &node, Leaf::TwoOfThree, &[Holder::Device, Holder::Helper]);
+    spends(&mut savings, &node, Path::TwoOfThree, &[Holder::Device, Holder::Helper]);
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn device_alone_can_spend_once_its_delay_has_passed() {
     let mut savings = Savings::new(short_delays());
     let funded_at = savings.fund(&node, one_btc());
     savings.age_to(&node, funded_at, savings.delays().device().into());
-    spends(&mut savings, &node, Leaf::Device, &[Holder::Device]);
+    spends(&mut savings, &node, Path::Device, &[Holder::Device]);
 }
 
 #[test]
@@ -67,5 +67,5 @@ fn heir_alone_can_spend_once_its_delay_has_passed() {
     let mut savings = Savings::new(short_delays());
     let funded_at = savings.fund(&node, one_btc());
     savings.age_to(&node, funded_at, savings.delays().heir().into());
-    spends(&mut savings, &node, Leaf::Heir, &[Holder::Heir]);
+    spends(&mut savings, &node, Path::Heir, &[Holder::Heir]);
 }

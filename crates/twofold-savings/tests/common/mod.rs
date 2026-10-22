@@ -21,8 +21,7 @@ use twofold_savings::bitcoin::key::Secp256k1;
 use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use twofold_savings::bitcoin::{
-    Address, Amount, FeeRate, Network, NetworkKind, Sequence, Transaction, Txid, Witness, XOnlyPublicKey,
-    consensus,
+    Address, Amount, FeeRate, Network, NetworkKind, Transaction, Txid, Witness, XOnlyPublicKey, consensus,
 };
 use twofold_savings::miniscript::descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard};
 use twofold_savings::miniscript::{Miniscript, Tap};
@@ -182,13 +181,7 @@ pub enum Holder {
     Heir,
 }
 
-/// A script leaf of the Savings descriptor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Leaf {
-    TwoOfThree,
-    Device,
-    Heir,
-}
+pub use twofold_savings::spend::Path;
 
 // ------------------------------------------------------------- wallet -----
 
@@ -272,14 +265,20 @@ impl Savings {
         self.sync_skipping_empty_blocks(node);
     }
 
-    /// A PSBT that sends everything in Savings to `to` through `leaf`. Each
-    /// input's sequence is set to the leaf's delay, if it has one.
-    pub fn spend_through(&mut self, leaf: Leaf, to: &Address) -> Psbt {
-        let csv = match leaf {
-            Leaf::TwoOfThree => None,
-            Leaf::Device => Some(Sequence::from_height(self.delays().device())),
-            Leaf::Heir => Some(Sequence::from_height(self.delays().heir())),
-        };
+    /// Asks the Twofold library for a PSBT that sends everything in Savings
+    /// to `to` through `path`.
+    pub fn build(&mut self, path: Path, to: &Address) -> Result<Psbt, twofold_savings::Error> {
+        let delays = self.delays();
+        twofold_savings::spend::build_spend(&mut self.wallet, delays, path, |b| {
+            b.drain_wallet().drain_to(to.script_pubkey()).fee_rate(FEE_RATE);
+        })
+    }
+
+    /// The same PSBT built with BDK directly, skipping Twofold's delay check,
+    /// as an attacker or a buggy wallet could. Only for showing the network
+    /// refuses what Twofold would have refused.
+    pub fn build_unchecked(&mut self, path: Path, to: &Address) -> Psbt {
+        let csv = path.sequence(self.delays());
         let mut builder = self.wallet.build_tx();
         builder
             .drain_wallet()
@@ -304,10 +303,15 @@ impl Savings {
         }
     }
 
-    /// Lets BDK finalize the PSBT, as a normal wallet would. `None` if BDK
-    /// refuses. BDK is told the transaction is for the next block, which is
-    /// the height the node checks relative timelocks against.
-    pub fn bdk_finalize(&self, psbt: &Psbt) -> Option<Transaction> {
+    /// Finalizes through the Twofold library, which checks coin ages before
+    /// handing over to BDK.
+    pub fn finalize(&self, psbt: &Psbt) -> Result<Transaction, twofold_savings::Error> {
+        twofold_savings::spend::finalize(&self.wallet, psbt)
+    }
+
+    /// Lets BDK finalize on its own, with no Twofold checks. `None` if BDK
+    /// refuses. Used only to pin down how BDK behaves.
+    pub fn bdk_only_finalize(&self, psbt: &Psbt) -> Option<Transaction> {
         let mut psbt = psbt.clone();
         let next_block = self.wallet.latest_checkpoint().height() + 1;
         let options = SignOptions { assume_height: Some(next_block), ..Default::default() };
@@ -318,16 +322,16 @@ impl Savings {
     }
 
     /// Builds the spend by hand, sidestepping BDK and miniscript: puts
-    /// whatever signatures the PSBT has for `leaf` into a witness for that
-    /// leaf, missing ones as empty, and lets the network judge it.
-    pub fn forced(&self, psbt: &Psbt, leaf: Leaf) -> Transaction {
+    /// whatever signatures the PSBT has for `path`'s leaf into a witness for
+    /// that leaf, missing ones as empty, and lets the network judge it.
+    pub fn forced(&self, psbt: &Psbt, path: Path) -> Transaction {
         let mut tx = psbt.unsigned_tx.clone();
         for (i, input) in psbt.inputs.iter().enumerate() {
             let (control, (script, _)) = input
                 .tap_scripts
                 .iter()
-                .find(|(_, (script, _))| self.leaf_of(script) == leaf)
-                .unwrap_or_else(|| panic!("input {i} has no {leaf:?} leaf"));
+                .find(|(_, (script, _))| self.leaf_of(script) == path)
+                .unwrap_or_else(|| panic!("input {i} has no {path:?} leaf"));
             let ms = Miniscript::<XOnlyPublicKey, Tap>::parse(script).unwrap();
             let leaf_hash = TapLeafHash::from_script(script, LeafVersion::TapScript);
             let keys: Vec<XOnlyPublicKey> = ms.iter_pk().collect();
@@ -347,21 +351,21 @@ impl Savings {
         tx
     }
 
-    /// Which leaf a finalized Taproot script-path spend revealed.
-    pub fn leaf_used(&self, tx: &Transaction) -> Leaf {
+    /// Which path a finalized Taproot script-path spend revealed.
+    pub fn path_used(&self, tx: &Transaction) -> Path {
         let leaf = tx.input[0].witness.taproot_leaf_script().expect("a script-path spend");
         assert_eq!(leaf.version, LeafVersion::TapScript);
         self.leaf_of(leaf.script)
     }
 
-    fn leaf_of(&self, script: &twofold_savings::bitcoin::Script) -> Leaf {
+    fn leaf_of(&self, script: &twofold_savings::bitcoin::Script) -> Path {
         let ms = Miniscript::<XOnlyPublicKey, Tap>::parse(script).unwrap().to_string();
         if ms.starts_with("multi_a(2,") {
-            Leaf::TwoOfThree
+            Path::TwoOfThree
         } else if ms.ends_with(&format!("older({}))", self.delays().device())) {
-            Leaf::Device
+            Path::Device
         } else if ms.ends_with(&format!("older({}))", self.delays().heir())) {
-            Leaf::Heir
+            Path::Heir
         } else {
             panic!("unexpected leaf {ms}")
         }
