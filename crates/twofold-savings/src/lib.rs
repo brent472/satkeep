@@ -4,4 +4,11 @@
 //! DEVICE can spend alone, and after a longer delay HEIR can spend alone.
 //! See the crate README for every assumption behind this policy.
 
+mod delays;
+mod error;
+mod keys;
+
 pub use bdk_wallet::{bitcoin, miniscript};
+pub use delays::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, Delays};
+pub use error::Error;
+pub use keys::{Role, SavingsKeys};

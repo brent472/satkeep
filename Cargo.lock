@@ -438,6 +438,7 @@ name = "twofold-savings"
 version = "0.1.0"
 dependencies = [
  "bdk_wallet",
+ "rand",
  "thiserror",
 ]
 
