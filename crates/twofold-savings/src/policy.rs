@@ -78,6 +78,24 @@ impl SavingsPolicy {
         (both.next().expect("receive"), both.next().expect("change"))
     }
 
+    /// The wallet descriptor to back up or import into other software
+    /// (Liana, Bitcoin Core, and others that take descriptors): public keys
+    /// only, receive and change written as `<0;1>`, with its checksum.
+    ///
+    /// It holds no private keys, so it cannot spend, but it reveals every
+    /// Savings address and balance; treat it as private.
+    pub fn export_descriptor(&self) -> String {
+        self.descriptor.to_string()
+    }
+
+    /// The same as [`Self::export_descriptor`], split into separate receive
+    /// and change descriptors, each with its own checksum, for software that
+    /// doesn't read `<0;1>`.
+    pub fn export_receive_and_change(&self) -> (String, String) {
+        let (receive, change) = self.receive_and_change();
+        (receive.to_string(), change.to_string())
+    }
+
     /// Whether the holders of `signers` could spend a Savings coin that has
     /// had `age_blocks` confirmations, according to the descriptor itself.
     ///
@@ -275,6 +293,21 @@ mod tests {
         assert!(receive.to_string().contains("/0/*"));
         assert!(change.to_string().contains("/1/*"));
         assert!(!receive.is_multipath() && !change.is_multipath());
+    }
+
+    #[test]
+    fn export_is_public_checksummed_and_parses_back() {
+        let policy = policy(Delays::default());
+        let exported = policy.export_descriptor();
+        assert!(!exported.contains("prv"), "no private keys");
+        let (body, checksum) = exported.split_once('#').expect("has a checksum");
+        assert_eq!(checksum.len(), 8);
+        assert!(body.starts_with("tr(") && body.contains("/<0;1>/*"));
+        assert_eq!(&Descriptor::<DescriptorPublicKey>::from_str(&exported).unwrap(), policy.descriptor());
+
+        let (receive, change) = policy.export_receive_and_change();
+        assert!(receive.contains("/0/*") && change.contains("/1/*"));
+        assert!(!receive.contains("<0;1>") && receive.contains('#') && change.contains('#'));
     }
 
     #[test]
