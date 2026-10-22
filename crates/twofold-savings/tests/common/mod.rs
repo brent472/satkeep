@@ -32,8 +32,8 @@ use twofold_savings::{Delays, SavingsKeys, SavingsPolicy};
 pub const FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(2);
 
 /// Largest batch of blocks mined per RPC call, to stay well inside the RPC
-/// client's timeout.
-const MINE_BATCH: u32 = 1_000;
+/// client's 15-second timeout on a slow machine.
+const MINE_BATCH: u32 = 500;
 
 // ---------------------------------------------------------------- node ----
 
@@ -41,7 +41,16 @@ const MINE_BATCH: u32 = 1_000;
 pub struct Node {
     _process: corepc_node::Node,
     rpc: Client,
-    miner: Address,
+    faucet: Client,
+    /// `raw(OP_TRUE)` with its checksum. Blocks are mined to this script
+    /// rather than to a wallet address because the node wallet slows mining
+    /// down several times over.
+    burn: String,
+    /// The node's clock, in seconds. Each block must be timestamped after
+    /// the median of the 11 before it and no more than 2 hours ahead of the
+    /// node's clock, so mining thousands of blocks in seconds needs the
+    /// clock moved forward too: 10 minutes per block, as on the real network.
+    clock: std::cell::Cell<u64>,
 }
 
 impl Node {
@@ -49,11 +58,18 @@ impl Node {
         let exe = corepc_node::exe_path().expect("set BITCOIND_EXE to the path of bitcoind.exe");
         let process = corepc_node::Node::with_conf(exe, &corepc_node::Conf::default())
             .expect("start a throwaway regtest bitcoind");
-        let auth = Auth::CookieFile(process.params.cookie_file.clone());
-        let rpc = Client::new(&process.rpc_url_with_wallet("default"), auth).expect("RPC client");
-        let miner = parse_address(&rpc.call::<String>("getnewaddress", &[]).expect("getnewaddress"));
-        let node = Self { _process: process, rpc, miner };
-        node.mine(101); // the first coinbase is spendable after 100 confirmations
+        let auth = || Auth::CookieFile(process.params.cookie_file.clone());
+        let rpc = Client::new(&process.rpc_url(), auth()).expect("RPC client");
+        let faucet = Client::new(&process.rpc_url_with_wallet("default"), auth()).expect("RPC client");
+        let info: Value = rpc.call("getdescriptorinfo", &[json!("raw(51)")]).expect("getdescriptorinfo");
+        let burn = format!("raw(51)#{}", info["checksum"].as_str().unwrap());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let node = Self { _process: process, rpc, faucet, burn, clock: std::cell::Cell::new(now) };
+
+        // One 50-coin block for the faucet, then 100 more so it can be spent.
+        let address: String = node.faucet.call("getnewaddress", &[]).expect("getnewaddress");
+        node.rpc.call::<Value>("generatetoaddress", &[json!(1), json!(address)]).expect("generatetoaddress");
+        node.mine(100);
         node
     }
 
@@ -65,25 +81,36 @@ impl Node {
         let mut left = blocks;
         while left > 0 {
             let n = left.min(MINE_BATCH);
-            self.rpc
-                .call::<Vec<String>>("generatetoaddress", &[json!(n), json!(self.miner.to_string())])
-                .expect("generatetoaddress");
+            self.clock.set(self.clock.get() + u64::from(n) * 600);
+            self.rpc.call::<Value>("setmocktime", &[json!(self.clock.get())]).expect("setmocktime");
+            self.rpc.call::<Value>("generatetodescriptor", &[json!(n), json!(self.burn)]).expect("generatetodescriptor");
             left -= n;
         }
+    }
+
+    /// Unloads the faucet wallet, which makes mining faster still. After
+    /// this, [`Node::send_to`] no longer works.
+    pub fn close_faucet(&self) {
+        self.rpc.call::<Value>("unloadwallet", &[json!("default")]).expect("unloadwallet");
     }
 
     pub fn height(&self) -> u32 {
         self.rpc.call::<u32>("getblockcount", &[]).expect("getblockcount")
     }
 
+    /// An address nobody will spend from, for sending test spends to. Its
+    /// key is random and thrown away at once.
     pub fn new_address(&self) -> Address {
-        parse_address(&self.rpc.call::<String>("getnewaddress", &[]).expect("getnewaddress"))
+        let secp = Secp256k1::new();
+        let (secret, _) = secp.generate_keypair(&mut rand::thread_rng());
+        let (xonly, _) = secret.public_key(&secp).x_only_public_key();
+        Address::p2tr(&secp, xonly, None, Network::Regtest)
     }
 
     /// Sends from the faucet wallet. Not mined yet.
     pub fn send_to(&self, address: &Address, amount: Amount) -> Txid {
         let txid: String = self
-            .rpc
+            .faucet
             .call("sendtoaddress", &[json!(address.to_string()), json!(amount.to_btc())])
             .expect("sendtoaddress");
         Txid::from_str(&txid).unwrap()
@@ -100,26 +127,16 @@ impl Node {
         }
     }
 
-    /// Broadcasts `tx`, mines it into a block, and checks it confirmed.
+    /// Broadcasts `tx`, mines one block, and checks `tx` is in it.
     pub fn broadcast_and_confirm(&self, tx: &Transaction) {
         let hex = consensus::encode::serialize_hex(tx);
         let txid: String = self.rpc.call("sendrawtransaction", &[json!(hex)]).expect("sendrawtransaction");
         self.mine(1);
-        let info: Value = self.rpc.call("gettransaction", &[json!(txid)]).unwrap_or(Value::Null);
-        let confirmations = match info["confirmations"].as_i64() {
-            Some(c) => c,
-            // Not a faucet-wallet transaction: look it up by txid instead.
-            None => self.rpc.call::<Value>("getrawtransaction", &[json!(txid), json!(true)]).unwrap()
-                ["confirmations"]
-                .as_i64()
-                .unwrap_or(0),
-        };
-        assert_eq!(confirmations, 1, "transaction {txid} should be in the latest block");
+        let tip: String = self.rpc.call("getbestblockhash", &[]).unwrap();
+        let block: Value = self.rpc.call("getblock", &[json!(tip)]).unwrap();
+        let mined = block["tx"].as_array().unwrap().iter().any(|t| t.as_str() == Some(&txid));
+        assert!(mined, "transaction {txid} should be in the latest block");
     }
-}
-
-fn parse_address(s: &str) -> Address {
-    Address::from_str(s).unwrap().require_network(Network::Regtest).unwrap()
 }
 
 // --------------------------------------------------------------- keys -----
