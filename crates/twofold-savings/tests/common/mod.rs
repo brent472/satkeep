@@ -259,6 +259,19 @@ impl Savings {
         node.height()
     }
 
+    /// Mines until the coin funded at `funded_at` has exactly `confirmations`
+    /// confirmations (the funding block counts as the first), then syncs.
+    ///
+    /// The node accepts a spend with a relative delay of N blocks once the
+    /// coin has N confirmations, because that spend could go in the next
+    /// block, N blocks after the coin's.
+    pub fn age_to(&mut self, node: &Node, funded_at: u32, confirmations: u32) {
+        let target = funded_at + confirmations - 1;
+        assert!(node.height() <= target, "coin is already older than {confirmations} confirmations");
+        node.mine(target - node.height());
+        self.sync_skipping_empty_blocks(node);
+    }
+
     /// A PSBT that sends everything in Savings to `to` through `leaf`. Each
     /// input's sequence is set to the leaf's delay, if it has one.
     pub fn spend_through(&mut self, leaf: Leaf, to: &Address) -> Psbt {
@@ -332,6 +345,13 @@ impl Savings {
             tx.input[i].witness = witness;
         }
         tx
+    }
+
+    /// Which leaf a finalized Taproot script-path spend revealed.
+    pub fn leaf_used(&self, tx: &Transaction) -> Leaf {
+        let leaf = tx.input[0].witness.taproot_leaf_script().expect("a script-path spend");
+        assert_eq!(leaf.version, LeafVersion::TapScript);
+        self.leaf_of(leaf.script)
     }
 
     fn leaf_of(&self, script: &twofold_savings::bitcoin::Script) -> Leaf {
