@@ -1,0 +1,13 @@
+[package]
+name = "twofold-savings"
+version = "0.1.0"
+description = "The Twofold Savings wallet policy: 2 of 3 keys, with delayed device and heir paths"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bdk_wallet.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
