@@ -15,6 +15,7 @@ Cargo.lock.bak
 .env
 .env.*
 wallet-data/
+savings.json
 bitcoin-data/
 
 # OS / editor

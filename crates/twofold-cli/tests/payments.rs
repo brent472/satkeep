@@ -1,4 +1,4 @@
-//! `twofold keygen`, `send`, `sign` and `broadcast`, end to end on regtest.
+//! `twofold send`, `sign` and `broadcast`, end to end on regtest.
 
 mod common;
 
@@ -186,7 +186,7 @@ fn keygen_keys_can_create_a_wallet_and_approve() {
 
     let psbt = cli.path("pay.psbt");
     cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
-    cli.ok(&["sign", "--psbt", &psbt, "--key", &cli.path("phone.key")]);
-    cli.ok(&["sign", "--psbt", &psbt, "--key", &cli.path("device.key")]);
+    cli.ok(&["sign", "--psbt", &psbt, "--key-file", &cli.path("phone.key")]);
+    cli.ok(&["sign", "--psbt", &psbt, "--key-file", &cli.path("device.key")]);
     cli.ok(&["broadcast", "--psbt", &psbt]);
 }

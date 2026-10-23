@@ -47,16 +47,29 @@ impl<'a> Cli<'a> {
         self.dir.path().join(name).display().to_string()
     }
 
+    /// The stand-in for `~/.twofold` in this test, so no test can touch the
+    /// real one.
+    pub fn home(&self) -> std::path::PathBuf {
+        self.dir.path().join("home")
+    }
+
     fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = self.command_in_home(&[]);
+        cmd.arg("--wallet-dir").arg(self.wallet_dir()).args(args);
+        cmd
+    }
+
+    /// Like `command`, but without `--wallet-dir`, so the default applies.
+    fn command_in_home(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_twofold"));
-        cmd.arg("--wallet-dir")
-            .arg(self.dir.path().join("wallet"))
+        cmd.env("TWOFOLD_HOME", self.home())
             .arg("--rpc-url")
             .arg(self.node.rpc_url())
             .arg("--rpc-cookie")
             .arg(self.node.cookie_file())
             .args(args)
             .env_remove("TWOFOLD_WALLET_DIR")
+            .env_remove("TWOFOLD_NETWORK")
             .env_remove("TWOFOLD_RPC_URL")
             .env_remove("TWOFOLD_RPC_COOKIE");
         cmd
@@ -71,6 +84,11 @@ impl<'a> Cli<'a> {
         let mut child = self.command(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
         check_no_secrets(child.wait_with_output().unwrap())
+    }
+
+    /// Runs with no `--wallet-dir`, so it uses the default under `home()`.
+    pub fn run_in_home(&self, args: &[&str]) -> Output {
+        check_no_secrets(self.command_in_home(args).output().expect("run twofold"))
     }
 
     /// Runs and expects success; returns stdout.

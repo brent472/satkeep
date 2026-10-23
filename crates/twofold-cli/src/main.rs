@@ -24,9 +24,13 @@ use wallet_dir::{Config, Opened, TestNetwork};
 #[derive(Parser)]
 #[command(name = "twofold", version, about = "Twofold Savings wallet developer tool. Test networks only.")]
 struct Cli {
-    /// Folder holding this Savings wallet's public data. Never holds private keys.
-    #[arg(long, global = true, env = "TWOFOLD_WALLET_DIR", default_value = "wallet-data")]
-    wallet_dir: PathBuf,
+    /// Folder holding this Savings wallet's savings.json and database [default: ~/.twofold/<network>]
+    #[arg(long, global = true, env = "TWOFOLD_WALLET_DIR")]
+    wallet_dir: Option<PathBuf>,
+
+    /// Test network [default: regtest, or the wallet's own network]
+    #[arg(long, global = true, value_enum, env = "TWOFOLD_NETWORK")]
+    network: Option<TestNetwork>,
 
     /// Bitcoin Core RPC address [default: 127.0.0.1 on the network's usual port]
     #[arg(long, global = true, env = "TWOFOLD_RPC_URL")]
@@ -44,15 +48,16 @@ struct Cli {
 enum Command {
     /// Make a new test key for one holder and save it to a file.
     Keygen {
-        /// File to create. Must end in .key (the repo's .gitignore covers
-        /// *.key) and must not already exist.
+        /// Name for the key, like phone. Saved as ~/.twofold/<network>/keys/<name>.key
+        #[arg(long, required_unless_present = "out")]
+        name: Option<String>,
+        /// Save to this file instead. Must end in .key (the repo's .gitignore
+        /// covers *.key).
         #[arg(long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
     },
     /// Create a Savings wallet from five public keys.
     Create {
-        #[arg(long, value_enum)]
-        network: TestNetwork,
         /// PHONE's public key, like [fingerprint/87'/1'/0']tpub…/<0;1>/*
         #[arg(long)]
         phone: String,
@@ -108,9 +113,10 @@ enum Command {
     Sign {
         #[arg(long)]
         psbt: PathBuf,
-        /// File holding the private key (from `twofold keygen`)
+        /// File holding the private key (from `twofold keygen`). There is
+        /// deliberately no way to pass the key itself as an argument.
         #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
-        key: Option<PathBuf>,
+        key_file: Option<PathBuf>,
         /// Read the private key from standard input instead
         #[arg(long)]
         key_stdin: bool,
@@ -151,6 +157,13 @@ impl PathArg {
 }
 
 fn main() -> ExitCode {
+    if private_key_in_arguments() {
+        eprintln!(
+            "error: a private key was passed on the command line. Keys go in a file (--key-file) or on \
+             standard input (--key-stdin). Treat that key as exposed: it may be in your shell history."
+        );
+        return ExitCode::FAILURE;
+    }
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -160,9 +173,69 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether any argument contains an extended private key. Checked before
+/// clap parses anything, because clap repeats unexpected arguments in its
+/// error messages, and a key on the command line also lands in shell
+/// history and the process list.
+fn private_key_in_arguments() -> bool {
+    std::env::args_os().skip(1).any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg.contains("tprv8") || arg.contains("xprv9")
+    })
+}
+
+impl Cli {
+    /// The network asked for, or regtest.
+    fn network_or_default(&self) -> TestNetwork {
+        self.network.unwrap_or(TestNetwork::Regtest)
+    }
+
+    /// `--wallet-dir`, or `~/.twofold/<network>`.
+    fn wallet_dir(&self) -> Result<PathBuf> {
+        match &self.wallet_dir {
+            Some(dir) => Ok(dir.clone()),
+            None => Ok(twofold_home()?.join(self.network_or_default().core_name())),
+        }
+    }
+
+    /// Opens the wallet, checking it's on `--network` if one was given.
+    fn open(&self) -> Result<Opened> {
+        let opened = wallet_dir::open(&self.wallet_dir()?)?;
+        if let Some(network) = self.network {
+            if network != opened.network() {
+                bail!("this wallet is on {}, not {}", opened.network().core_name(), network.core_name());
+            }
+        }
+        Ok(opened)
+    }
+}
+
+/// `TWOFOLD_HOME`, or `.twofold` in your home folder. Outside any repo, so
+/// wallet files and demo keys can't be committed by accident.
+fn twofold_home() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("TWOFOLD_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    let user = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") };
+    user.map(|u| PathBuf::from(u).join(".twofold")).context("can't find your home folder; set TWOFOLD_HOME")
+}
+
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Keygen { ref out } => keygen(out)?,
+        Command::Keygen { ref name, ref out } => {
+            let out = match (out, name) {
+                (Some(out), _) => out.clone(),
+                (None, Some(name)) => {
+                    let simple = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                    if !simple {
+                        bail!("the key name may only use letters, digits, - and _");
+                    }
+                    twofold_home()?.join(cli.network_or_default().core_name()).join("keys").join(format!("{name}.key"))
+                }
+                (None, None) => unreachable!("clap requires --name or --out"),
+            };
+            keygen(&out)?
+        }
         Command::Send { ref to, ref amount, all: _, path, fee_rate, ref out } => {
             let (mut opened, _client) = open_and_sync(&cli)?;
             let network = opened.network().network();
@@ -197,13 +270,13 @@ fn run(cli: Cli) -> Result<()> {
             println!("Saved, unsigned, to {}.", out.display());
             println!("Needs approval from {}: run `twofold sign`, then `twofold broadcast`.", path.who_approves());
         }
-        Command::Sign { ref psbt, ref key, key_stdin } => {
+        Command::Sign { ref psbt, ref key_file, key_stdin } => {
             let mut payment = read_psbt(psbt)?;
             let mut text = String::new();
             if key_stdin {
                 std::io::stdin().read_to_string(&mut text).context("reading the key from standard input")?;
             } else {
-                let path = key.as_ref().expect("clap requires --key or --key-stdin");
+                let path = key_file.as_ref().expect("clap requires --key-file or --key-stdin");
                 text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
             }
             let holder = HolderKey::from_secret_str(&text)?;
@@ -225,29 +298,31 @@ fn run(cli: Cli) -> Result<()> {
             opened.persist()?;
             println!("Sent. Transaction ID: {txid}");
         }
-        Command::Create { network, phone, device, device_r, helper, heir, device_delay, heir_delay } => {
+        Command::Create { ref phone, ref device, ref device_r, ref helper, ref heir, device_delay, heir_delay } => {
+            let network = cli.network_or_default();
+            let dir = cli.wallet_dir()?;
             let client = connect(&cli.rpc_url, &cli.rpc_cookie, network)?;
             let config = Config {
                 network,
                 device_delay,
                 heir_delay,
-                phone,
-                device,
-                device_r,
-                helper,
-                heir,
+                phone: phone.clone(),
+                device: device.clone(),
+                device_r: device_r.clone(),
+                helper: helper.clone(),
+                heir: heir.clone(),
                 birthday: node::height(&client)?,
             };
-            let mut opened = wallet_dir::create(&cli.wallet_dir, config)?;
+            let mut opened = wallet_dir::create(&dir, config)?;
             opened.persist()?;
-            println!("Created a Savings wallet on {} in {}.", network.core_name(), cli.wallet_dir.display());
+            println!("Created a Savings wallet on {} in {}.", network.core_name(), dir.display());
             println!("Any 2 of PHONE, DEVICE, HELPER can approve at any time.");
             println!("DEVICE alone can approve once a coin has {device_delay} confirmations.");
             println!("HEIR alone can approve once a coin has {heir_delay} confirmations.");
-            println!("Settings: {}", wallet_dir::config_path(&cli.wallet_dir).display());
+            println!("Settings: {}", wallet_dir::config_path(&dir).display());
         }
         Command::Address => {
-            let mut opened = wallet_dir::open(&cli.wallet_dir)?;
+            let mut opened = cli.open()?;
             let address = opened.wallet.reveal_next_address(KeychainKind::External);
             opened.persist()?;
             println!("{}", address.address);
@@ -258,7 +333,7 @@ fn run(cli: Cli) -> Result<()> {
             opened.persist()?;
         }
         Command::Export { split } => {
-            let opened = wallet_dir::open(&cli.wallet_dir)?;
+            let opened = cli.open()?;
             if split {
                 let (receive, change) = opened.policy.export_receive_and_change();
                 println!("{receive}");
@@ -271,14 +346,21 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// Writes a fresh key to `out`. Refuses anything but a new `.key` file, so
-/// the repo's `.gitignore` keeps it out of commits.
+/// Writes a fresh test-network key to `out`. Refuses anything but a new
+/// `.key` file, so even inside a repo `.gitignore` keeps it out of commits.
 fn keygen(out: &Path) -> Result<()> {
     if out.extension().and_then(|e| e.to_str()) != Some("key") {
         bail!("the key file's name must end in .key, so .gitignore keeps it out of commits");
     }
     let key = HolderKey::generate();
-    write_new(out, format!("{}\n", key.to_secret_string()).as_bytes())?;
+    let secret = key.to_secret_string();
+    if !secret.starts_with("tprv") {
+        bail!("refusing to save a key that isn't a test-network key");
+    }
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    write_new(out, format!("{secret}\n").as_bytes())?;
     println!("Saved a new test key to {}.", out.display());
     println!("Anyone with this file can approve as its holder. Keep it private and never commit it.");
     println!("Public key (for PHONE, DEVICE, HELPER or HEIR):");
@@ -311,7 +393,7 @@ fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork)
 }
 
 fn open_and_sync(cli: &Cli) -> Result<(Opened, Client)> {
-    let mut opened = wallet_dir::open(&cli.wallet_dir)?;
+    let mut opened = cli.open()?;
     let client = connect(&cli.rpc_url, &cli.rpc_cookie, opened.network())?;
     node::sync(&client, &mut opened.wallet, opened.config.birthday)?;
     opened.persist()?;
