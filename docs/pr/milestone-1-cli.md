@@ -10,9 +10,16 @@ Milestone 1, part 2 of 3: `twofold`, a developer command-line tool for the Savin
 | `create …` | Savings wallet from five public keys, on `--network regtest` (default) or `signet`. Delays default to the 39,420 / 61,320 placeholders. |
 | `address`, `balance` | Receive. Balance shows each coin's confirmations and when its device and heir paths open. |
 | `send --path two-of-three\|device\|heir` | Unsigned PSBT through the library's `build_spend`, so a delayed path is refused until every coin used is old enough |
-| `sign (--key-file FILE \| --key-stdin)` | One holder approves. Refuses a key that adds nothing. |
+| `sign (--key-file FILE \| --key-stdin) [--yes]` | Shows each output (marking change back to Savings), the network fee and the approval path, asks `Approve? (y/N)`, and only then signs with one holder's key. Refuses a key that adds nothing. |
 | `broadcast` | Library `finalize` (refuses too-early or under-approved), then `sendrawtransaction` |
 | `export [--split]` | Public descriptor for backup or import |
+
+**Approval prompt (from review)**
+- Before signing, `twofold sign` prints every output's address and amount. Money returning to Savings is marked, as change or as one of your own addresses. It also prints the network fee and the approval path, which comes from the inputs' sequences through a new library helper, `spend::path_of`.
+- Then it asks `Approve? (y/N)` and signs only on `y`/`yes`. Anything else, or no input, signs nothing and exits with an error.
+- The key is read only after approval, so a declined payment never touches it.
+- With `--key-stdin`, standard input is the answer line, then the key line. `--yes` skips the question for scripts and tests.
+- `sign` now reads the wallet folder, so it can mark change and refuse a payment that doesn't spend this wallet's coins.
 
 **Keys and wallet files stay out of the repo (from review)**
 1. **No private key on the command line.** `sign` takes a key only from `--key-file` or `--key-stdin`; there's no `--key`. As a backstop, if any argument contains an extended private key, `twofold` refuses before parsing anything. It never repeats the key, and it warns that the key should be treated as exposed. (Without this check, clap would repeat an unexpected argument in its error.)
@@ -47,6 +54,11 @@ Milestone 1, part 2 of 3: `twofold`, a developer command-line tool for the Savin
 
 The CLI tests run the real binary against throwaway regtest nodes; your running node is never touched. `TWOFOLD_HOME` points at a temporary folder for each test. Keys are generated in memory and passed through stdin, except in the `keygen` and `--key-file` tests, which write fresh keys into that temporary folder; it's deleted when the test ends.
 
+- **`tests/approve.rs`:**
+  - the summary shows each output, change and your own addresses, the fee and the path, before the question
+  - only `y` signs: `n`, `N`, `no`, an empty line, a space, `maybe`, `yy` or no input leave the PSBT unchanged
+  - a declined payment never reads the key file
+  - a payment from another wallet is refused
 - **`tests/keys.rs`:**
   - a key passed as `--key`, `--key-file KEY`, `--key-file=KEY`, a bare argument, or inside another command's argument is refused, never repeated, and the PSBT is left unchanged
   - there's no `--key` flag
@@ -70,10 +82,10 @@ BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -- --incl
 $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- --include-ignored
 ```
 
-Last full run, on Windows with Bitcoin Core v31.1.0: **68 passed, 0 failed.**
-- CLI: 6 keys, 7 payments, 7 wallet
-- Library: 27 unit, 5 allowed, 12 forbidden, 1 export, 2 harness
-- The full-length 61,320-block test, about 11.5 minutes on its own
+Last run, on Windows with Bitcoin Core v31.1.0: **73 passed, 0 failed**, plus the full-length test.
+- CLI: 5 approve, 6 keys, 7 payments, 7 wallet
+- Library: 28 unit, 5 allowed, 12 forbidden, 1 export, 2 harness
+- The full-length 61,320-block test passed in about 11.5 minutes on its own, before the approval prompt was added. The prompt doesn't touch anything that test uses.
 
 Without the full-length test, the suite runs in about 30 s.
 

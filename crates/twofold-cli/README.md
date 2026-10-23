@@ -19,6 +19,26 @@ The spending rules themselves, and every assumption behind them, are in [`twofol
 
 `TWOFOLD_HOME` replaces `%USERPROFILE%\.twofold` as the base folder; the tests use it to work in a temporary folder.
 
+## Approving a payment
+
+Before signing, `twofold sign` shows exactly what's being approved, then asks:
+
+```text
+Payment to approve:
+  0.40000000 BTC to bcrt1p…
+  0.59999570 BTC comes back to Savings as change (bcrt1p…)
+  Network fee: 0.00000430 BTC
+  Approval path: any 2 of PHONE, DEVICE, HELPER
+Approve? (y/N)
+```
+
+- **Outputs:** every output's address and amount. Money returning to Savings is marked, as change or as "one of your own Savings addresses".
+- **Network fee and approval path:** the fee, and which path the payment needs, read from the inputs.
+- **Answer:** only `y` (or `yes`) signs. Anything else, an empty line or no input at all, signs nothing, leaves the file unchanged and exits with an error.
+- **The key isn't read until you approve**, so a declined payment never touches it.
+- **Standard input order:** with `--key-stdin`, standard input carries the answer first and the key on the next line. `--yes` skips the question, for scripts and tests; then standard input is just the key.
+- **Wrong wallet:** `sign` refuses a payment that doesn't spend this wallet's coins, which is why it reads the wallet folder. It never contacts the node, so run `twofold balance` first if the wallet hasn't synced since the payment was prepared.
+
 ## Commands
 
 | Command | What it does | Needs a node |
@@ -29,7 +49,7 @@ The spending rules themselves, and every assumption behind them, are in [`twofol
 | `balance` | Syncs and shows the total, and each coin's confirmations and when its delayed paths open | Yes |
 | `export [--split]` | Prints the public descriptor, for backup or for importing into other software | No |
 | `send --to ADDR (--amount BTC \| --all) [--path two-of-three\|device\|heir] [--fee-rate 2] --out FILE.psbt` | Prepares an unsigned payment. A delayed path is refused until every coin used has waited long enough. | Yes |
-| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin)` | Approves the payment with one holder's key, updating the file in place | No |
+| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin) [--yes]` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place | No (reads the wallet folder) |
 | `broadcast --psbt FILE.psbt` | Checks the payment has enough approvals and is old enough, then sends it | Yes |
 
 Global options:
@@ -87,6 +107,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 
 | File | What it proves |
 | --- | --- |
+| `tests/approve.rs` | `sign` shows each output (marking change and your own addresses), the fee and the path before asking. It signs on `y` only: `n`, `no`, an empty line, other text or no input leave the PSBT unchanged. A declined payment never reads the key. A payment from another wallet is refused. |
 | `tests/keys.rs` | A private key anywhere on the command line is refused and never repeated, and there's no `--key` flag. `keygen` defaults to `~/.twofold/<network>/keys`, writes only `tprv` keys, never overwrites, and refuses mainnet, odd names and non-`.key` files. Wallet files default to `~/.twofold/<network>` and must match `--network`. |
 | `tests/wallet.rs` | create, address, balance (including when each delayed path opens) and export work. The tool refuses: a node on another network, a mainnet `--network`, creating over an existing wallet, and any policy the library refuses. |
 | `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. DEVICE and HEIR alone are refused one block early and work on time. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
