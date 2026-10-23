@@ -40,7 +40,7 @@ let keys = SavingsKeys::new(phone, device, device_r, helper, heir)?; // tpub…/
 let policy = SavingsPolicy::new(keys, Delays::default(), Network::Regtest)?;
 let descriptor = policy.export_descriptor();          // for backup, Liana, Bitcoin Core
 let psbt = spend::build_spend(&mut wallet, policy.delays(), spend::Path::Device, |b| { /* recipients, fee */ })?;
-HolderKey::from_secret_str(&key_text)?.sign(&mut psbt)?; // one holder approves (test networks only)
+HolderKey::from_secret_str(&phrase)?.sign(&mut psbt)?; // one holder approves with their recovery phrase (test networks only)
 let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or not enough approvals
 ```
 
@@ -117,8 +117,27 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - **⚠️ Every Savings address changed when this was fixed.** Earlier versions hashed the keys in role order (PHONE, DEVICE, DEVICE_R, HELPER, HEIR). Liana v15.0 read that internal key as a real, spendable key and refused the descriptor: "Descriptor is not compatible with a Liana spending policy."
   - Switching to tree order changed the internal key, and with it every Savings address.
   - **Wallets made by older versions must be recreated.** That includes any `~/.twofold` test wallet and the demo wallet. Their coins stay spendable by those old descriptors, and they're only on test networks.
-- The test keys use derivation paths `m/87'/1'/0'` (and `m/87'/1'/1'` for DEVICE_R), with `/<0;1>/*` for receive and change. These paths are **test-only**; the real ones get decided with the reviewer.
 - Keys must be test-network extended public keys (`tpub`). Mainnet keys and a mainnet `Network` are both refused.
+
+### Recovery phrases and derivation
+
+Every Twofold key comes from a standard BIP39 recovery phrase. `HolderKey` goes from phrase to keys like this:
+
+1. **Phrase.** 12 English words from 128 bits of the operating system's random source (through `secp256k1`'s `thread_rng`), with BIP39's checksum. Made and read by the [`bip39`](https://crates.io/crates/bip39) crate (rust-bitcoin project), which also normalizes the text (NFKD).
+2. **Seed.** BIP39: PBKDF2-HMAC-SHA512 of the phrase, salt `"mnemonic"` with an **empty passphrase**, 2,048 rounds, giving 64 bytes.
+3. **Master key.** BIP32: HMAC-SHA512 of the seed under `"Bitcoin seed"`, as a test-network key (`tprv`). Its fingerprint is the `[xxxxxxxx/…]` in each public key.
+4. **Account keys.** `m/87'/1'/0'` for every holder, and `m/87'/1'/1'` for DEVICE_R. The descriptor uses `/<0;1>/*` below them for receive and change.
+
+This is exactly what Liana's hot signer does (`HotSigner`: BIP39, empty passphrase, 12 words), so a phrase from `twofold keygen` signs in Liana, and the exit drill checks that. A unit test pins steps 1–3 to BIP86's published test vector.
+
+Assumptions, to settle with the outside reviewer:
+
+- **12 words, no passphrase.** 128 bits, as Liana uses. 24 words would be a one-line change.
+- **The paths are test-only placeholders.** `87'` is BIP87 (multisig) and `1'` is the test-network coin type; the real paths get decided with the reviewer.
+- **The phrase has no network.** The same phrase would give mainnet keys elsewhere. Twofold only ever derives test-network keys from it (coin type `1'`, `tprv`/`tpub`), and refuses a mainnet `Network`.
+- **Only phrases are accepted.** `HolderKey::from_secret_str` takes exactly 12 English BIP39 words with a valid checksum, ignoring extra spaces, line endings and a byte-order mark. It refuses everything else without repeating its input. A key file in the old `tprv` format gets its own error saying to make a new key.
+- **Wiping memory.** The phrase inside `HolderKey`, the random bytes it came from, and the 64-byte seed are wiped when no longer needed (`zeroize`). The derived master key isn't: the `bitcoin` crate's `Xpriv` has no wiping. `to_secret_string` returns an ordinary `String`, so whoever calls it is responsible for it.
+- **Where the phrase is shown.** Never in the main flow. In the app it will be kept inside the encrypted phone key backup and shown only through an advanced export in Settings (see the phone-key-backup research, next on the list).
 
 ### Fees
 
@@ -169,6 +188,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | File | What it proves |
 | --- | --- |
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. The internal key matches Liana v15.0's published test vectors and a value from Liana's own code for the Savings tree, and isn't the old role-order key. |
+| `src/holder.rs` (unit) | A phrase round-trips, and BIP39's public test phrase gives the account key BIP86 publishes for it. A bad checksum, 11 or 24 words, an old `tprv` key and garbage are all refused without repeating their input. A phrase is spotted in text however it's split up. |
 | `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
 | `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. DEVICE or HEIR alone can't approve a check-in even with their paths open. |

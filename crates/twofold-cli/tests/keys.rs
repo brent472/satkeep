@@ -8,29 +8,51 @@ use std::fs;
 use common::{Cli, Holders, Node, expect_failure, expect_ok};
 use twofold_savings::HolderKey;
 
-const ON_THE_COMMAND_LINE: &str = "a private key was passed on the command line";
+const ON_THE_COMMAND_LINE: &str = "a private key or recovery phrase was passed on the command line";
 
 #[test]
-fn a_private_key_is_refused_on_the_command_line_and_never_repeated() {
+fn a_recovery_phrase_is_refused_on_the_command_line_and_never_repeated() {
     let node = Node::start();
     let cli = Cli::new(&node);
     let psbt = cli.path("pay.psbt");
     fs::write(&psbt, "not a real psbt").unwrap();
-    let key = HolderKey::generate().to_secret_string();
+    let key = common::new_key().to_secret_string();
     let joined = format!("--key-file={key}");
+    let mut unquoted = vec!["sign", "--psbt", &psbt, "--key-stdin"];
+    unquoted.extend(key.split(' '));
     let attempts = [
         vec!["sign", "--psbt", &psbt, "--key", &key],
         vec!["sign", "--psbt", &psbt, "--key-file", &key],
         vec!["sign", "--psbt", &psbt, &joined],
         vec!["sign", "--psbt", &psbt, &key],
+        unquoted,
         vec!["create", "--phone", &key, "--device", "x", "--device-r", "x", "--helper", "x", "--heir", "x"],
     ];
     for args in attempts {
-        // `run` also fails the test if the output contains the key.
+        // `run` also fails the test if the output contains words of the key.
         let err = expect_failure(&args, cli.run(&args));
         assert!(err.contains(ON_THE_COMMAND_LINE), "{err}");
     }
     assert_eq!(fs::read_to_string(&psbt).unwrap(), "not a real psbt");
+}
+
+#[test]
+fn an_old_style_private_key_is_still_refused_on_the_command_line() {
+    use twofold_savings::bitcoin::NetworkKind;
+    use twofold_savings::bitcoin::bip32::Xpriv;
+    use twofold_savings::bitcoin::secp256k1::rand::{RngCore, thread_rng};
+
+    let node = Node::start();
+    let cli = Cli::new(&node);
+    let psbt = cli.path("pay.psbt");
+    let mut seed = [0u8; 32];
+    thread_rng().fill_bytes(&mut seed);
+    let key = Xpriv::new_master(NetworkKind::Test, &seed).unwrap().to_string();
+    for args in [vec!["sign", "--psbt", &psbt, "--key-file", &key], vec!["sign", "--psbt", &psbt, &key]] {
+        // `run` also fails the test if the output contains `tprv`.
+        let err = expect_failure(&args, cli.run(&args));
+        assert!(err.contains(ON_THE_COMMAND_LINE), "{err}");
+    }
 }
 
 #[test]
@@ -49,8 +71,9 @@ fn keygen_defaults_to_twofold_home_and_writes_a_test_key() {
     let file = cli.home().join("regtest").join("keys").join("phone.key");
     assert!(out.contains(&file.display().to_string()), "{out}");
     let saved = fs::read_to_string(&file).unwrap();
-    assert!(saved.starts_with("tprv"), "only test-network keys are written");
+    assert_eq!(saved.split_whitespace().count(), 12, "the file holds a 12-word recovery phrase");
     let key = HolderKey::from_secret_str(&saved).unwrap();
+    common::remember(&key);
     assert!(out.contains(&key.public_key(0).to_string()) && out.contains(&key.public_key(1).to_string()));
 
     let signet = expect_ok(&["keygen"], cli.run_in_home(&["--network", "signet", "keygen", "--name", "phone"]));

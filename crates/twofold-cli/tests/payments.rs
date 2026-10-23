@@ -121,7 +121,7 @@ fn a_key_from_another_wallet_adds_nothing() {
     let (cli, _holders) = funded(&node);
     let psbt = cli.path("pay.psbt");
     cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
-    let stranger = HolderKey::generate();
+    let stranger = common::new_key();
     let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
     let err = common::expect_failure(&args, cli.run_with_stdin(&args, &stranger.to_secret_string()));
     assert!(err.contains("isn't part of this payment"), "{err}");
@@ -168,6 +168,7 @@ fn keygen_keys_can_create_a_wallet_and_approve() {
         let out = cli.ok(&["keygen", "--out", &file]);
         let keys: Vec<&str> = out.lines().filter(|l| l.starts_with("  ")).map(str::trim).collect();
         let saved = HolderKey::from_secret_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        common::remember(&saved);
         assert_eq!(keys, [saved.public_key(0).to_string(), saved.public_key(1).to_string()]);
         public.push((keys[0].to_string(), keys[1].to_string()));
     }

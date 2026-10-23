@@ -1,5 +1,6 @@
 //! Key file text through `HolderKey::from_secret_str`: either raw text, or a
-//! real key generated inside the target and then edited by the input.
+//! real recovery phrase generated inside the target and then edited by the
+//! input, character by character or word by word.
 //!
 //! Besides never panicking, an error must never repeat its input: key file
 //! text is secret, and an error message can end up in a log. Any 16
@@ -19,7 +20,7 @@ thread_local! {
 fn edit(key: &str, u: &mut Unstructured) -> ArbResult<String> {
     let mut chars: Vec<char> = key.chars().collect();
     for _ in 0..u.int_in_range(0..=6)? {
-        match u.int_in_range(0..=5)? {
+        match u.int_in_range(0..=7)? {
             0 if !chars.is_empty() => {
                 let i = u.choose_index(chars.len())?;
                 chars[i] = u.arbitrary()?;
@@ -35,6 +36,19 @@ fn edit(key: &str, u: &mut Unstructured) -> ArbResult<String> {
             3 => chars.insert(0, '\u{feff}'),
             4 => chars.push(*u.choose(&['\n', '\r', ' ', '\t', '\0'])?),
             5 => chars.truncate(u.int_in_range(0..=chars.len())?),
+            6 | 7 => {
+                // Swap, drop or repeat whole words, which keeps every word valid.
+                let text: String = chars.iter().collect();
+                let mut words: Vec<String> = text.split(' ').map(str::to_owned).collect();
+                let i = u.choose_index(words.len())?;
+                let j = u.choose_index(words.len())?;
+                match u.int_in_range(0..=2)? {
+                    0 => words.swap(i, j),
+                    1 => drop(words.remove(i)),
+                    _ => words.insert(i, words[j].clone()),
+                }
+                chars = words.join(" ").chars().collect();
+            }
             _ => {}
         }
     }

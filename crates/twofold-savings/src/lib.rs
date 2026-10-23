@@ -15,6 +15,6 @@ pub mod spend;
 pub use bdk_wallet::{bitcoin, miniscript};
 pub use delays::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, Delays};
 pub use error::Error;
-pub use holder::HolderKey;
+pub use holder::{HolderKey, PHRASE_WORDS, contains_recovery_phrase};
 pub use keys::{Role, SavingsKeys};
 pub use policy::{NUMS_POINT, SavingsPolicy, unspendable_internal_key};
