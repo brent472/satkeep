@@ -1,6 +1,6 @@
 # Restore tool: plan
 
-**Status: plan only, for review. No code yet.** Test networks only, like everything else in this repo.
+**Status: plan only, for review. No code yet.** D1–D3 and D5–D7 are approved as recommended; D4 is decided by brief v3.12 (section 8). Test networks only, like everything else in this repo.
 
 The brief promises that if Twofold disappears, the owner can still get their bitcoin out. They need the exit kit in their own cloud drive, their second key, and Twofold's open-source restore tool. The brief lists that tool as an open item that must exist and pass the exit drill before launch.
 
@@ -47,7 +47,7 @@ When Twofold is gone, so is the helper. That changes what each part of the walle
 | **Savings** (either shape) | 2 of 3, but HELPER is gone, so **PHONE + DEVICE** | The phone key (from the tool) **and** the second key, signing in Liana or another wallet |
 | **Savings with a beneficiary** | Also HEIR alone, after the heir delay | Unchanged: HEIR's own key in Liana |
 
-**So the second key matters twice.** It unlocks the backup, and it's one of the two keys Savings still needs. A second key that only works inside the Twofold app fails both jobs once the app is gone. Section 5 looks at which second keys pass. This is the most important finding of this plan. **D4** asks what to do about the case that fails.
+**So the second key matters twice.** It unlocks the backup, and it's one of the two keys Savings still needs. A second key that only works inside the Twofold app fails both jobs once the app is gone. Section 5 looks at which second keys pass. This is the most important finding of this plan. The case that would fail, an old phone or tablet, is settled by **D4** (brief v3.12): that phone's app must work fully offline and be able to export its key.
 
 ## 3. Proposed design
 
@@ -116,13 +116,14 @@ From the survey in `phone-key-backup.md` 3.2 and decision D1 there, the second k
 | --- | --- | --- | --- |
 | **Trezor** (SLIP-0011 CipherKeyValue) | **Yes.** It's a public protocol, and the tool asks for the same path and label the app used. Over USB from a computer, with the PIN on the device. Code: the `trezor-client` Rust crate, or calling Trezor's own `trezorctl` (`crypto encrypt-keyvalue`). Which one, and its upkeep, is **unconfirmed**. | Liana and Sparrow sign with hardware wallets. Whether Liana v15 supports Trezor is **unconfirmed**; Sparrow does. | **Works**, if the label and path are written down in the format spec |
 | **Twofold card** (FIDO `hmac-secret` / PRF, if built that way) | **Yes in principle.** It's a public standard, so desktop FIDO tools (libfido2's `fido2-assert` with `-h`) can ask for the same secret, given the credential id and salt stored in the lock entry. Untested. | Only if the card also speaks a signing protocol other wallets know. Its design isn't decided. | **Works by design,** if the card is built for it. Add this to the card's requirements. |
-| **Old phone or tablet** with the Twofold app (Secure Enclave or Keystore key, ECDH) | **Only while the Twofold app is still on that device.** The key can't leave it, by design, and only our app can use it. If the app is removed, or can't be installed again because it's gone from the stores, the backup can't be opened. | Only through the same app. | **Fails once the app is gone.** The phone key and DEVICE would both be lost, so Savings would be stuck: HELPER is gone too. |
+| **Old phone or tablet** with the Twofold app (Secure Enclave or Keystore key, ECDH) | **Through that phone's app, offline (D4).** The unlock key can't leave the phone, by design, and only our app can use it. So the app answers the tool's unlock request with no Twofold servers: the tool shows the request, the phone's app shows the answer, by QR code or text. Its exact wire format goes in the format spec. If the app is no longer on that phone and can't be installed again, the backup can't be opened. | **Yes, through the export (D4):** the app's Advanced option exports DEVICE's key as 12 words, or straight to Liana or Bitcoin Core. It also signs offline. | **Works while that phone's app is still installed,** with the kit explaining the step. The app recommends, never requires, a hardware second key once Savings is large. |
 | **Message-signing devices** (Coldcard, Jade, BitBox02, Ledger; not at launch) | **Yes,** by signing the same fixed message. These have the repeatability caveats in 3.2. | Yes, in Liana and Sparrow | **Works with caveats** |
 
-**The old-phone case** is a real gap in the exit, not just in the tool. Options are in **D4**.
+**The old-phone case** depends on that phone's app still being installed. Brief v3.12 accepts that and makes the app as independent as it can be (D4). For the tool, it means one more kind of device: a **second phone**, reached by an offline request and answer, not over USB.
 
 **Testing:**
 - **Every case** runs against the software device that already exists (`SimulatedDevice`, SLIP-0011-like), reachable from the tool only in test builds (a cargo feature that release builds leave out).
+- **The second-phone exchange** is tested against a simulated second phone (an ECDH key in software) until the app exists.
 - **A real Trezor protocol test** needs the Trezor emulator (`trezor-user-env`) in CI. That's a download, so it waits for your OK (**D6**).
 
 ## 6. Exporting to Liana and Bitcoin Core
@@ -196,12 +197,14 @@ A kit from before a phone key or second key change opens to old keys, which may 
 
 ## 8. Decisions
 
-| # | Decision | Options | Recommendation |
+All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.12.
+
+| # | Decision | Options | Outcome |
 | --- | --- | --- | --- |
 | **D1** | Where the tool lives | A crate in this repo / its own repo | **A crate in this repo** (`crates/twofold-restore`), with signed reproducible releases and a Software Heritage mirror. Splitting it out later is easy; keeping the format in step across repos isn't. |
 | **D2** | The exit kit's file type | PDF with an embedded attachment plus printed armoured text / HTML / guide plus a data file | **PDF**, as in section 4. The tool reads the PDF, the armoured text or the raw bytes. |
 | **D3** | How PHONE's key reaches Liana and Core | Core: RPC import / key file. Liana: show the 12 words on request / write into Liana's data folder. | **Core: RPC import by default, file on request. Liana: show the 12 words only with `--show-phrase`, after a warning.** Never Liana's internal files. |
-| **D4** | The old-phone second key, which fails once the app is gone (section 5) | (a) Accept it and say so in the kit. (b) The app recommends a hardware second key (Trezor now, the card later) whenever the second key is an old phone. (c) An old phone can't be the only second key for Savings above some amount. | **A product decision for the brief.** My suggestion is **(b)** now, and taking it to the outside reviewer. This changes onboarding and Protection, so it needs copy in Section 19; I won't write any. |
+| **D4** | The old-phone second key, which fails once the app is gone (section 5) | (a) Accept it and say so in the kit. (b) The app recommends a hardware second key when the second key is an old phone. (c) An old phone can't be the only second key for Savings above some amount. | **Decided (owner, brief v3.12): an old phone still counts as a second key**, with three requirements: (1) the second-phone app signs and unlocks fully offline, with no Twofold servers, and has an Advanced option to export its key (12 words, or straight to Liana or Bitcoin Core); (2) the exit kit covers that step for owners whose second key is a phone; (3) the app recommends, never requires, a hardware second key once Savings is large. The wording is the brief's (Section 04 *Inheritance*, Section 19 *Settings*). (1) and (3) are app work; for the tool, (1) means the second-phone request-and-answer above, and (2) means the kit's structure leaves room for that step. |
 | **D5** | One backup implementation or two | Shared small crate / an independent second implementation | **Shared crate, plus the written spec and fixed test vectors.** The exit drill still restores through the tool and spends with Liana's and Core's own code, so the parts that matter are checked independently. |
 | **D6** | Testing with a real device protocol | Simulated device only / plus the Trezor emulator in CI | **Simulated device first. The Trezor emulator (`trezor-user-env`, a download, on GitHub runners only) when Trezor support is built,** after your OK. |
 | **D7** | The wallet setup format | Keep a free string / a versioned format | **A versioned format** (section 4), with room for the pocket's descriptor and for earlier Savings wallets. It's also the kit's plain copy. |
@@ -217,6 +220,7 @@ Each item is its own branch and PR, stopping for review after each, as usual.
    - **Works / forbidden tests:** the right kit and device restore and spend on regtest. The wrong device, a wrong PIN, a changed kit, a swapped backup, mainnet, and a key on the command line are each refused. No key material appears in the output (the CLI's existing output checks).
    - **Dependencies:** reading the kit needs no PDF library (section 4). The Core import can use the RPC client the CLI already has. Anything new gets its reason and a `cargo deny` pass in that PR.
 4. **The exit drill.** Make a kit with the prototype, restore it with the tool, import into Liana and Bitcoin Core, and spend 2 of 3 with PHONE (from the tool) and DEVICE, in both Savings shapes. Then run the key-material scan.
-5. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.
+5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
+6. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.
 
 The Twofold card's unlock (FIDO `hmac-secret`) waits for the card's design. The everyday pocket's export waits for its descriptor. The format leaves room for both.
