@@ -43,7 +43,7 @@ The **recovery contact** (a trusted person) must be in the wallet rules from day
 
 - [ ] All tests pass on regtest
 - [ ] Signet demo transaction for each allowed path
-- [ ] Exit through Liana or Sparrow works with no Twofold code
+- [x] Exit through Liana or Sparrow works with no Twofold code
 - [ ] README has a diagram of the spending paths
 - [ ] One experienced Bitcoin developer has reviewed the policy
 
