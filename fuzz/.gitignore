@@ -5,3 +5,6 @@
 /corpus/*/*
 !/corpus/config/savings.json
 !/corpus/config/regression-same-branch-twice.json
+!/corpus/config/savings-no-beneficiary.json
+!/corpus/config/savings-moving.json
+!/corpus/config/old-card-only-path.json
