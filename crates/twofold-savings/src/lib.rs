@@ -4,6 +4,7 @@
 //! DEVICE can spend alone, and after a longer delay HEIR can spend alone.
 //! See the crate README for every assumption behind this policy.
 
+pub mod checkin;
 mod delays;
 mod error;
 mod holder;

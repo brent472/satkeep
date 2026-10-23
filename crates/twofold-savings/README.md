@@ -44,21 +44,45 @@ HolderKey::from_secret_str(&key_text)?.sign(&mut psbt)?; // one holder approves 
 let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or not enough approvals
 ```
 
-## Finding for the reviewer: BDK alone finalizes delayed spends too early
+## Check-in
 
-**What we found.** BDK 3.2.0 with miniscript 12.3.7 will finalize a DEVICE-alone or HEIR-alone spend as soon as the input's sequence matches the leaf's delay, however young the coin is. When BDK finalizes, it gives miniscript three satisfiers: the PSBT itself, a height check, and an age check. miniscript combines them with **OR** (`impl_tuple_satisfier` in `miniscript/src/miniscript/satisfy.rs`). The PSBT satisfier only compares the delay with the input's sequence, so it says "yes" before the coin is old enough, and BDK's age check is never consulted. BDK's own code has a `// TODO: test >= / >` beside that check.
+Each coin's delay clock starts when that coin confirms. A **check-in** spends every Savings coin, through the 2-of-3 path, into one new Savings address, so the device and heir delays start again from zero. It must happen before the oldest coin reaches the device delay; after that, DEVICE alone could spend it.
 
-**Why funds were never at risk.** The network enforces the delay itself (BIP 68 and `OP_CHECKSEQUENCEVERIFY`). The node rejects such a spend with `non-BIP68-final`, and the tests confirm it every time. The risk was in the product: Twofold would have handed the user, or an heir, a spend that can never confirm.
+- **Interval rule.** `checkin::CheckinRule::new(interval, margin, delays)` requires `interval + margin <= device delay`, with both at least 1 block. So an interval at or past the device delay is always refused. Defaults: interval 26,280 blocks (about 6 months), margin 4,320 blocks (about 30 days). Against the 39,420-block device delay, that leaves 13,140 blocks. All three are placeholders.
+- **Coin status.** For each coin, `checkin::coins` gives:
+  - blocks until its device path and its heir path open
+  - **due:** the coin has reached the interval
+  - **overdue:** its device path is already open
 
-**The fix.** `spend::check_delays` reads each input's sequence. If the sequence asks for a block-based delay, it compares that delay with the coin's confirmations as of the next block, and returns `Error::TooEarly` if the coin is too young. Time-based delays are refused outright. Both `spend::build_spend` and `spend::finalize` run this check, so Twofold refuses before building a delayed-path spend and again before finalizing one. Where BDK only knows an upper bound for a coin's confirmation height, the computed age can only come out too young, never too old.
+  `checkin::reminder` sums these up for the whole wallet.
+- **Building and checking.**
+  - `checkin::build_checkin` drains every coin to one new change address through the 2-of-3 path, and marks the PSBT with a proprietary field (`twofold`/`checkin`) that other software ignores.
+  - `checkin::check_checkin` refuses a check-in that leaves out any unspent coin, pays anywhere but one Savings address, or uses a delayed path.
+  - The CLI runs the check again at `sign` and at `broadcast`, so a coin that arrived after the check-in was built gets it refused.
+- **Why it can't be a delayed path.** The check-in's sequence carries no delay, so its delayed leaves can't be satisfied. DEVICE or HEIR alone can't approve it even when their paths are open, and the network agrees (CSV fails). The tests check both.
+
+## Finding for the reviewer: BDK alone finalizes delayed spends wrongly, both ways
+
+**What we found.** When BDK 3.2.0 finalizes a PSBT, it gives miniscript 12.3.7 three satisfiers: the PSBT itself, a height check and an age check. miniscript combines them with **OR** (`impl_tuple_satisfier` in `miniscript/src/miniscript/satisfy.rs`), which goes wrong in two directions.
+
+1. **Sequence without age** (found in part 1). If the input's sequence matches a leaf's delay, the PSBT satisfier says yes, however young the coin. BDK finalizes a DEVICE-alone or HEIR-alone spend too early, and the network rejects it with `non-BIP68-final`.
+2. **Age without sequence** (found while testing the check-in). Once the coin is old enough, BDK's age check says yes even when the input's sequence carries no delay. BDK then finalizes through a delayed leaf, for example DEVICE alone signing a check-in, and the network rejects it because `OP_CHECKSEQUENCEVERIFY` fails.
+
+BDK's own code has a `// TODO: test >= / >` beside its age check.
+
+**Why funds were never at risk.** The network enforces both rules itself (BIP 68 and `OP_CHECKSEQUENCEVERIFY`), and the tests confirm every such transaction is rejected. The risk was in the product: Twofold would have handed the user, or an heir, a transaction that can never confirm.
+
+**The fix.**
+- `spend::check_delays` covers the first case. It compares each input's sequence-required delay with the coin's confirmations as of the next block, and returns `Error::TooEarly` if the coin is too young. Time-based delays are refused outright. `spend::build_spend` and `spend::finalize` both run it. Where BDK only knows an upper bound for a coin's confirmation height, the computed age can only come out too young, never too old.
+- `spend::finalize` covers the second case. It no longer uses BDK's finalizer: it uses miniscript's `PsbtExt::finalize_mut`, whose only satisfier is the PSBT. A delayed leaf is then used only when the input's sequence commits to that delay.
+
+Together, these match the network's rule. Tests check the boundary exactly: refused at N − 1 confirmations, accepted at N.
 
 **How it's tested.**
 - `library_refuses_to_build_a_device_spend_one_block_early` and `…_heir_spend_one_block_early`: the library refuses one block early and builds one block later.
-- Every forbidden-path test requires both a library refusal and a node rejection.
-- `bdk_alone_would_finalize_an_early_delayed_spend` pins BDK's behaviour, so we notice if it ever changes.
-- With the check switched off, 8 of the 12 forbidden-path tests fail.
-
-A related detail: BDK's age check compares against the current tip, which makes it one block stricter than the network. The network judges a spend by the block it would go in, so `finalize` passes BDK `assume_height = tip + 1`. Twofold and the network then agree to the block. The tests check this boundary exactly: refused at N − 1 confirmations, accepted at N.
+- Every forbidden-path test requires both a library refusal and a node rejection. With `check_delays` switched off, 8 of them fail.
+- `a_check_in_can_only_use_the_two_of_three_path`: with both delayed paths open, DEVICE or HEIR alone can't finalize a check-in, and the node rejects a hand-built attempt. With BDK's finalizer, this test failed.
+- Two tests pin BDK's behaviour, so we notice if it ever changes: `bdk_alone_would_finalize_an_early_delayed_spend` and `bdk_alone_would_finalize_a_delayed_leaf_whose_sequence_has_no_delay`.
 
 ## Assumptions
 
@@ -77,6 +101,8 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - Defaults: device 39,420 blocks (about 9 months), heir 61,320 blocks (about 14 months). Placeholders, and configurable through `Delays::new`.
 - They are **relative** delays (`older`, BIP 68/112), counted in **blocks only**. Delays are stored as `u16`, which caps them at the 65,535-block consensus limit and rules out time-based values. The heir delay must be longer than the device delay, and the device delay at least 1 block.
 - Each coin's clock starts when **that coin** confirms. New deposits start their own clock. Change from any Savings spend goes to a new Savings address, so it gets a fresh clock too. A check-in must therefore include every coin.
+- **Check-in timing.** The interval (default 26,280 blocks) plus a margin (default 4,320 blocks) must fit inside the device delay. The margin is room for fees, confirmations and a late check-in. Coins are "due" from the interval and "overdue" once their device path is open. These are placeholders, like the delays.
+- **What a check-in includes.** Every unspent coin, including unconfirmed incoming ones; their clocks haven't started, so including them costs only fees. A coinbase coin that hasn't matured can't be spent, so the check-in is refused until it matures. That only happens on regtest and signet, where Savings can be funded by mining.
 - The 61,320-block heir delay sits 4,215 blocks (about 1 month) below the cap, which leaves little room to lengthen it.
 - "Has N confirmations" means the funding block counts as the first. A spend with a delay of N can go in the block N blocks after the coin's block, which is when the coin has N confirmations from the next block's point of view.
 
@@ -139,6 +165,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. |
 | `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
+| `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a coin (one arrived later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
 | `tests/default_delays.rs` | The real 39,420 / 61,320 delays open at exactly those confirmations (ignored by default) |
 | `tests/export.rs` | Bitcoin Core derives the same addresses from the export |
 | `tests/harness.rs` | The harness's hand-built spends are valid when they have enough signatures, so a rejection elsewhere is the policy's doing |
@@ -149,7 +176,6 @@ The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
 
 ## Not here yet
 
-- The check-in (send-to-self that restarts every delay)
 - The signet demo
 - The Liana/Sparrow exit drill
 - The recovery contact path

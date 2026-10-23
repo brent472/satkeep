@@ -30,6 +30,18 @@ impl Holders {
             heir: HolderKey::generate(),
         }
     }
+
+    /// PHONE, DEVICE, DEVICE_R, HELPER, HEIR, as `create` takes them.
+    pub fn public_keys(&self) -> [String; 5] {
+        [
+            self.phone.public_key(0),
+            self.device.public_key(0),
+            self.device.public_key(1),
+            self.helper.public_key(0),
+            self.heir.public_key(0),
+        ]
+        .map(|k| k.to_string())
+    }
 }
 
 /// One wallet folder plus the node it talks to.
@@ -108,17 +120,28 @@ impl<'a> Cli<'a> {
         expect_ok(&args, self.run_with_stdin(&args, &holder.to_secret_string()))
     }
 
-    /// `twofold create` with these holders' public keys.
+    /// `twofold create` with these holders' public keys. Check-ins every
+    /// half the device delay, with a 1-block margin.
     pub fn create(&self, holders: &Holders, device_delay: u16, heir_delay: u16) -> String {
-        let (dd, hd) = (device_delay.to_string(), heir_delay.to_string());
-        let keys =
-            [holders.phone.public_key(0), holders.device.public_key(0), holders.device.public_key(1), holders.helper.public_key(0), holders.heir.public_key(0)]
-                .map(|k| k.to_string());
+        self.create_with_checkin(holders, device_delay, heir_delay, device_delay / 2, 1)
+    }
+
+    pub fn create_with_checkin(
+        &self,
+        holders: &Holders,
+        device_delay: u16,
+        heir_delay: u16,
+        checkin_interval: u16,
+        checkin_margin: u16,
+    ) -> String {
+        let [dd, hd, ci, cm] = [device_delay, heir_delay, checkin_interval, checkin_margin].map(|n| n.to_string());
+        let keys = holders.public_keys();
         self.ok(&[
             "create", "--network", "regtest",
             "--phone", &keys[0], "--device", &keys[1], "--device-r", &keys[2],
             "--helper", &keys[3], "--heir", &keys[4],
             "--device-delay", &dd, "--heir-delay", &hd,
+            "--checkin-interval", &ci, "--checkin-margin", &cm,
         ])
     }
 

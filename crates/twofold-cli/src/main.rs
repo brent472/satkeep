@@ -16,6 +16,7 @@ use bdk_wallet::KeychainKind;
 use clap::{Parser, Subcommand, ValueEnum};
 use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
+use twofold_savings::checkin::{self, CheckinRule, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
 use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey};
 
@@ -77,6 +78,13 @@ enum Command {
         /// Blocks before HEIR can spend alone (placeholder default)
         #[arg(long, default_value_t = DEFAULT_HEIR_DELAY)]
         heir_delay: u16,
+        /// Blocks between check-ins (placeholder default, about 6 months)
+        #[arg(long, default_value_t = checkin::DEFAULT_CHECKIN_INTERVAL)]
+        checkin_interval: u16,
+        /// Blocks the check-in interval must leave before the device delay
+        /// (placeholder default, about 30 days)
+        #[arg(long, default_value_t = checkin::DEFAULT_CHECKIN_MARGIN)]
+        checkin_margin: u16,
     },
     /// Show a new address to receive into Savings.
     Address,
@@ -106,6 +114,16 @@ enum Command {
         #[arg(long, default_value_t = 2)]
         fee_rate: u64,
         /// File to save the payment to. Must not already exist.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Prepare a check-in: every Savings coin, through the 2-of-3 path, into
+    /// one new Savings address, restarting both delays. Saved unsigned.
+    Checkin {
+        /// Network fee rate in sat/vB
+        #[arg(long, default_value_t = 2)]
+        fee_rate: u64,
+        /// File to save the check-in to. Must not already exist.
         #[arg(long)]
         out: PathBuf,
     },
@@ -308,9 +326,35 @@ fn run(cli: Cli) -> Result<()> {
             fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
             println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
         }
+        Command::Checkin { fee_rate, ref out } => {
+            let (mut opened, _client) = open_and_sync(&cli)?;
+            opened.config.checkin_rule()?;
+            let fee_rate = FeeRate::from_sat_per_vb(fee_rate)
+                .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
+                .context("the fee rate must be at least 1 sat/vB")?;
+            let delays = opened.policy.delays();
+            let psbt = checkin::build_checkin(&mut opened.wallet, delays, fee_rate)?;
+            write_new(out, psbt.to_string().as_bytes())?;
+            opened.persist()?;
+            let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
+            let coins = psbt.unsigned_tx.input.len();
+            println!(
+                "Prepared a check-in of {coins} coin{}, {}, into one new Savings address.",
+                if coins == 1 { "" } else { "s" },
+                btc(total)
+            );
+            println!("Network fee: {}", btc(psbt.fee()?));
+            println!("Saved, unsigned, to {}.", out.display());
+            println!("Once confirmed, both delays restart for all of it.");
+            println!("Needs approval from any 2 of PHONE, DEVICE, HELPER: run `twofold sign`, then `twofold broadcast`.");
+        }
         Command::Broadcast { ref psbt } => {
             let (mut opened, client) = open_and_sync(&cli)?;
             let payment = read_psbt(psbt)?;
+            if checkin::is_checkin(&payment) {
+                // Synced just now: refuses if a coin arrived since it was built.
+                checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays())?;
+            }
             let tx = spend::finalize(&opened.wallet, &payment)?;
             let txid = node::broadcast(&client, &tx)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
@@ -318,7 +362,17 @@ fn run(cli: Cli) -> Result<()> {
             opened.persist()?;
             println!("Sent. Transaction ID: {txid}");
         }
-        Command::Create { ref phone, ref device, ref device_r, ref helper, ref heir, device_delay, heir_delay } => {
+        Command::Create {
+            ref phone,
+            ref device,
+            ref device_r,
+            ref helper,
+            ref heir,
+            device_delay,
+            heir_delay,
+            checkin_interval,
+            checkin_margin,
+        } => {
             let network = cli.network_or_default();
             let dir = cli.wallet_dir()?;
             let client = connect(&cli.rpc_url, &cli.rpc_cookie, network)?;
@@ -332,13 +386,20 @@ fn run(cli: Cli) -> Result<()> {
                 helper: helper.clone(),
                 heir: heir.clone(),
                 birthday: node::height(&client)?,
+                checkin_interval: Some(checkin_interval),
+                checkin_margin: Some(checkin_margin),
             };
+            config.checkin_rule()?;
             let mut opened = wallet_dir::create(&dir, config)?;
             opened.persist()?;
             println!("Created a Savings wallet on {} in {}.", network.core_name(), dir.display());
             println!("Any 2 of PHONE, DEVICE, HELPER can approve at any time.");
             println!("DEVICE alone can approve once a coin has {device_delay} confirmations.");
             println!("HEIR alone can approve once a coin has {heir_delay} confirmations.");
+            println!(
+                "Check in every {checkin_interval} blocks: each check-in restarts both delays \
+                 (`twofold checkin`)."
+            );
             println!("Settings: {}", wallet_dir::config_path(&dir).display());
         }
         Command::Address => {
@@ -435,7 +496,13 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     let path = spend::path_of(payment, opened.policy.delays())
         .context("this payment's inputs ask for different approval paths")?;
     let network = opened.network().network();
-    println!("Payment to approve:");
+    if checkin::is_checkin(payment) {
+        checkin::check_checkin(wallet, payment, opened.policy.delays())?;
+        println!("Check-in to approve: every Savings coin goes into one new Savings address,");
+        println!("restarting both delays.");
+    } else {
+        println!("Payment to approve:");
+    }
     for output in &payment.unsigned_tx.output {
         let amount = btc(output.value);
         let address = Address::from_script(&output.script_pubkey, network)
@@ -475,28 +542,76 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
         println!("Waiting for confirmation: {}", btc(waiting));
     }
     let delays = opened.policy.delays();
-    for coin in opened.wallet.list_unspent() {
-        // Confirmations as of the next block, which is what a delay is
-        // checked against: a coin confirmed in block c has tip - c + 1.
-        let confirmations = coin.chain_position.confirmation_height_upper_bound().map_or(0, |c| tip + 1 - c);
+    let rule = match opened.config.checkin_rule() {
+        Ok(rule) => rule,
+        Err(e) => {
+            // Still show the coins, using a rule that never says "due".
+            println!("Check-ins aren't set up for this wallet: {e:#}");
+            CheckinRule::new(1, delays.device() - 1, delays).map_err(|e| anyhow::anyhow!(e))?
+        }
+    };
+    let coins = checkin::coins(&opened.wallet, delays, rule);
+    for coin in &coins {
+        let s = coin.status;
+        let flag = if s.overdue {
+            "  OVERDUE"
+        } else if s.checkin_due {
+            "  CHECK-IN DUE"
+        } else {
+            ""
+        };
         println!(
-            "  {}  {}  {} confirmation{}  device path {}  heir path {}",
-            btc(coin.txout.value),
+            "  {}  {}  {} confirmation{}  device path {}  heir path {}{flag}",
+            btc(coin.amount),
             coin.outpoint,
-            confirmations,
-            if confirmations == 1 { "" } else { "s" },
-            opens_in(confirmations, delays.device()),
-            opens_in(confirmations, delays.heir()),
+            s.confirmations,
+            if s.confirmations == 1 { "" } else { "s" },
+            opens_in(s.device_opens_in),
+            opens_in(s.heir_opens_in),
         );
+    }
+    if opened.config.checkin_rule().is_err() {
+        return Ok(());
+    }
+    let oldest = coins.iter().filter(|c| c.status.confirmations > 0).max_by_key(|c| c.status.confirmations);
+    match (checkin::reminder(&coins), oldest) {
+        (Reminder::Overdue, _) => {
+            let open = coins.iter().filter(|c| c.status.overdue).count();
+            println!();
+            println!(
+                "WARNING: check-in overdue. DEVICE alone can already spend {open} coin{}.",
+                if open == 1 { "" } else { "s" }
+            );
+            println!("Run `twofold checkin` now.");
+        }
+        (Reminder::Due, Some(oldest)) => {
+            println!();
+            println!(
+                "Check-in due: the oldest coin has {} confirmations, and check-ins are due every {} blocks.",
+                oldest.status.confirmations,
+                rule.interval()
+            );
+            println!("Its device path {}. Run `twofold checkin`.", opens_in(oldest.status.device_opens_in));
+        }
+        (_, Some(oldest)) => {
+            let due_in = u32::from(rule.interval()) - oldest.status.confirmations;
+            println!();
+            println!("Next check-in due in {} (every {}).", blocks(due_in), blocks(rule.interval().into()));
+        }
+        (_, None) => {}
     }
     Ok(())
 }
 
-fn opens_in(confirmations: u32, delay: u16) -> String {
-    match u32::from(delay).checked_sub(confirmations) {
-        Some(0) | None => "open".into(),
-        Some(n) => format!("opens in {n} blocks"),
+fn opens_in(n: u32) -> String {
+    match n {
+        0 => "open".into(),
+        n => format!("opens in {}", blocks(n)),
     }
+}
+
+fn blocks(n: u32) -> String {
+    if n == 1 { "1 block".into() } else { format!("{n} blocks") }
 }
 
 fn btc(amount: twofold_savings::bitcoin::Amount) -> String {
