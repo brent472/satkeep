@@ -15,10 +15,10 @@ use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
 use twofold_savings::checkin::{self, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
-use twofold_savings::{DEFAULT_HEIR_DELAY, HolderKey, contains_recovery_phrase, migrate};
+use twofold_savings::{DEFAULT_HEIR_DELAY, HolderKey, SavingsPolicy, contains_recovery_phrase, migrate};
 use zeroize::Zeroizing;
 
-use twofold_cli::wallet_dir::{self, Config, Opened, TestNetwork};
+use twofold_cli::wallet_dir::{self, Config, MovingTo, Opened, TestNetwork};
 use twofold_cli::node;
 
 #[derive(Parser)]
@@ -70,6 +70,11 @@ enum Command {
         helper: String,
         #[command(flatten)]
         heir: HeirArgs,
+        /// The shortest heir delay this wallet will accept, now and in any
+        /// later move (placeholder default, about 6 months). Kept by
+        /// add-heir.
+        #[arg(long)]
+        min_heir_delay: Option<u16>,
     },
     /// Add a beneficiary, or change it: create a new Savings wallet with the
     /// same PHONE, DEVICE and HELPER plus HEIR, and prepare one 2-of-3
@@ -410,11 +415,7 @@ fn run(cli: Cli) -> Result<()> {
             if checkin::is_checkin(&payment) {
                 checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays())?;
             }
-            let moved_to = if migrate::is_move(&payment) {
-                Some(migrate::check_move(&opened.wallet, &payment, &opened.policy)?)
-            } else {
-                None
-            };
+            let moved_to = checked_move(&opened, &payment)?;
             spend::check_inputs(&opened.wallet, &payment)?;
             let tx = spend::finalize(&opened.wallet, &payment)?;
             let txid = node::broadcast(&client, &tx)?;
@@ -426,7 +427,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("Once it confirms, Savings is in the new wallet: use its folder (--wallet-dir) from now on.");
             }
         }
-        Command::Create { ref phone, ref device, ref helper, ref heir } => {
+        Command::Create { ref phone, ref device, ref helper, ref heir, min_heir_delay } => {
             let network = cli.network_or_default();
             let dir = cli.wallet_dir()?;
             let client = connect(&cli.rpc_url, &cli.rpc_cookie, network)?;
@@ -440,6 +441,8 @@ fn run(cli: Cli) -> Result<()> {
                 birthday: node::height(&client)?,
                 checkin_interval: None,
                 checkin_margin: None,
+                min_heir_delay,
+                moving_to: None,
                 device_r: None,
             };
             heir.apply(&mut config);
@@ -469,16 +472,23 @@ fn run(cli: Cli) -> Result<()> {
                 birthday: node::height(&client)?,
                 checkin_interval: None,
                 checkin_margin: None,
+                min_heir_delay: opened.config.min_heir_delay,
+                moving_to: None,
                 device_r: None,
             };
             heir.apply(&mut config);
             let to = config.policy()?;
             config.checkin_rule()?;
-            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, fee_rate)?;
+            let min_heir_delay = opened.config.min_heir_delay();
+            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate)?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
             new.persist()?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
+            // What sign and broadcast check the move against, here.
+            let heir_delay = to.delays().heir().expect("a wallet with a beneficiary");
+            opened.config.moving_to = Some(MovingTo { heir: new.config.heir.clone().expect("set above"), heir_delay });
+            opened.save_config()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
             println!("Created the new Savings wallet in {}.", new_wallet_dir.display());
             print_rules(&new.config);
@@ -492,6 +502,12 @@ fn run(cli: Cli) -> Result<()> {
             let destination = Address::from_script(&migrate::destination(&to), opened.network().network())?;
             println!("It goes to {destination}, the new wallet's first address.");
             println!("HEIR's key: {}", to.keys().get(twofold_savings::Role::Heir).expect("checked above"));
+            println!("Heir delay: {}", blocks_and_about(heir_delay.into()));
+            println!(
+                "Set up in this wallet's settings ({}), so `twofold sign` and `twofold broadcast` \
+                 refuse a move that goes anywhere else.",
+                wallet_dir::config_path(&opened.dir).display()
+            );
             println!("Saved, unsigned, to {}.", out.display());
             println!(
                 "Needs approval from any 2 of PHONE, DEVICE, HELPER: run `twofold sign`, then `twofold broadcast`, \
@@ -603,17 +619,19 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     let network = opened.network().network();
     if checkin::is_checkin(payment) {
         checkin::check_checkin(wallet, payment, opened.policy.delays())?;
+        let heir_delay = opened.policy.delays().heir().expect("check-ins need a beneficiary");
         println!("Check-in to approve: every Savings coin goes into one new Savings address,");
-        println!("restarting the heir delay.");
-    } else if migrate::is_move(payment) {
-        let to = migrate::check_move(wallet, payment, &opened.policy)?;
+        println!("restarting the heir delay ({}).", blocks_and_about(heir_delay.into()));
+    } else if let Some(to) = checked_move(opened, payment)? {
         let heir_delay = to.delays().heir().expect("a move goes to a wallet with a beneficiary");
         let heir = to.keys().get(twofold_savings::Role::Heir).expect("a move goes to a wallet with a beneficiary");
-        println!("Move to approve: every Savings coin goes to a new Savings wallet with the same");
-        println!("PHONE, DEVICE and HELPER, where HEIR can also approve alone after {heir_delay} blocks.");
-        // Whoever prepared the move chose HEIR: show exactly which key, so it
-        // can be checked against the beneficiary's own before approving.
+        println!("Move to approve: every Savings coin goes to the new Savings wallet set up in this");
+        println!("wallet's settings, with the same PHONE, DEVICE and HELPER, where HEIR can also");
+        println!("approve alone after the heir delay.");
+        // Show exactly which key and delay, so they can be checked against
+        // the beneficiary's own before approving.
         println!("  HEIR's key: {heir}");
+        println!("  Heir delay: {}", blocks_and_about(heir_delay.into()));
         println!("  Check this is your beneficiary's key and the delay is the one you chose.");
     } else {
         println!("Payment to approve:");
@@ -638,6 +656,25 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     Ok(())
 }
 
+/// For a move, the wallet it goes to, rebuilt from this wallet's own
+/// settings (its keys plus the beneficiary set up by `add-heir`), after
+/// checking the move goes there and nowhere else. A PSBT is treated as a
+/// move if it's marked as one or pays that wallet. `None` for any other
+/// payment.
+fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>> {
+    let to = opened.config.move_target(&opened.policy)?;
+    let is_move = migrate::is_move(payment) || to.as_ref().is_some_and(|to| migrate::pays_to(payment, to));
+    if !is_move {
+        return Ok(None);
+    }
+    let to = to.context(
+        "this is a move to a new Savings wallet, but no move is set up in this wallet's settings, \
+         so there's nothing to check where it goes against (set one up with `twofold add-heir`)",
+    )?;
+    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay())?;
+    Ok(Some(to))
+}
+
 fn open_and_sync(cli: &Cli) -> Result<(Opened, Client)> {
     let mut opened = cli.open()?;
     let client = connect(&cli.rpc_url, &cli.rpc_cookie, opened.network())?;
@@ -651,7 +688,10 @@ fn print_rules(config: &Config) {
     println!("Any 2 of PHONE, DEVICE, HELPER can approve at any time.");
     match (config.heir_delay, config.checkin_interval) {
         (Some(heir_delay), interval) => {
-            println!("HEIR alone can approve once a coin has {heir_delay} confirmations.");
+            println!(
+                "HEIR alone can approve once a coin has {heir_delay} confirmations ({}).",
+                about(heir_delay.into())
+            );
             if let Some(interval) = interval {
                 println!("Check in every {interval} blocks: each check-in restarts the heir delay (`twofold checkin`).");
             }
@@ -748,6 +788,44 @@ fn blocks(n: u32) -> String {
     if n == 1 { "1 block".into() } else { format!("{n} blocks") }
 }
 
+/// About how long `n` blocks take, at one block every 10 minutes on average.
+fn about(n: u32) -> String {
+    let minutes = u64::from(n) * 10;
+    let (amount, unit) = if minutes < 120 {
+        (minutes, "minute")
+    } else if minutes < 48 * 60 {
+        ((minutes + 30) / 60, "hour")
+    } else if minutes < 60 * 24 * 60 {
+        ((minutes + 12 * 60) / (24 * 60), "day")
+    } else {
+        // 525,960 minutes in an average year of 365.25 days.
+        ((minutes * 12 + 525_960 / 2) / 525_960, "month")
+    };
+    format!("about {amount} {unit}{}", if amount == 1 { "" } else { "s" })
+}
+
+fn blocks_and_about(n: u32) -> String {
+    format!("{}, {}", blocks(n), about(n))
+}
+
 fn btc(amount: twofold_savings::bitcoin::Amount) -> String {
     format!("{:.8} BTC", amount.to_btc())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::about;
+
+    #[test]
+    fn says_about_how_long_a_number_of_blocks_takes() {
+        assert_eq!(about(1), "about 10 minutes");
+        assert_eq!(about(20), "about 3 hours");
+        assert_eq!(about(144), "about 24 hours");
+        assert_eq!(about(288), "about 2 days");
+        assert_eq!(about(8_760), "about 2 months");
+        assert_eq!(about(26_280), "about 6 months");
+        assert_eq!(about(52_560), "about 12 months");
+        assert_eq!(about(61_320), "about 14 months");
+        assert_eq!(about(65_535), "about 15 months");
+    }
 }

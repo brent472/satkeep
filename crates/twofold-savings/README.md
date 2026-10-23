@@ -65,14 +65,19 @@ let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or
 
 A wallet's script can't change, so adding a beneficiary means a new wallet and one transaction moving Savings there (`migrate`):
 
-- `migrate::wallet_with_heir(&from, heir, Delays::with_heir(n)?)` makes the new wallet: the same PHONE, DEVICE and HELPER plus HEIR.
-- `migrate::build_move(&mut wallet, &from, &to, fee_rate)` drains every confirmed coin, through the 2-of-3 path, to the new wallet's first receive address: one network fee.
-  - The PSBT carries the HEIR key and heir delay in a proprietary field (`twofold`/`move`) that other software ignores.
+- `migrate::wallet_with_heir(&from, heir, Delays::with_heir(n)?, min_heir_delay)` makes the new wallet: the same PHONE, DEVICE and HELPER plus HEIR, with an heir delay of at least `min_heir_delay` blocks.
+- `migrate::build_move(&mut wallet, &from, &to, min_heir_delay, fee_rate)` drains every confirmed coin, through the 2-of-3 path, to the new wallet's first receive address: one network fee.
+  - The PSBT carries the HEIR key and heir delay it was built for, in a proprietary field (`twofold`/`move`) that other software ignores. It marks the PSBT as a move; it's compared, never trusted.
   - Unconfirmed coins are left out, as in a check-in. They stay spendable by 2 of 3 and can be moved once they confirm.
-- `migrate::check_move(&wallet, &psbt, &from)` rebuilds the new wallet from `from` and the PSBT's own HEIR key and delay, and checks the PSBT is marked, uses the 2-of-3 path, spends every confirmed coin and nothing else, and has exactly one output, to that wallet's first address. The CLI runs it at `sign` and again at `broadcast`.
+- `migrate::check_move(&wallet, &psbt, &from, &to, min_heir_delay)` checks a move against `to`, the wallet the **signer's own settings** say it goes to. It refuses unless:
+  - `to` has `from`'s PHONE, DEVICE and HELPER, a beneficiary, and at least the minimum heir delay;
+  - the PSBT is marked as a move and names the same HEIR key and delay as `to` (`Error::MoveNotAsSetUp` otherwise);
+  - it uses the 2-of-3 path and spends every confirmed coin and nothing else;
+  - it has exactly one output, to `to`'s first address. A second output is refused even if it also pays `to`.
+- **Where a move goes is never taken from the PSBT.** Whoever prepares a move could otherwise choose HEIR and the delay. Each signer rebuilds `to` from its own settings, so a move built for a different HEIR key, a shorter delay or an extra output is refused at `sign` and again at `broadcast` (`tests/migrate.rs`). The CLI keeps those settings in the old wallet's `savings.json` (`moving_to`, set by `add-heir`), and treats a PSBT that pays the new wallet as a move even if it isn't marked. `sign` still shows HEIR's full key and the delay, in blocks and about how long, so approvers can compare them with the beneficiary's.
+- **Replacing a key** will be a move too, with the replacement key in the same settings. Until it's built, a move to a wallet with other keys is refused (`Error::MoveToWrongWallet`).
 - Changing the beneficiary is the same move, from a wallet that already has one.
   - **The old wallet keeps its heir path.** Anything left in it, such as a coin that was unconfirmed at the move or a later payment to one of its addresses, stays claimable by the former HEIR after its delay, and nothing reminds anyone to check in there any more. Move those coins too.
-- **Whoever prepares a move chooses HEIR and the delay.** `check_move` proves the coins go to the same PHONE, DEVICE and HELPER plus *some* HEIR, not that it's the right person. So `sign` shows HEIR's full key and the delay, `add-heir` prints them with the destination address, and approvers should compare the whole key with the beneficiary's, not just its fingerprint. Nothing sets a minimum heir delay yet.
 
 ## Check-in
 
@@ -154,6 +159,7 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 ### Delays
 
 - One delay: the heir delay, default 61,320 blocks (about 14 months). A placeholder, configurable through `Delays::with_heir`. `Delays::none()` is Savings with no beneficiary.
+- **Minimum heir delay**, default 26,280 blocks (about 6 months), `DEFAULT_MIN_HEIR_DELAY`. A placeholder, configurable (the regtest tests use 10). A wallet with a beneficiary below it, or a move to one, is refused (`Error::HeirDelayTooShort`), so a typo or a rushed setup can't give HEIR alone a short way in. The library takes it as a parameter (`Delays::require_heir_at_least`, `migrate`); the CLI keeps it in `savings.json`.
 - It's a **relative** delay (`older`, BIP 68/112), counted in **blocks only**, stored as `u16`, which caps it at the 65,535-block consensus limit and rules out time-based values. It must be at least 1 block.
 - Each coin's clock starts when **that coin** confirms. New deposits start their own clock. Change from any Savings spend goes to a new Savings address, so it gets a fresh clock too. A check-in must therefore include every coin.
 - **Check-in timing.** The interval (default 52,560 blocks, about 12 months) plus a margin (default 8,760 blocks, about 2 months) must fit inside the heir delay. The margin is room for fees, confirmations and a late check-in. Coins are "due" from the interval and "overdue" once their heir path is open. These are placeholders, like the delay. The brief plans the check-in as once a year, one tap, never automatic.
@@ -257,7 +263,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | `tests/backup.rs` | A phone key restored from its backup approves a regtest 2-of-3 spend with the helper. A key restored from another wallet's backup adds no signature, and the spend can't be finalized. |
 | `tests/allowed_paths.rs` | Any 2 of 3 spends on regtest in both shapes, and HEIR alone at exactly its delay, each through the expected leaf |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through every leaf the wallet has, is refused by Twofold **and** rejected by the node: PHONE, DEVICE or HELPER alone even after the heir delay; HEIR alone or with any one other key before it; signing a shorter sequence to skip the delay. Without a beneficiary: any single key at any age, an heir path refused, and a long sequence buying nothing. |
-| `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. A move that pays elsewhere, names a different HEIR, isn't marked, has an extra output, goes to a wallet with different keys, or leaves out a confirmed coin is refused. Changing the beneficiary works the same way. |
+| `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. Checked against the wallet the settings say, a move is refused if it goes to a wallet with a different HEIR key or a shorter heir delay (whether its marker owns up or claims the right one), has one extra output (to someone else, or back as change), pays elsewhere, names a different HEIR, isn't marked, goes to a wallet with different keys, or leaves out a confirmed coin. An heir delay below the minimum is refused in the settings, in building and in checking. Changing the beneficiary works the same way. |
 | `tests/checkin.rs` | A check-in restarts the heir delay for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses the heir path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. HEIR or DEVICE alone can't approve a check-in even with the heir path open. Savings with no beneficiary has no check-in. |
 | `tests/default_delays.rs` | The real 61,320-block heir delay opens at exactly that many confirmations (ignored by default) |
 | `tests/export.rs` | Bitcoin Core derives the same addresses from the export, in both shapes |

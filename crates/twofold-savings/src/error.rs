@@ -67,6 +67,12 @@ pub enum Error {
     NotAMove,
     #[error("a move must go to a Savings wallet with a beneficiary and the same PHONE, DEVICE and HELPER keys")]
     MoveToWrongWallet,
+    #[error(
+        "this move names a different beneficiary or heir delay than the one set up in this wallet's settings;          nothing goes anywhere this wallet's settings don't say"
+    )]
+    MoveNotAsSetUp,
+    #[error("the heir delay is {heir} blocks, below the minimum of {minimum} blocks")]
+    HeirDelayTooShort { heir: u16, minimum: u16 },
     #[error("there are no confirmed Savings coins to move")]
     MoveNoCoins,
     #[error("a move must not spend unconfirmed coin {coin}")]

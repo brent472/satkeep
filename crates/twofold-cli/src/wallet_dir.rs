@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use twofold_savings::bitcoin::Network;
 use twofold_savings::checkin::{CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN};
 use twofold_savings::miniscript::descriptor::DescriptorPublicKey;
-use twofold_savings::{Delays, SavingsKeys, SavingsPolicy};
+use twofold_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, SavingsKeys, SavingsPolicy, migrate};
 
 const CONFIG_FILE: &str = "savings.json";
 const DATABASE_FILE: &str = "wallet.sqlite";
@@ -64,10 +64,28 @@ pub struct Config {
     /// Blocks the interval must leave before the heir delay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkin_margin: Option<u16>,
+    /// The shortest heir delay this wallet accepts, here and in any move.
+    /// Missing means [`DEFAULT_MIN_HEIR_DELAY`], a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_heir_delay: Option<u16>,
+    /// The beneficiary set up for moving Savings to a new wallet (by
+    /// `twofold add-heir`). `sign` and `broadcast` rebuild the new wallet
+    /// from this and this wallet's own keys, and refuse a move that goes
+    /// anywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving_to: Option<MovingTo>,
     /// Only in wallets made before the card-only delayed path was removed.
     /// Read so such a wallet gets a clear error; never written.
     #[serde(default, skip_serializing)]
     pub device_r: Option<String>,
+}
+
+/// Where a move set up in this wallet goes: this wallet's PHONE, DEVICE and
+/// HELPER plus this beneficiary.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MovingTo {
+    pub heir: String,
+    pub heir_delay: u16,
 }
 
 impl Config {
@@ -83,7 +101,28 @@ impl Config {
         };
         let heir = self.heir.as_deref().map(|h| key("HEIR", h)).transpose()?;
         let keys = SavingsKeys::new(key("PHONE", &self.phone)?, key("DEVICE", &self.device)?, key("HELPER", &self.helper)?, heir)?;
-        Ok(SavingsPolicy::new(keys, self.delays()?, self.network.network())?)
+        let delays = self.delays()?;
+        delays.require_heir_at_least(self.min_heir_delay())?;
+        Ok(SavingsPolicy::new(keys, delays, self.network.network())?)
+    }
+
+    /// The shortest heir delay this wallet accepts.
+    pub fn min_heir_delay(&self) -> u16 {
+        self.min_heir_delay.unwrap_or(DEFAULT_MIN_HEIR_DELAY)
+    }
+
+    /// The wallet a move set up here goes to, rebuilt from this wallet's
+    /// own keys and `moving_to`, or `None` if no move is set up.
+    pub fn move_target(&self, from: &SavingsPolicy) -> Result<Option<SavingsPolicy>> {
+        let Some(moving_to) = &self.moving_to else { return Ok(None) };
+        let heir: DescriptorPublicKey = moving_to
+            .heir
+            .parse()
+            .map_err(|e| anyhow::anyhow!("the HEIR key set up for the move isn't a valid public key: {e}"))?;
+        let delays = Delays::with_heir(moving_to.heir_delay)?;
+        let to = migrate::wallet_with_heir(from, heir, delays, self.min_heir_delay())
+            .context("the move set up in this wallet's settings")?;
+        Ok(Some(to))
     }
 
     pub fn delays(&self) -> Result<Delays> {
@@ -115,6 +154,7 @@ impl Config {
 
 /// An opened wallet folder.
 pub struct Opened {
+    pub dir: PathBuf,
     pub config: Config,
     pub policy: SavingsPolicy,
     pub wallet: PersistedWallet<Connection>,
@@ -129,6 +169,12 @@ impl Opened {
     pub fn persist(&mut self) -> Result<()> {
         self.wallet.persist(&mut self.db).context("saving the wallet database")?;
         Ok(())
+    }
+
+    /// Saves changed settings. The policy fields can't change: the wallet
+    /// database is tied to them.
+    pub fn save_config(&self) -> Result<()> {
+        write_config(&self.dir, &self.config)
     }
 }
 
@@ -146,9 +192,8 @@ pub fn create(dir: &Path, config: Config) -> Result<Opened> {
         .network(config.network.network())
         .create_wallet(&mut db)
         .context("creating the wallet")?;
-    fs::write(&config_path, serde_json::to_string_pretty(&config)?)
-        .with_context(|| format!("writing {}", config_path.display()))?;
-    Ok(Opened { config, policy, wallet, db })
+    write_config(dir, &config)?;
+    Ok(Opened { dir: dir.to_path_buf(), config, policy, wallet, db })
 }
 
 /// Opens an existing wallet folder.
@@ -168,7 +213,13 @@ pub fn open(dir: &Path) -> Result<Opened> {
         .load_wallet(&mut db)
         .context("loading the wallet database")?
         .with_context(|| format!("the wallet database in {} is empty", dir.display()))?;
-    Ok(Opened { config, policy, wallet, db })
+    Ok(Opened { dir: dir.to_path_buf(), config, policy, wallet, db })
+}
+
+fn write_config(dir: &Path, config: &Config) -> Result<()> {
+    let config_path = dir.join(CONFIG_FILE);
+    fs::write(&config_path, serde_json::to_string_pretty(config)?)
+        .with_context(|| format!("writing {}", config_path.display()))
 }
 
 pub fn config_path(dir: &Path) -> PathBuf {

@@ -48,7 +48,7 @@ fn an_interval_at_or_past_the_heir_delay_is_refused() {
     ] {
         let cli = Cli::new(&node);
         let args = [
-            "create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3], "--heir-delay", "20",
+            "create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3], "--heir-delay", "20", "--min-heir-delay", "10",
             "--checkin-interval", interval, "--checkin-margin", margin,
         ];
         let err = cli.fails(&args);
@@ -58,13 +58,15 @@ fn an_interval_at_or_past_the_heir_delay_is_refused() {
 
     // The placeholder defaults don't fit a 20-block heir delay either.
     let cli = Cli::new(&node);
-    let err = cli.fails(&["create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3], "--heir-delay", "20"]);
+    let err = cli.fails(&[
+        "create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3], "--heir-delay", "20", "--min-heir-delay", "10",
+    ]);
     assert!(err.contains("the check-in interval (52560 blocks) must be shorter than the heir delay (20 blocks)"), "{err}");
 
     // And they do fit the placeholder heir delay: once a year.
     let cli = Cli::new(&node);
     let out = cli.ok(&["create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3]]);
-    assert!(out.contains("HEIR alone can approve once a coin has 61320 confirmations."), "{out}");
+    assert!(out.contains("HEIR alone can approve once a coin has 61320 confirmations (about 14 months)."), "{out}");
     assert!(out.contains("Check in every 52560 blocks"), "{out}");
 }
 
@@ -132,7 +134,7 @@ fn a_check_in_restarts_the_heir_delay_and_clears_the_warning() {
     let out = prepare_and_approve(&cli, &holders, &file);
     assert!(out.contains("Prepared a check-in of 2 coins, 1.50000000 BTC, into one new Savings address."), "{out}");
     assert!(out.contains("Check-in to approve: every Savings coin goes into one new Savings address,"), "{out}");
-    assert!(out.contains("restarting the heir delay."), "{out}");
+    assert!(out.contains("restarting the heir delay (20 blocks, about 3 hours)."), "{out}");
     assert!(out.contains("comes back to Savings as change"), "{out}");
     assert!(out.contains("Approval path: any 2 of PHONE, DEVICE, HELPER"), "{out}");
     cli.ok(&["broadcast", "--psbt", &file]);

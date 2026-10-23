@@ -22,7 +22,8 @@
    ```
 
    - About 14 months for inheritance. The relative-timelock cap is 65,535 blocks. Keep the delay configurable.
-   - Adding a beneficiary later moves Savings to the second shape in one transaction.
+   - The heir delay has a minimum: placeholder 26,280 blocks (about 6 months), also configurable.
+   - Adding a beneficiary later moves Savings to the second shape in one transaction. Each signer checks the move against its own settings (its keys, the beneficiary and the heir delay it set up), never against what the payment claims.
    - The 9-month device-only path was removed in brief 3.8: the phone key backup covers a lost phone, and removing it takes away a stolen card's slow route to Savings.
 2. **A small Rust command-line tool** using BDK and rust-miniscript: create the wallet, receive, build PSBTs, sign with any 2 keys, broadcast.
 3. **Check-in** (only with a beneficiary): a send-to-self transaction that restarts the heir delay and consolidates coins. It must run sooner than the heir delay. The plan is once a year (52,560 blocks), with a margin of about 2 months (8,760 blocks).
