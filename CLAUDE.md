@@ -1,6 +1,6 @@
 # Twofold — working rules
 
-Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus delayed recovery and inheritance paths. Full spec: `docs/master-brief.md`. Current task: `docs/milestone-1.md`.
+Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus delayed recovery and inheritance paths. Full spec: `docs/master-brief.md` in the private repo `brent472/twofold-private` (clone it beside this repo, as `../twofold-private`, to read it). Current task: `docs/milestone-1.md`.
 
 ## Non-negotiables
 
@@ -20,6 +20,6 @@ Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone
 
 ## Copy and design
 
-- Product copy comes from Section 19 of the master brief; don't invent UI wording.
+- Product copy comes from Section 19 of the master brief (in the private repo `brent472/twofold-private`); don't invent UI wording.
 - Typography is Inter throughout; the brand sheet in `docs/brand/` is the visual master.
 - Plain words in the app: key, approve, network fee, Spending, Savings. No "multisig", "UTXO", "PSBT", "xpub" or "seed" in main flows.

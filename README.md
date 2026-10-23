@@ -22,11 +22,9 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Twofold: spending Savings with Liana, or Bitcoin Core alone, and why not Sparrow |
 | [`crates/twofold-savings`](crates/twofold-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/twofold-cli`](crates/twofold-cli/README.md) | `twofold`, a developer command-line tool for Savings on test networks |
-| [`docs/master-brief.md`](docs/master-brief.md) | Full product, UX and security brief (Markdown copy) |
-| [`docs/TWOFOLD_Master_Brief_v3.5.docx`](docs/TWOFOLD_Master_Brief_v3.5.docx) | Master brief, source file |
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |
 | [`CLAUDE.md`](CLAUDE.md) | Ground rules for anyone (or any AI assistant) working in this repo |
 
 ## License
 
-Not chosen yet. Twofold is intended to be open source; a license will be picked before the repo goes public.
+MIT. See [`LICENSE`](LICENSE).

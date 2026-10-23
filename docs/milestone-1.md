@@ -1,6 +1,6 @@
 # Milestone 1 — Prove the Savings wallet rules
 
-**What Twofold is:** a phone-first bitcoin self-custody wallet. Spending is a normal phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus delayed recovery and inheritance paths. Full spec: [master brief](master-brief.md).
+**What Twofold is:** a phone-first bitcoin self-custody wallet. Spending is a normal phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus delayed recovery and inheritance paths. Full spec: the master brief, `docs/master-brief.md` in the private repo `brent472/twofold-private`.
 
 **Goal:** prove the Savings spending rules work and are safe, on test bitcoin only, before any app UI exists.
 
