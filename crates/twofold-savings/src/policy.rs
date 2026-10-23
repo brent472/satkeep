@@ -3,8 +3,8 @@ use std::str::FromStr;
 use crate::bitcoin::bip32::{ChainCode, ChildNumber, Fingerprint, Xpub};
 use crate::bitcoin::hashes::{Hash, sha256};
 use crate::bitcoin::secp256k1::PublicKey;
-use crate::bitcoin::{Network, NetworkKind};
-use crate::miniscript::descriptor::{Descriptor, DescriptorPublicKey};
+use crate::bitcoin::Network;
+use crate::miniscript::descriptor::{Descriptor, DescriptorPublicKey, TapTree};
 use crate::miniscript::policy::{Liftable, semantic::Policy};
 use crate::{Delays, Error, Role, SavingsKeys};
 
@@ -38,9 +38,10 @@ impl SavingsPolicy {
             return Err(Error::Mainnet);
         }
         let k = |role| keys.get(role).to_string();
-        let desc = format!(
-            "tr({internal},{{multi_a(2,{phone},{device},{helper}),{{and_v(v:pk({device_r}),older({dd})),and_v(v:pk({heir}),older({hd}))}}}})",
-            internal = unspendable_internal_key(&keys),
+        // Build the tree with H itself as a stand-in internal key, then swap in
+        // the internal key computed from that tree.
+        let draft = format!(
+            "tr({NUMS_POINT},{{multi_a(2,{phone},{device},{helper}),{{and_v(v:pk({device_r}),older({dd})),and_v(v:pk({heir}),older({hd}))}}}})",
             phone = k(Role::Phone),
             device = k(Role::Device),
             helper = k(Role::Helper),
@@ -49,7 +50,12 @@ impl SavingsPolicy {
             dd = delays.device(),
             hd = delays.heir(),
         );
-        let descriptor = Descriptor::from_str(&desc)?;
+        let Descriptor::Tr(draft) = Descriptor::<DescriptorPublicKey>::from_str(&draft)? else {
+            unreachable!("built as tr()")
+        };
+        let tree = draft.tap_tree().clone().expect("built with a tree");
+        let internal = unspendable_internal_key(&tree).expect("SavingsKeys only holds multipath xpubs");
+        let descriptor = Descriptor::new_tr(internal, Some(tree))?;
         descriptor.sanity_check()?;
         Ok(Self { keys, delays, network, descriptor })
     }
@@ -126,31 +132,43 @@ fn satisfied(policy: &Policy<DescriptorPublicKey>, signers: &[&DescriptorPublicK
     }
 }
 
-/// The Taproot internal key: an extended key whose public key is the NUMS
-/// point H and whose chain code is SHA256 of the five Savings public keys in
-/// order (PHONE, DEVICE, DEVICE_R, HELPER, HEIR).
+/// The unspendable Taproot internal key for `tree`, built the way Liana
+/// builds it, so Liana recognises it as unspendable and imports the wallet.
+///
+/// It's an extended key whose public key is the NUMS point H and whose chain
+/// code is SHA256 of the public key of every key in the tree, concatenated
+/// in tree order: leaves in order, and keys in order within each leaf. A key
+/// that appears in two leaves counts twice. For Savings, that's PHONE,
+/// DEVICE, HELPER (the 2-of-3 leaf), then DEVICE_R, then HEIR. The network
+/// is the first key's. The key is used as `xpub/<0;1>/*`, with no origin.
+/// (The convention is from
+/// <https://delvingbitcoin.org/t/unspendable-keys-in-descriptors/304/21>.)
 ///
 /// Deriving from H keeps the key unspendable at every index, while the chain
 /// code makes each wallet's internal keys different, so spends from
-/// different Twofold wallets don't share an internal key. Anyone with the
-/// five public keys can recompute it and check it.
-fn unspendable_internal_key(keys: &SavingsKeys) -> String {
-    let mut preimage = Vec::with_capacity(33 * 5);
-    for role in Role::ALL {
-        let DescriptorPublicKey::MultiXPub(k) = keys.get(role) else {
-            unreachable!("SavingsKeys only holds multipath xpubs")
-        };
-        preimage.extend_from_slice(&k.xkey.public_key.serialize());
+/// different wallets don't share an internal key. Anyone with the
+/// descriptor's public keys can recompute it and check it.
+///
+/// `None` if the tree holds any key that isn't a multipath xpub.
+pub fn unspendable_internal_key(tree: &TapTree<DescriptorPublicKey>) -> Option<DescriptorPublicKey> {
+    let mut preimage = Vec::new();
+    let mut network = None;
+    for (_, ms) in tree.iter() {
+        for key in ms.iter_pk() {
+            let DescriptorPublicKey::MultiXPub(k) = key else { return None };
+            network.get_or_insert(k.xkey.network);
+            preimage.extend_from_slice(&k.xkey.public_key.serialize());
+        }
     }
     let xpub = Xpub {
-        network: NetworkKind::Test,
+        network: network?,
         depth: 0,
         parent_fingerprint: Fingerprint::default(),
         child_number: ChildNumber::from_normal_idx(0).expect("0 is a valid index"),
         public_key: PublicKey::from_str(NUMS_POINT).expect("H is a valid point"),
         chain_code: ChainCode::from(sha256::Hash::hash(&preimage).to_byte_array()),
     };
-    format!("{xpub}/<0;1>/*")
+    DescriptorPublicKey::from_str(&format!("{xpub}/<0;1>/*")).ok()
 }
 
 #[cfg(test)]
@@ -263,6 +281,72 @@ mod tests {
         assert_eq!(internal.xkey.public_key, PublicKey::from_str(NUMS_POINT).unwrap());
         // And it is not one of the five Savings keys.
         assert!(Role::ALL.iter().all(|r| policy.keys().get(*r) != tr.internal_key()));
+    }
+
+    /// Public test keys from Liana v15.0's own tests
+    /// (liana/src/descriptors/mod.rs), as PHONE, DEVICE, DEVICE_R, HELPER,
+    /// HEIR.
+    const LIANA_TEST_KEYS: [&str; 5] = [
+        "[37435aca/48'/1'/0'/2']tpubDEcZc7Um5KPZLF11qLYNgcteH1PH7CSKtTFTuTYuL6jqsP73gBHvLY42FuyvkTWN8C4q1YiDAUAeEuA78CDuuD2x17UKJymkBacCJz8P6NU/<0;1>/*",
+        "[05813578/48'/1'/0'/2']tpubDEymPgUFZDLzEePYsai2ZXc9ntsnZBohJvGuHgpZsY5bsUDJMD6de6tevVd1z1EdGPYLdNaPvD4Ck7NgcteYDUPWwExvscfaSUu19k48Mvp/<0;1>/*",
+        "[172ba1bc/48'/1'/0'/2']tpubDEgTZEAraUrKmnbyKJuXYGFPzNCm82bjMqd2GRy2HKviJ1moLtEZrHoUeG2o6uyWLEGx4yBWpctAmxcBx1b5nrrrBo5LjskRxRMDmwkuKxq/<0;1>/*",
+        "[da2ee873/48'/1'/0'/2']tpubDEbXY6RbN9mxAvQW797WxReGGkrdyRfdYcehVVaQQcQ3kyfhxSMcnU9qGpUVRHXXALvBtc99jcuxx5tkzcLaJbAukSNpP9h2ti4XFRosv1g/<0;1>/*",
+        "[3b1913e1/48'/1'/0'/2']tpubDFeZ2ezf4VUuTnjdhxJ1DKhLa2t6vzXZNz8NnEgeT2PN4pPqTCTeWUcaxKHPJcf1C8WzkLA71zSjDwuo4zqu4kkiL91ZUmJydC8f1gx89wM/<0;1>/*",
+    ];
+
+    #[test]
+    fn internal_key_matches_lianas_own_code_for_the_savings_tree() {
+        // Produced by Liana v15.0's own `liana::descriptors::unspendable_internal_key`
+        // for the Savings tree built from LIANA_TEST_KEYS, which Liana's
+        // `LianaDescriptor::from_str` then accepted. The delays don't affect it.
+        const FROM_LIANA: &str = "tpubD6NzVbkrYhZ4WVca1q6LYRsqpKEgWEAQP1DEDYnmFhSGjNwTtDQSEvPXVrtjx8MGesG2LWpkU9vWeiwrsgviRw3fk2nFRYLb42QfRE6oKMW/<0;1>/*";
+        let [p, d, dr, h, heir] = LIANA_TEST_KEYS.map(|k| DescriptorPublicKey::from_str(k).unwrap());
+        let keys = SavingsKeys::new(p, d, dr, h, heir).unwrap();
+        for delays in [Delays::default(), Delays::new(10, 20).unwrap()] {
+            let policy = SavingsPolicy::new(keys.clone(), delays, Network::Regtest).unwrap();
+            let Descriptor::Tr(tr) = policy.descriptor() else { panic!("not Taproot") };
+            assert_eq!(tr.internal_key().to_string(), FROM_LIANA);
+        }
+    }
+
+    #[test]
+    fn internal_key_matches_lianas_published_test_vectors() {
+        // Descriptors from Liana v15.0's tests (liana/src/descriptors/mod.rs:
+        // `descriptor_unspendable_internal_key` and the test just before
+        // "TODO: test error conditions of deserialization"), whose internal keys
+        // Liana's tests check are its deterministic unspendable key. Both use
+        // Liana's convention of one xpub on two paths (<0;1> and <2;3>), so a
+        // key appears twice in the tree and counts twice.
+        const VECTORS: [&str; 2] = [
+            "tr(tpubD6NzVbkrYhZ4YdBUPkUhDYj6Sd1QK8vgiCf5RwHnAnSNK5ozemAZzPTYZbgQq4diod7oxFJJYGa8FNRHzRo7URkixzQTuudh38xRRdSc4Hu/<0;1>/*,{and_v(v:multi_a(1,[ffd63c8d/48'/1'/0'/2']tpubDExA3EC3iAsPxPhFn4j6gMiVup6V2eH3qKyk69RcTc9TTNRfFYVPad8bJD5FCHVQxyBT4izKsvr7Btd2R4xmQ1hZkvsqGBaeE82J71uTK4N/<2;3>/*,[da2ee873/48'/1'/0'/2']tpubDEbXY6RbN9mxAvQW797WxReGGkrdyRfdYcehVVaQQcQ3kyfhxSMcnU9qGpUVRHXXALvBtc99jcuxx5tkzcLaJbAukSNpP9h2ti4XFRosv1g/<2;3>/*),older(2)),multi_a(2,[ffd63c8d/48'/1'/0'/2']tpubDExA3EC3iAsPxPhFn4j6gMiVup6V2eH3qKyk69RcTc9TTNRfFYVPad8bJD5FCHVQxyBT4izKsvr7Btd2R4xmQ1hZkvsqGBaeE82J71uTK4N/<0;1>/*,[da2ee873/48'/1'/0'/2']tpubDEbXY6RbN9mxAvQW797WxReGGkrdyRfdYcehVVaQQcQ3kyfhxSMcnU9qGpUVRHXXALvBtc99jcuxx5tkzcLaJbAukSNpP9h2ti4XFRosv1g/<0;1>/*)})",
+            "tr(tpubD6NzVbkrYhZ4XokGX5s1FcKj2ozqibXqXc79NkzEbNQvT1j9F7YWe3fPp3eDeMVypHXocGWUkVaC6ZUqMqyQRS27XJcujQLbrqzpoYYLGW5/<0;1>/*,{and_v(v:multi_a(1,[37435aca/48'/1'/0'/2']tpubDEcZc7Um5KPZLF11qLYNgcteH1PH7CSKtTFTuTYuL6jqsP73gBHvLY42FuyvkTWN8C4q1YiDAUAeEuA78CDuuD2x17UKJymkBacCJz8P6NU/<2;3>/*,[05813578/48'/1'/0'/2']tpubDEymPgUFZDLzEePYsai2ZXc9ntsnZBohJvGuHgpZsY5bsUDJMD6de6tevVd1z1EdGPYLdNaPvD4Ck7NgcteYDUPWwExvscfaSUu19k48Mvp/<2;3>/*),older(52596)),and_v(v:pk([37435aca/48'/1'/0'/2']tpubDEcZc7Um5KPZLF11qLYNgcteH1PH7CSKtTFTuTYuL6jqsP73gBHvLY42FuyvkTWN8C4q1YiDAUAeEuA78CDuuD2x17UKJymkBacCJz8P6NU/<0;1>/*),pk([05813578/48'/1'/0'/2']tpubDEymPgUFZDLzEePYsai2ZXc9ntsnZBohJvGuHgpZsY5bsUDJMD6de6tevVd1z1EdGPYLdNaPvD4Ck7NgcteYDUPWwExvscfaSUu19k48Mvp/<0;1>/*))})#ffdmpxzr",
+        ];
+        for vector in VECTORS {
+            let Descriptor::Tr(tr) = Descriptor::<DescriptorPublicKey>::from_str(vector).unwrap() else {
+                panic!("not Taproot")
+            };
+            let tree = tr.tap_tree().as_ref().unwrap();
+            assert_eq!(unspendable_internal_key(tree).as_ref(), Some(tr.internal_key()), "{vector}");
+        }
+    }
+
+    #[test]
+    fn internal_key_follows_tree_order_not_role_order() {
+        // The order we used before Liana compatibility (PHONE, DEVICE, DEVICE_R,
+        // HELPER, HEIR) gives a different key, which Liana rejects as a
+        // spendable key. Guard against going back to it.
+        let [p, d, dr, h, heir] = LIANA_TEST_KEYS.map(|k| DescriptorPublicKey::from_str(k).unwrap());
+        let keys = SavingsKeys::new(p, d, dr, h, heir).unwrap();
+        let policy = SavingsPolicy::new(keys.clone(), Delays::default(), Network::Regtest).unwrap();
+        let Descriptor::Tr(tr) = policy.descriptor() else { panic!("not Taproot") };
+        let xpub = |k: &DescriptorPublicKey| match k {
+            DescriptorPublicKey::MultiXPub(m) => m.xkey,
+            _ => unreachable!(),
+        };
+        let role_order: Vec<u8> =
+            Role::ALL.iter().flat_map(|r| xpub(keys.get(*r)).public_key.serialize()).collect();
+        let old = sha256::Hash::hash(&role_order).to_byte_array();
+        assert_ne!(xpub(tr.internal_key()).chain_code.to_bytes(), old);
     }
 
     #[test]
