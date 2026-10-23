@@ -203,5 +203,4 @@ The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
 ## Not here yet
 
 - The signet demo
-- The Liana/Sparrow exit drill
 - The recovery contact path

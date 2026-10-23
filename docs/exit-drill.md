@@ -11,10 +11,11 @@ Both refuse a delayed spend one block early. Sparrow can't import a Savings wall
 
 ## Result
 
-From run 39960059017 of the `Exit drill` workflow (run in the private archive) on 2026-10-23, Ubuntu 24.04. The demo wallet uses a device delay of 10 blocks and a heir delay of 20.
+From [run 40000729825](https://github.com/brent472/twofold/actions/runs/40000729825) of the `Exit drill` workflow on 2026-10-23, Ubuntu 24.04, with keys made from 12-word recovery phrases. The demo wallet uses a device delay of 10 blocks and a heir delay of 20. (The first run, 39960059017 in the private archive, used the older raw `tprv` keys and had Bitcoin Core sign for Liana.)
 
 | Check | Liana v15.0 | Bitcoin Core 31.1 alone |
 | --- | --- | --- |
+| Signs with each holder's recovery phrase | ✅ Liana's own signer (`HotSigner`) reads the phrase | ✅ from a `tprv` made from the phrase with Python's standard library; Core's key fingerprints match Twofold's public keys |
 | Imports the descriptor from `twofold export` | ✅ | ✅ |
 | Same addresses as Twofold (first 5 receive and change) | ✅ | ✅ |
 | 2 of 3 keys | ✅ PHONE + HELPER | ✅ PHONE + DEVICE |
@@ -29,20 +30,20 @@ From run 39960059017 of the `Exit drill` workflow (run in the private archive) o
 
 **Liana and the network agree to the block.** Liana refuses at 9 confirmations and spends at 10, the same as the node's own rule. It's neither stricter nor looser.
 
-**No key material reached the log.** The only `***` masks in that run are GitHub's own checkout token.
+**No key material reached the log.** The full log has no `tprv` or `xprv`, and no more than 5 BIP39 words in a row anywhere (a phrase is 12). Its only two `***` masks are GitHub's own checkout token.
 
 ## What "without Twofold" means here
 
 Twofold runs only at the very start:
-- `twofold keygen` makes four fresh test keys.
+- `twofold keygen` makes four fresh test keys, each saved as a 12-word recovery phrase.
 - `twofold create` and `twofold export` produce the descriptor.
 
-After that, no Twofold code runs. The holders' recovery materials are that descriptor and their private keys:
+After that, no Twofold code runs. The holders' recovery materials are that descriptor and their recovery phrases:
 - **Liana** (`lianad` + `liana-cli`) watches the wallet, builds every spend (`createspend` for 2-of-3, `createrecovery` for the delayed paths), adds the signatures (`updatespend`), finalizes and broadcasts (`broadcastspend`).
-- **Bitcoin Core** signs, in both parts. Each holder's key sits in its own Core wallet (`walletprocesspsbt`). Liana's built-in signer only accepts a BIP39 recovery phrase, and Twofold's test keys are raw master keys, not phrases. See [findings](#findings).
+- **Liana's own signer** signs Liana's spends. `liana-cli` has no signing command, so [`contrib/exit-drill/twofold_sign.rs`](../contrib/exit-drill/twofold_sign.rs), a few lines around `liana::signer::HotSigner` (the signer the Liana app uses), reads each holder's phrase from their key file and signs. It's built from Liana's signed v15.0 source, inside Liana's tree, with Liana's own `Cargo.lock`.
 - **Bitcoin Core alone** does the same spends a second time, with no Liana:
   - a watch-only wallet with the public descriptor builds the spend (`walletcreatefundedpsbt`, with the delay as the input's sequence for a delayed path)
-  - the holders' wallets sign it
+  - the holders' wallets sign it. Core can't read a recovery phrase, so the script turns each phrase into a master key (`tprv`) with Python's standard library, following BIP39 and BIP32, separately from Twofold's and Liana's code. It then checks Core sees the same key fingerprint as Twofold's public key.
   - `finalizepsbt` and `sendrawtransaction` finish and send it
 
 The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py) only runs these commands and checks their results. It has no wallet logic of its own.
@@ -62,12 +63,13 @@ It runs on a GitHub-hosted Ubuntu machine with a fresh regtest node. Keys are ge
 | What | From | Verified against |
 | --- | --- | --- |
 | Liana v15.0, `liana-15.0-x86_64-linux-gnu.tar.gz` | Liana's GitHub release | `liana-15.0-shasums.txt`, which must carry a valid signature from Edouard Paris's key (primary `5B63 F3B9 7699 C7EE F3B0 40B1 9B7F 629A 53E7 7B83`, signing subkey `4730 … DC8F`, committed as [`.github/exit-drill/liana-signing-key.asc`](../.github/exit-drill/liana-signing-key.asc)). The tarball's SHA256 must match that file **and** the value pinned in the workflow (`24c3b5e7…abe0`). The same key signs the `v15.0` git tag; `git verify-tag` passed on 2026-10-22. |
+| Liana v15.0 source, for the signer | Liana's GitHub repository, tag `v15.0` | `git verify-tag` against the same pinned key (any subkey of primary `5B63…7B83`), in a keyring holding only that key, **and** the tag must point at the pinned commit `4684d5cb…fb38`. Built with `cargo build --locked`, so every crate matches Liana's `Cargo.lock`. Built with the runner's stable Rust, not Liana's pinned 1.88.0, which would also download Windows and macOS targets. |
 | Bitcoin Core 31.1, `bitcoin-31.1-x86_64-linux-gnu.tar.gz` | bitcoincore.org | `SHA256SUMS`, which must carry at least 3 good signatures from the builder keys in `bitcoin-core/guix.sigs` (the run had 11) |
 
 **Keeping keys out of the log.**
-- Private keys are read from the key files and immediately registered with GitHub's log masking.
-- They reach Bitcoin Core only on stdin (`bitcoin-cli -stdin`), never as command-line arguments.
-- A failed key import reports no detail, and Liana's own log is never printed.
+- Each recovery phrase, and the `tprv` made from it, is registered with GitHub's log masking as soon as it's read.
+- Phrases never leave the key files: Liana's signer is given the file's path. The `tprv`s reach Bitcoin Core only on stdin (`bitcoin-cli -stdin`), never as command-line arguments.
+- The signer's errors and a failed key import report no detail, and Liana's own log is never printed.
 
 ## The drill by hand (Linux or macOS)
 
@@ -81,15 +83,17 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
    twofold export --split        # receive and change descriptors for Bitcoin Core
    ```
 2. **Liana.** Write a `lianad.toml` with `main_descriptor` set to the export, `network = "regtest"` and the node's cookie, then start `lianad --conf lianad.toml`. Check that `liana-cli --conf lianad.toml listaddresses 0 5` matches `twofold address`.
-3. **Bitcoin Core signers.** One wallet per holder (`createwallet <name> blank=true`). Import the receive and change descriptors with that holder's `tpub…` replaced by `tprv…/87h/1h/<account>h`, passing the descriptor on stdin (`bitcoin-cli -stdin importdescriptors`).
+3. **Signers.**
+   - **Liana:** build [`twofold_sign.rs`](../contrib/exit-drill/twofold_sign.rs) as the workflow does (copy it to `liana/examples/` in Liana's v15.0 tree, then `cargo build --release --locked -p liana --example twofold_sign`). Then `twofold_sign phone.key < in.psbt > out.psbt` signs as PHONE. In the Liana desktop app, the phrase can be imported as a hot signer instead.
+   - **Bitcoin Core:** one wallet per holder (`createwallet <name> blank=true`). Turn the holder's phrase into its master `tprv` (BIP39 seed with an empty passphrase, then BIP32 master key; `phrase_to_tprv` in [`drill.py`](../contrib/exit-drill/drill.py) does it with Python's standard library). Import the receive and change descriptors with that holder's `tpub…` replaced by `tprv…/87h/1h/<account>h`, passing the descriptor on stdin (`bitcoin-cli -stdin importdescriptors`).
 4. **Fund.** Send to a Liana address, or on regtest mine a block to one and then 100 more.
 5. **2 of 3.**
    ```bash
    liana-cli createspend '{"<address>": <sats>}' '[]' 2
    ```
-   Then `bitcoin-cli -rpcwallet=phone walletprocesspsbt <psbt> true DEFAULT true false`, and the same for `helper`. Then `liana-cli updatespend <psbt>` and `liana-cli broadcastspend <txid>`.
-6. **DEVICE alone.** Before the coin has 10 confirmations, `liana-cli createrecovery <address> 2 10 '["<txid>:<vout>"]'` refuses. At 10 it returns a PSBT: sign it with `device`, then `updatespend` and `broadcastspend`.
-7. **HEIR alone.** The same with timelock 20 and the `heir` wallet.
+   Then sign with `twofold_sign phone.key`, then `twofold_sign helper.key`. Then `liana-cli updatespend <psbt>` and `liana-cli broadcastspend <txid>`.
+6. **DEVICE alone.** Before the coin has 10 confirmations, `liana-cli createrecovery <address> 2 10 '["<txid>:<vout>"]'` refuses. At 10 it returns a PSBT: sign it with `twofold_sign device.key`, then `updatespend` and `broadcastspend`.
+7. **HEIR alone.** The same with timelock 20 and `heir.key`.
 8. **Bitcoin Core alone.** Make a watch-only wallet (`disable_private_keys=true`) and import the public receive and change descriptors.
    - **Build:** `walletcreatefundedpsbt` with the coin as input. For a delayed path, give that input `"sequence": <delay>`.
    - **Sign:** with the holders' wallets.
@@ -103,9 +107,9 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
 - **Same signer on two paths.**
   - Liana counts a key as the xpub *plus* its derivation paths. It accepts our separate-account DEVICE and DEVICE_R keys, and also its own convention of one xpub with `<0;1>` and `<2;3>`.
   - Exporting to Liana needs no change to Twofold. Importing a wallet made *in* Liana would need `SavingsKeys::new` to allow the same xpub when the paths differ.
-- **Liana's signer wants a BIP39 phrase.**
-  - Liana's built-in signer only takes a BIP39 recovery phrase, and Twofold's test keys are raw master keys, so Bitcoin Core signed here.
-  - For a real exit, each key must exist in a form an independent signer can use: a BIP39 phrase, a hardware signer Liana supports, or an extended private key Bitcoin Core can import. **To decide before real keys exist.**
+- **Liana's signer wants a BIP39 phrase (resolved).**
+  - Liana's built-in signer only takes a BIP39 recovery phrase. Twofold's first test keys were raw master keys, so in the first run Bitcoin Core signed for Liana.
+  - Every Twofold key now comes from a 12-word BIP39 phrase with no passphrase, the same as Liana's own hot wallets. Liana's `HotSigner` now signs every Liana spend in the drill, and Bitcoin Core signs from the same phrases. See the [derivation](../crates/twofold-savings/README.md#recovery-phrases-and-derivation).
 - **On Windows, `liana-cli` doesn't exist.**
   - Liana's JSON-RPC server and `liana-cli` are Unix-only by design: [`lianad/src/bin/cli.rs` line 1](https://github.com/wizardsardine/liana/blob/v15.0/lianad/src/bin/cli.rs#L1) is `#![cfg(not(target_os = "windows"))]`, and the RPC module is [`#[cfg(unix)]`](https://github.com/wizardsardine/liana/blob/v15.0/lianad/src/jsonrpc/mod.rs#L1-L4).
   - `lianad.exe` builds and runs on Windows, but nothing can send it commands. Liana's Windows release is the desktop app (`liana-15.0.exe`).
@@ -131,5 +135,5 @@ Sparrow's wallet types are single-signature, plain multisig and silent payments 
 
   This is the route Windows users have, and nobody has tried it yet.
 - **The signet run** of this drill (Milestone 1's "signet demo transaction for each allowed path").
-- **Real signers.** Once Twofold's key format is decided, rerun the drill signing with that format, not with Bitcoin Core.
+- **Hardware and app signers.** The drill signs with Liana's hot signer and with Bitcoin Core. Signing through the Liana desktop app, and through any hardware device Twofold supports, is still to do.
 - **Real delays.** The drill uses 10 and 20 blocks. The 39,420 and 61,320-block placeholders are covered by Twofold's own full-length test, not by Liana.
