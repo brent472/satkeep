@@ -13,8 +13,10 @@ use bdk_wallet::bitcoin::{Address, Amount, Network, Transaction, Txid, consensus
 use serde_json::{Value, json};
 
 /// Largest batch of blocks mined per RPC call, to stay well inside the RPC
-/// client's 15-second timeout on a slow machine.
-const MINE_BATCH: u32 = 500;
+/// client's 15-second timeout. 500 blocks took longer than that on a busy
+/// machine (other tests building and running alongside); 100 leaves a wide
+/// margin.
+const MINE_BATCH: u32 = 100;
 
 /// A throwaway regtest node with a funded wallet that acts as a faucet.
 pub struct Node {
