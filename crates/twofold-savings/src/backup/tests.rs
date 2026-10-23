@@ -56,12 +56,20 @@ fn the_backup_alone_reveals_nothing_but_its_date_and_devices() {
     assert_eq!(header.entries.len(), 1);
     assert_eq!(header.entries[0].device_id, device.id());
 
-    // Nothing of the phrase or the setup is in the file.
+    // Nothing of the phrase or the setup is in the file: no run of its
+    // words anywhere, and no single word in the encrypted body. (Single
+    // words aren't checked in the readable header, whose device label says
+    // "phone" and "wallet", which are BIP39 words too.)
     let text = String::from_utf8_lossy(&file);
     assert!(!contains_recovery_phrase(&text));
     assert!(!text.contains(&phrase));
-    for word in phrase.split(' ').filter(|w| w.len() >= 4) {
-        assert!(!file.windows(word.len()).any(|w| w == word.as_bytes()), "a phrase word is in the file");
+    let words: Vec<&str> = phrase.split(' ').collect();
+    for pair in words.windows(2) {
+        assert!(!text.contains(&pair.join(" ")), "two phrase words in a row are in the file");
+    }
+    let body = &file[format::encode_header(&header).len()..];
+    for word in words.iter().filter(|w| w.len() >= 4) {
+        assert!(!body.windows(word.len()).any(|w| w == word.as_bytes()), "a phrase word is in the encrypted body");
     }
     assert!(!text.contains("savings setup"), "the setup is encrypted too");
     assert!(file.len() < 1024, "a backup is well under 1 MB");
