@@ -11,7 +11,7 @@ Both refuse a delayed spend one block early. Sparrow can't import a Savings wall
 
 ## Result
 
-From run [39960059017](https://github.com/brent472/twofold/actions/runs/39960059017) of the `Exit drill` workflow on 2026-10-23, Ubuntu 24.04. The demo wallet uses a device delay of 10 blocks and a heir delay of 20.
+From run 39960059017 of the `Exit drill` workflow (run in the private archive) on 2026-10-23, Ubuntu 24.04. The demo wallet uses a device delay of 10 blocks and a heir delay of 20.
 
 | Check | Liana v15.0 | Bitcoin Core 31.1 alone |
 | --- | --- | --- |
@@ -99,7 +99,7 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
 
 - **Liana needed our internal key built its way (fixed).**
   - Liana only treats a Taproot internal key as unspendable if its chain code hashes the tree's keys in tree order. We hashed them in role order, so Liana refused our descriptor: *"Descriptor is not compatible with a Liana spending policy."*
-  - Fixed in [#6](https://github.com/brent472/twofold/pull/6), which changed every Savings address. Tests now pin the key to Liana's own test vectors and code.
+  - Fixed in PR #6 (in the private archive), which changed every Savings address. Tests now pin the key to Liana's own test vectors and code.
 - **Same signer on two paths.**
   - Liana counts a key as the xpub *plus* its derivation paths. It accepts our separate-account DEVICE and DEVICE_R keys, and also its own convention of one xpub with `<0;1>` and `<2;3>`.
   - Exporting to Liana needs no change to Twofold. Importing a wallet made *in* Liana would need `SavingsKeys::new` to allow the same xpub when the paths differ.
