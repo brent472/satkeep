@@ -15,7 +15,8 @@ use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
 use twofold_savings::checkin::{self, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
-use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey};
+use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey, contains_recovery_phrase};
+use zeroize::Zeroizing;
 
 use twofold_cli::wallet_dir::{self, Config, Opened, TestNetwork};
 use twofold_cli::node;
@@ -183,8 +184,9 @@ impl PathArg {
 fn main() -> ExitCode {
     if private_key_in_arguments() {
         eprintln!(
-            "error: a private key was passed on the command line. Keys go in a file (--key-file) or on \
-             standard input (--key-stdin). Treat that key as exposed: it may be in your shell history."
+            "error: a private key or recovery phrase was passed on the command line. Keys go in a file \
+             (--key-file) or on standard input (--key-stdin). Treat that key as exposed: it may be in your \
+             shell history."
         );
         return ExitCode::FAILURE;
     }
@@ -197,15 +199,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether any argument contains an extended private key. Checked before
-/// clap parses anything, because clap repeats unexpected arguments in its
-/// error messages, and a key on the command line also lands in shell
+/// Whether the arguments contain an extended private key or a recovery
+/// phrase, whether quoted as one argument or spread over several. Checked
+/// before clap parses anything, because clap repeats unexpected arguments in
+/// its error messages, and a key on the command line also lands in shell
 /// history and the process list.
 fn private_key_in_arguments() -> bool {
-    std::env::args_os().skip(1).any(|arg| {
-        let arg = arg.to_string_lossy();
-        arg.contains("tprv8") || arg.contains("xprv9")
-    })
+    let args: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
+    args.iter().any(|arg| arg.contains("tprv8") || arg.contains("xprv9")) || contains_recovery_phrase(&args.join(" "))
 }
 
 impl Cli {
@@ -309,12 +310,13 @@ fn run(cli: Cli) -> Result<()> {
                     bail!("not approved; nothing was signed");
                 }
             }
-            let text = if key_stdin {
+            // Wiped from memory when dropped, like the phrase inside HolderKey.
+            let text = Zeroizing::new(if key_stdin {
                 lines.next().transpose().context("reading the key from standard input")?.unwrap_or_default()
             } else {
                 let path = key_file.as_ref().expect("clap requires --key-file or --key-stdin");
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
-            };
+            });
             let holder = HolderKey::from_secret_str(&text)?;
             drop(text);
             let added = holder.sign(&mut payment)?;
@@ -433,21 +435,23 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// Writes a fresh test-network key to `out`. Refuses anything but a new
+/// Writes a fresh key's recovery phrase to `out`. Refuses anything but a new
 /// `.key` file, so even inside a repo `.gitignore` keeps it out of commits.
+/// The phrase is never printed.
 fn keygen(out: &Path) -> Result<()> {
     if out.extension().and_then(|e| e.to_str()) != Some("key") {
         bail!("the key file's name must end in .key, so .gitignore keeps it out of commits");
     }
     let key = HolderKey::generate();
-    let secret = key.to_secret_string();
-    if !secret.starts_with("tprv") {
-        bail!("refusing to save a key that isn't a test-network key");
+    let secret = Zeroizing::new(format!("{}\n", key.to_secret_string()));
+    // What gets written must read back as the same key.
+    if HolderKey::from_secret_str(&secret)?.public_key(0) != key.public_key(0) {
+        bail!("refusing to save a key that doesn't read back as itself");
     }
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
-    write_new(out, format!("{secret}\n").as_bytes())?;
+    write_new(out, secret.as_bytes())?;
     println!("Saved a new test key to {}.", out.display());
     println!("Anyone with this file can approve as its holder. Keep it private and never commit it.");
     println!("Public key (for PHONE, DEVICE, HELPER or HEIR):");

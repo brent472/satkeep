@@ -9,31 +9,40 @@ Bitcoin Core (bitcoind + bitcoin-cli) on a fresh regtest node:
      and Bitcoin Core.
   2. Liana spends with 2 of 3 keys, with DEVICE alone after its delay and
      with HEIR alone after its delay, and refuses each delayed spend one
-     block early.
+     block early. Liana's own signer (HotSigner, via twofold_sign.rs) signs
+     with the recovery phrases in Twofold's key files.
   3. Bitcoin Core alone does the same spends, and the node refuses each
-     delayed spend one block early.
+     delayed spend one block early. Core can't read a recovery phrase, so
+     this script turns each phrase into a master key (tprv) with Python's
+     standard library: BIP39 seed, then BIP32 master key. That's written
+     from the BIPs, separately from Twofold's code and Liana's.
 
-Bitcoin Core signs in both parts: Liana's own signer takes a BIP39 phrase
-and Twofold's test keys are raw master keys.
-
-Private keys never reach the log: they are read from Twofold's key files,
-passed to bitcoin-cli on stdin (never as arguments), and registered with
-GitHub Actions' log masking. Run on a throwaway machine only.
+Secrets are never printed, not even masked: the phrases stay in Twofold's
+key files and go to Liana's signer as a file path; the master keys go to
+bitcoin-cli on stdin (never as arguments). Any command that reads a key
+fails without repeating its output. The workflow then scans this script's
+output and the whole job log, and fails if either has anything key-like
+(scan_log.py). Run on a throwaway machine only.
 
 Environment: BITCOIN_BIN (folder with bitcoind and bitcoin-cli), LIANAD,
-LIANA_CLI, TWOFOLD (the twofold binary), WORK (an empty scratch folder).
+LIANA_CLI, LIANA_SIGN (twofold_sign built from Liana's source), TWOFOLD
+(the twofold binary), WORK (an empty scratch folder).
 """
 
+import hashlib
+import hmac
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import unicodedata
 
 BIN = os.environ["BITCOIN_BIN"]
 LIANAD = os.environ["LIANAD"]
 LIANA_CLI = os.environ["LIANA_CLI"]
+LIANA_SIGN = os.environ["LIANA_SIGN"]
 TWOFOLD = os.environ["TWOFOLD"]
 WORK = os.environ["WORK"]
 
@@ -65,7 +74,8 @@ def run(args, stdin=None):
 
 def cli(*args, wallet=None, stdin_args=None):
     """bitcoin-cli. `stdin_args` go on stdin (-stdin), one per line, so
-    secrets never appear in the process list."""
+    secrets never appear in the process list. Only key imports use them, so
+    a failure then reports no detail: Core's message could echo the key."""
     cmd = [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}"]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
@@ -73,6 +83,8 @@ def cli(*args, wallet=None, stdin_args=None):
         cmd.append("-stdin")
     code, out, err = run(cmd + list(args), "\n".join(stdin_args) + "\n" if stdin_args is not None else None)
     if code != 0:
+        if stdin_args is not None:
+            raise RuntimeError(f"bitcoin-cli {args[0]} failed (no detail: its input holds a key)")
         raise RuntimeError(f"bitcoin-cli {args[0] if args else ''} failed: {err}")
     return out
 
@@ -99,6 +111,8 @@ class LianaError(Exception):
 def twofold(*args):
     code, out, err = run([TWOFOLD] + list(args))
     if code != 0:
+        if args[0] == "keygen":
+            raise RuntimeError("twofold keygen failed (no detail: it handles a new key)")
         raise RuntimeError(f"twofold {args[0]} failed: {err}")
     return out
 
@@ -142,13 +156,54 @@ def signature_count(psbt):
     return sum(len(i.get("taproot_script_path_sigs", [])) for i in decoded["inputs"])
 
 
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+
+def phrase_to_tprv(phrase):
+    """A BIP39 phrase (no passphrase) to its BIP32 master key on the test
+    network, from the BIPs alone: BIP39's seed is PBKDF2-HMAC-SHA512 of the
+    NFKD phrase with salt "mnemonic", 2048 rounds; BIP32's master key is
+    HMAC-SHA512 of the seed under "Bitcoin seed"."""
+    words = unicodedata.normalize("NFKD", " ".join(phrase.split()))
+    seed = hashlib.pbkdf2_hmac("sha512", words.encode(), b"mnemonic", 2048)
+    digest = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
+    key, chain_code = digest[:32], digest[32:]
+    if not 0 < int.from_bytes(key, "big") < SECP256K1_ORDER:
+        raise RuntimeError("unusable master key")  # BIP32: astronomically unlikely
+    # tprv: version, depth 0, parent fingerprint 0, child number 0, chain code, 0x00 || key.
+    payload = bytes.fromhex("04358394") + bytes(9) + chain_code + b"\x00" + key
+    payload += hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    n, text = int.from_bytes(payload, "big"), ""
+    while n:
+        n, r = divmod(n, 58)
+        text = B58[r] + text
+    return "1" * (len(payload) - len(payload.lstrip(b"\x00"))) + text
+
+
 def sign(psbt, holder):
     """Bitcoin Core signs with one holder's key, without finalizing."""
     before = signature_count(psbt)
     signed = cli_json("walletprocesspsbt", psbt, "true", "DEFAULT", "true", "false", wallet=holder)["psbt"]
     if signature_count(signed) <= before:
-        raise RuntimeError(f"{holder} added no signature")
+        raise RuntimeError(f"{holder} added no signature in Bitcoin Core")
     return signed
+
+
+def liana_sign(psbt, holder):
+    """Liana's HotSigner signs with one holder's recovery phrase. The phrase
+    stays in the key file; only its path is passed."""
+    before = signature_count(psbt)
+    code, out, _ = run([LIANA_SIGN, key_file(holder)], psbt)
+    if code != 0:
+        raise RuntimeError(f"Liana's signer failed for {holder} (no detail: it reads the key)")
+    if signature_count(out) <= before:
+        raise RuntimeError(f"{holder} added no signature with Liana's signer")
+    return out
+
+
+def key_file(holder):
+    return os.path.join(WORK, "twofold", "regtest", "keys", f"{holder}.key")
 
 
 def txid_of(psbt):
@@ -176,10 +231,13 @@ def main():
     for name in ["phone", "device", "helper", "heir"]:
         out = twofold("keygen", "--name", name)
         public = [line.strip() for line in out.splitlines() if line.startswith("  ")]
-        with open(os.path.join(WORK, "twofold", "regtest", "keys", f"{name}.key")) as f:
-            secret = f.read().strip()
-        print(f"::add-mask::{secret}", flush=True)
+        with open(key_file(name)) as f:
+            phrase = f.read().strip()
+        if len(phrase.split()) != 12:
+            raise RuntimeError(f"{name}'s key file doesn't hold a 12-word recovery phrase")
+        secret = phrase_to_tprv(phrase)
         holders[name] = {"public": public, "secret": secret, "fp": public[0][1:9]}
+    check("`twofold keygen` saves a 12-word recovery phrase for each holder", True)
     twofold(
         "create", "--device-delay", str(DEVICE_DELAY), "--heir-delay", str(HEIR_DELAY),
         "--checkin-interval", "5", "--checkin-margin", "2",
@@ -211,6 +269,11 @@ def main():
         res = cli_json("importdescriptors", stdin_args=[json.dumps(imports)], wallet=name)
         if not all(r.get("success") for r in res):
             raise RuntimeError(f"importing {name}'s key into Bitcoin Core failed")  # no detail: it could echo the key
+        # The master key made here must be the one behind Twofold's public keys.
+        derived = cli_json("listdescriptors", wallet=name)["descriptors"]
+        if not any(f"[{h['fp']}/87h/1h/0h]" in d["desc"] or f"[{h['fp']}/87'/1'/0']" in d["desc"] for d in derived):
+            raise RuntimeError(f"Bitcoin Core's key for {name} isn't the one in Twofold's public key")
+    check("Bitcoin Core's keys, made from each phrase by Python's standard library, match Twofold's public keys", True)
 
     # --- Liana imports the descriptor ------------------------------------------
     with open(LIANA_CONF, "w") as f:
@@ -248,14 +311,14 @@ def main():
             raise RuntimeError(f"Liana couldn't create the spend: {created}")
         psbt = created["psbt"]
         for holder in ("phone", "helper"):
-            psbt = sign(psbt, holder)
+            psbt = liana_sign(psbt, holder)
         liana("updatespend", psbt)
         txid = txid_of(psbt)
         liana("broadcastspend", txid)
         mine(1, burn)
         wait_for_liana_sync()
         sequence, witness = describe_spend(txid)
-        check("Liana spends with 2 of 3 keys (PHONE + HELPER, signed by Bitcoin Core)",
+        check("Liana spends with 2 of 3 keys (PHONE + HELPER, signed by Liana's HotSigner)",
               mined_in_tip(txid) and witness == 5 and sequence >= 0xFFFFFFFD, f"txid {txid}")
         funded_at = height()
         decoded = cli_json("getrawtransaction", txid, "true", cli("getbestblockhash"))
@@ -315,7 +378,7 @@ def main():
             # Exactly at the delay: Liana's and Core's spends both go out, then one block.
             age_to(delay)
             psbt = liana("createrecovery", burn, 2, delay, [outpoint[f"liana-{path}"]])["psbt"]
-            psbt = sign(psbt, holder)
+            psbt = liana_sign(psbt, holder)
             liana("updatespend", psbt)
             liana_txid = txid_of(psbt)
             liana("broadcastspend", liana_txid)
@@ -326,7 +389,7 @@ def main():
 
             mine(1, burn)
             wait_for_liana_sync()
-            check(f"Liana spends with {path.upper()} alone at exactly {delay} confirmations",
+            check(f"Liana spends with {path.upper()} alone at exactly {delay} confirmations (signed by Liana's HotSigner)",
                   mined_in_tip(liana_txid) and describe_spend(liana_txid) == (delay, 3), f"txid {liana_txid}")
             check(f"Bitcoin Core alone spends with {path.upper()} alone at exactly {delay} confirmations",
                   bool(core_txid) and mined_in_tip(core_txid) and describe_spend(core_txid) == (delay, 3),

@@ -9,7 +9,9 @@ license.workspace = true
 
 [dependencies]
 bdk_wallet.workspace = true
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 thiserror.workspace = true
+zeroize = "1.9.1"
 
 [dev-dependencies]
 bdk_bitcoind_rpc.workspace = true

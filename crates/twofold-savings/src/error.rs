@@ -25,8 +25,10 @@ pub enum Error {
     UnknownCoin { input: usize },
     #[error("not enough keys have approved this payment")]
     NotEnoughApprovals,
-    #[error("that isn't a valid test-network private key for a Savings key holder")]
+    #[error("that isn't a valid key for a Savings key holder: it must be a 12-word recovery phrase")]
     BadHolderKey,
+    #[error("that key is in the old tprv format; Twofold keys are now recovery phrases, so make a new key with keygen")]
+    OldHolderKey,
     #[error("BDK could not build the payment: {0}")]
     Build(#[source] Box<bdk_wallet::error::CreateTxError>),
     #[error("could not finalize the payment: {0}")]

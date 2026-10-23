@@ -1,17 +1,18 @@
 //! Runs the real `twofold` binary against a throwaway regtest node.
 //!
-//! Keys are generated in memory with `HolderKey`. Private keys reach the
-//! binary only through stdin, except in the one test of `--key FILE`, which
-//! writes a fresh key into a temporary folder deleted when the test ends.
+//! Keys are generated in memory with `HolderKey`. Recovery phrases reach the
+//! binary only through stdin, except in the `keygen` and `--key-file` tests,
+//! which write fresh keys into a temporary folder deleted when the test ends.
 
 #![allow(dead_code)] // each test binary uses a different part of this
 
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 
 use tempfile::TempDir;
-use twofold_savings::HolderKey;
+use twofold_savings::{HolderKey, contains_recovery_phrase};
 pub use twofold_testenv::Node;
 
 pub struct Holders {
@@ -23,12 +24,7 @@ pub struct Holders {
 
 impl Holders {
     pub fn generate() -> Self {
-        Self {
-            phone: HolderKey::generate(),
-            device: HolderKey::generate(),
-            helper: HolderKey::generate(),
-            heir: HolderKey::generate(),
-        }
+        Self { phone: new_key(), device: new_key(), helper: new_key(), heir: new_key() }
     }
 
     /// PHONE, DEVICE, DEVICE_R, HELPER, HEIR, as `create` takes them.
@@ -162,11 +158,41 @@ pub fn expect_failure(args: &[&str], out: Output) -> String {
     stderr.into_owned()
 }
 
-/// No command may ever print a private key.
+/// Every recovery phrase this test binary has made or read, so
+/// `check_no_secrets` can look for their words.
+static PHRASES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A fresh key whose phrase `check_no_secrets` looks for.
+pub fn new_key() -> HolderKey {
+    let key = HolderKey::generate();
+    remember(&key);
+    key
+}
+
+/// Makes `check_no_secrets` look for this key's phrase too, for keys the
+/// binary wrote.
+pub fn remember(key: &HolderKey) {
+    PHRASES.lock().unwrap().push(key.to_secret_string());
+}
+
+/// No command may ever print a private key or recovery phrase: no `tprv` or
+/// `xprv`, no 12 BIP39 words in a row, and no three words in a row from any
+/// phrase this test binary knows. (Fewer aren't checked: common words such
+/// as "key" and "phone" are BIP39 words.) Nothing secret is put in the failure
+/// message.
 fn check_no_secrets(out: Output) -> Output {
+    let phrases = PHRASES.lock().unwrap_or_else(|e| e.into_inner()).clone();
     for stream in [&out.stdout, &out.stderr] {
         let text = String::from_utf8_lossy(stream);
         assert!(!text.contains("tprv") && !text.contains("xprv"), "twofold printed a private key");
+        assert!(!contains_recovery_phrase(&text), "twofold printed something that looks like a recovery phrase");
+        let printed: Vec<String> =
+            text.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()).map(str::to_ascii_lowercase).collect();
+        for phrase in &phrases {
+            let words: Vec<&str> = phrase.split(' ').collect();
+            let leaked = words.windows(3).any(|three| printed.windows(3).any(|p| p == three));
+            assert!(!leaked, "twofold printed three words in a row from a recovery phrase");
+        }
     }
     out
 }

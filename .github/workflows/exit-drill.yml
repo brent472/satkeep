@@ -17,6 +17,10 @@ env:
   LIANA_TARBALL_SHA256: 24c3b5e74edeaff2ef80231fc65e2bcbcc44590ef3d88c6270e49046a3b5abe0
   LIANA_KEY_PRIMARY: 5B63F3B97699C7EEF3B040B19B7F629A53E77B83
   LIANA_KEY_SIGNING: 4730DDCC64DFAEC16CEFEB5BE65F7A089C20DC8F
+  # The v15.0 tag's commit, checked on 2026-10-23. Liana's signer is built
+  # from this source only if the tag is signed by the pinned key and points
+  # here.
+  LIANA_COMMIT: 4684d5cb0c75471ae40f43dffc78333ac74afb38
   CORE_VERSION: "31.1"
   # Bitcoin Core 31.1's Linux tarball, checked on 2026-10-23 (its SHA256SUMS
   # had 11 good builder signatures). The download must match this and
@@ -59,6 +63,36 @@ jobs:
           echo "LIANAD=$lianad" >> "$GITHUB_ENV"
           echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
 
+      - name: Build Liana's signer from the signed v15.0 source
+        # twofold_sign.rs is a few lines around liana::signer::HotSigner. It's
+        # built inside Liana's tree as an example of the `liana` crate, so it
+        # uses Liana's code and Liana's Cargo.lock (--locked). It's built with
+        # the runner's stable Rust rather than Liana's pinned 1.88.0, which
+        # would also download Windows and macOS targets.
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/liana-src"
+          git init -q "$src" && cd "$src"
+          git fetch -q --depth 1 https://github.com/wizardsardine/liana "refs/tags/v${LIANA_VERSION}:refs/tags/v${LIANA_VERSION}"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg-liana-tag"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import "$GITHUB_WORKSPACE/.github/exit-drill/liana-signing-key.asc"
+          git verify-tag --raw "v${LIANA_VERSION}" 2> tag-status || true
+          if ! grep -Eq "^\[GNUPG:\] VALIDSIG [0-9A-F]+ .* ${LIANA_KEY_PRIMARY}$" tag-status; then
+            echo "::error::Liana's v${LIANA_VERSION} tag isn't signed by the pinned key"; cat tag-status; exit 1
+          fi
+          commit=$(git rev-parse "v${LIANA_VERSION}^{commit}")
+          if [ "$commit" != "$LIANA_COMMIT" ]; then
+            echo "::error::Liana's v${LIANA_VERSION} tag points to $commit, not the pinned $LIANA_COMMIT"; exit 1
+          fi
+          echo "Liana's v${LIANA_VERSION} tag: good signature from ${LIANA_KEY_PRIMARY}, commit $commit"
+          git checkout -q "$commit"
+          rm -f tag-status
+          mkdir -p liana/examples
+          cp "$GITHUB_WORKSPACE/contrib/exit-drill/twofold_sign.rs" liana/examples/twofold_sign.rs
+          RUSTUP_TOOLCHAIN=stable cargo build --release --locked -p liana --example twofold_sign
+          echo "LIANA_SIGN=$src/target/release/examples/twofold_sign" >> "$GITHUB_ENV"
+
       - name: Download Bitcoin Core and verify it against its signed checksums
         run: .github/scripts/fetch-bitcoin-core.sh
 
@@ -68,7 +102,52 @@ jobs:
           echo "TWOFOLD=$GITHUB_WORKSPACE/target/release/twofold" >> "$GITHUB_ENV"
 
       - name: Run the drill
+        id: drill
         run: |
+          set -euo pipefail
           export WORK="$RUNNER_TEMP/drill"
           mkdir -p "$WORK"
-          python3 contrib/exit-drill/drill.py
+          python3 -I contrib/exit-drill/drill.py 2>&1 | tee "$RUNNER_TEMP/drill-output.log"
+
+      # Nothing secret is ever printed, so there's nothing to mask. These two
+      # scans check that: this one against the drill's own output, knowing the
+      # run's phrases; the scan-log job below against the whole job log.
+      - name: Check the drill's output for key material
+        if: always() && steps.drill.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
+          python3 -I contrib/exit-drill/scan_log.py "$RUNNER_TEMP/drill-output.log" \
+            --words "$words" --keys "$RUNNER_TEMP/drill/twofold/regtest/keys"
+
+  scan-log:
+    # Reads the drill job's full log once it has finished, and fails the run
+    # if any step printed anything key-like.
+    needs: drill
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the BIP39 word list (the bip39 crate in Cargo.lock)
+        run: cargo fetch --locked
+
+      - name: Check the drill job's full log for key material
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.name == "drill") | .id')
+          log="$RUNNER_TEMP/drill-job.log"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
+            sleep 15
+          done
+          [ -s "$log" ] || { echo "::error::Couldn't fetch the drill job's log"; exit 1; }
+          echo "Fetched the drill job's log: $(wc -l < "$log") lines"
+          words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
+          python3 -I contrib/exit-drill/scan_log.py "$log" --words "$words"

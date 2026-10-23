@@ -8,11 +8,12 @@ The spending rules themselves, and every assumption behind them, are in [`twofol
 
 ## Keys and wallet files stay out of the repo
 
-1. **Private keys never go on the command line.** `sign` reads a key only from a file (`--key-file FILE`) or from standard input (`--key-stdin`); no flag takes the key itself. A key typed as an argument lands in shell history and is visible in the process list. As a backstop, if any argument contains an extended private key (`tprv8…` or `xprv9…`), `twofold` refuses before parsing anything. It never repeats the key, and it warns that the key should be treated as exposed. (Without this check, the argument parser would repeat an unexpected argument in its error message.)
+1. **Private keys never go on the command line.** A key is a 12-word recovery phrase (see the [library README](../twofold-savings/README.md#recovery-phrases-and-derivation) for how keys come from it). `sign` reads it only from a file (`--key-file FILE`) or from standard input (`--key-stdin`); no flag takes the key itself. A key typed as an argument lands in shell history and is visible in the process list. As a backstop, `twofold` refuses before parsing anything if the arguments hold 12 BIP39 words in a row (quoted as one argument or spread over several) or an extended private key (`tprv8…` or `xprv9…`). It never repeats the key, and it warns that the key should be treated as exposed. (Without this check, the argument parser would repeat an unexpected argument in its error message.)
 2. **`keygen` saves outside the repo by default**, to `%USERPROFILE%\.twofold\<network>\keys\<name>.key`, or `~/.twofold/…` elsewhere.
    - It never overwrites an existing file.
    - There is no mainnet option.
-   - It writes only test-network keys (`tprv…`), and checks that before writing.
+   - It writes a fresh 12-word recovery phrase, and checks the phrase reads back as the same key before writing. The phrase is never printed: only the public keys are.
+   - Key files from before this change held a `tprv` key. Twofold no longer reads them and says so; make new keys (and a new wallet) with `keygen`.
    - `--out FILE` saves somewhere else, but the name must end in `.key`, which the repo's `.gitignore` covers.
    - `--name` may only use letters, digits, `-` and `_`.
 3. **Wallet files default to the same folder**, `%USERPROFILE%\.twofold\<network>\savings.json` and `wallet.sqlite`. `--wallet-dir` puts them elsewhere. `savings.json` is in `.gitignore` as a backstop, alongside the existing `*.sqlite` and `*.key` rules.
@@ -202,7 +203,7 @@ $null = & $bcli @node generatetoaddress 1 $burn
 
 ## Tests
 
-The tests run the real `twofold` binary against throwaway regtest nodes, the same as the library's tests, with `TWOFOLD_HOME` set to a temporary folder. Every run fails if any output contains `tprv` or `xprv`. Keys are generated in memory and passed through stdin, except in the `keygen` and `--key-file` tests, which write fresh keys into the temporary folder; it's deleted when each test ends.
+The tests run the real `twofold` binary against throwaway regtest nodes, the same as the library's tests, with `TWOFOLD_HOME` set to a temporary folder. Every run fails if any output contains `tprv` or `xprv`, 12 BIP39 words in a row, or 3 words in a row from any recovery phrase the test knows. Keys are generated in memory and passed through stdin, except in the `keygen` and `--key-file` tests, which write fresh keys into the temporary folder; it's deleted when each test ends.
 
 ```bash
 BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -p twofold-cli
@@ -216,7 +217,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 | --- | --- |
 | `tests/approve.rs` | `sign` shows each output (marking change and your own addresses), the fee and the path before asking. It signs on `y` only: `n`, `no`, an empty line, other text or no input leave the PSBT unchanged. A declined payment never reads the key. A payment from another wallet is refused. |
 | `tests/checkin.rs` | An interval at or past the device delay, or leaving less than the margin, is refused. Warnings change at exactly the interval (due) and the device delay (overdue). A check-in restarts both delays and clears the warning. One that leaves out a coin that confirmed later is refused at `broadcast` and at `sign`. An unconfirmed incoming coin is left out and doesn't stop the check-in being sent. DEVICE, HEIR or HELPER alone can't send one, even with the delayed paths open. `balance` still works, and still warns when overdue, for a wallet with no check-in rule. |
-| `tests/keys.rs` | A private key anywhere on the command line is refused and never repeated, and there's no `--key` flag. `keygen` defaults to `~/.twofold/<network>/keys`, writes only `tprv` keys, never overwrites, and refuses mainnet, odd names and non-`.key` files. Wallet files default to `~/.twofold/<network>` and must match `--network`. |
+| `tests/keys.rs` | A recovery phrase (quoted, unquoted or inside another argument) or an old `tprv` key anywhere on the command line is refused and never repeated, and there's no `--key` flag. `keygen` defaults to `~/.twofold/<network>/keys`, writes a 12-word phrase, never overwrites, and refuses mainnet, odd names and non-`.key` files. Wallet files default to `~/.twofold/<network>` and must match `--network`. |
 | `tests/wallet.rs` | create, address, balance (including when each delayed path opens) and export work. The tool refuses: a node on another network, a mainnet `--network`, creating over an existing wallet, and any policy the library refuses. |
 | `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. DEVICE and HEIR alone are refused one block early and work on time. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
 
