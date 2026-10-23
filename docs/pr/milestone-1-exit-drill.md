@@ -2,7 +2,7 @@ Milestone 1, step 4: leave without Twofold. A Savings wallet is recovered and sp
 
 ## Result
 
-Run [39960059017](https://github.com/brent472/twofold/actions/runs/39960059017) on Ubuntu 24.04: **13 of 13 checks passed.** The demo wallet's device delay is 10 blocks and its heir delay is 20.
+Run 39960059017 (run in the private archive) on Ubuntu 24.04: **13 of 13 checks passed.** The demo wallet's device delay is 10 blocks and its heir delay is 20.
 
 | Check | Liana v15.0 | Bitcoin Core alone |
 | --- | --- | --- |

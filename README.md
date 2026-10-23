@@ -24,6 +24,7 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | [`crates/twofold-cli`](crates/twofold-cli/README.md) | `twofold`, a developer command-line tool for Savings on test networks |
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |
 | [`CLAUDE.md`](CLAUDE.md) | Ground rules for anyone (or any AI assistant) working in this repo |
+| [`SECURITY.md`](SECURITY.md) | How to report a vulnerability (privately, through GitHub) |
 
 ## License
 
