@@ -124,7 +124,7 @@ PowerShell:
 $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test
 ```
 
-The full-length test mines all 61,320 blocks and takes 5–10 minutes, so a plain `cargo test` skips it. Run everything, including that test, with:
+The full-length test mines all 61,320 blocks and takes about 10–12 minutes, so a plain `cargo test` skips it. Run everything, including that test, with:
 
 ```bash
 BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -- --include-ignored

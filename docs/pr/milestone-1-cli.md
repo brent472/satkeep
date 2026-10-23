@@ -70,7 +70,14 @@ BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -- --incl
 $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- --include-ignored
 ```
 
-RESULTS_PLACEHOLDER
+Last full run, on Windows with Bitcoin Core v31.1.0: **68 passed, 0 failed.**
+- CLI: 6 keys, 7 payments, 7 wallet
+- Library: 27 unit, 5 allowed, 12 forbidden, 1 export, 2 harness
+- The full-length 61,320-block test, about 11.5 minutes on its own
+
+Without the full-length test, the suite runs in about 30 s.
+
+**One harness fix along the way:** the throwaway node now mines in batches of 100 blocks instead of 500. On the first full-length run, other tests were building alongside it, and one 500-block batch took longer than the RPC client's 15-second timeout. Run alone, with 100-block batches, it passes.
 
 ## Not in this PR
 
