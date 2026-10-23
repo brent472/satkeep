@@ -40,6 +40,7 @@ let keys = SavingsKeys::new(phone, device, device_r, helper, heir)?; // tpub…/
 let policy = SavingsPolicy::new(keys, Delays::default(), Network::Regtest)?;
 let descriptor = policy.export_descriptor();          // for backup, Liana, Bitcoin Core
 let psbt = spend::build_spend(&mut wallet, policy.delays(), spend::Path::Device, |b| { /* recipients, fee */ })?;
+HolderKey::from_secret_str(&key_text)?.sign(&mut psbt)?; // one holder approves (test networks only)
 let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or not enough approvals
 ```
 
@@ -144,9 +145,10 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 
 Keys are generated in memory for each test and never printed, logged or written to disk. While mining, the harness moves each throwaway node's clock forward 10 minutes per block (`setmocktime`). Without that, a node refuses blocks mined thousands per second once their timestamps run 2 hours ahead.
 
+The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
+
 ## Not here yet
 
-- The command-line tool
 - The check-in (send-to-self that restarts every delay)
 - The signet demo
 - The Liana/Sparrow exit drill
