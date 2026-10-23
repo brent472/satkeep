@@ -93,7 +93,7 @@ Phone key backup: the research document, approved with D1–D7 and updated for m
   - wiping memory and randomness
   - rollback to an old cloud copy (the documented limit in section 7.3)
   - the CI changes and the `subtle` licence exception
-- **Fixed from its lower-severity notes** (`c82dee0`):
+- **Fixed from its lower-severity notes** (`0547822`):
   - **Phrases in failure output.** Two checks (a unit test and the fuzz target) compared phrases with `assert_eq!`, which would print both phrases if it ever failed, into the CI log in the fuzz job's case. They now use `assert!` with a fixed message.
   - **The device request.** `restore` now refuses a lock entry whose device request isn't this wallet's own label, before asking the device. Without that, a changed cloud file could make a device derive a key for some other label. A test covers it.
 - **Noted, not changed:** `chacha20poly1305` 0.10 wipes its own key copy on drop, but HKDF's working state isn't wiped, because the `hkdf` crate doesn't support it. That's written in the library README.
