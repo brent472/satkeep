@@ -99,18 +99,38 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - Bitcoin Core reads the export and derives exactly the addresses BDK hands out (`tests/export.rs`).
 - Import into Liana or Sparrow is **not yet tested**. Sparrow may not support custom timelocked Taproot policies.
 
+## Not yet verified
+
+To check during the exit drill (importing the export into Liana or Sparrow and spending without Twofold):
+
+- **Liana's internal key.** Our unspendable internal key follows Liana's approach. Whether Liana derives a byte-identical one is unverified.
+- **How Liana writes a key used in two paths.** Liana may express DEVICE and DEVICE_R as the *same* xpub with different multipath steps: `xpub/<0;1>/*` for one path and `xpub/<2;3>/*` for the other. `SavingsKeys::new` currently refuses that, because it compares only the extended key. If Liana does this, relax the check to allow the same xpub when the derivation paths differ, while still refusing any overlap that would make two roles derive the same key.
+- **Import at all.** Whether Liana and Sparrow import this descriptor, and whether Sparrow supports custom timelocked Taproot policies.
+
 ## Tests
 
-Tests start a throwaway `bitcoind` per test. Each one runs in a temp folder, on a random local RPC port, with P2P off. It never touches a node you already run. Point `BITCOIND_EXE` at your binary:
+Tests start a throwaway `bitcoind` per test. Each one runs in a temp folder, on a random local RPC port, with P2P off. It never touches a node you already run. Point `BITCOIND_EXE` at your binary.
+
+Bash (Git Bash, macOS, Linux):
 
 ```bash
 BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test
 ```
 
-The full-length test mines all 61,320 blocks and takes several minutes, so a plain `cargo test` skips it. Run everything, including that test, with:
+PowerShell:
+
+```powershell
+$env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test
+```
+
+The full-length test mines all 61,320 blocks and takes 5–10 minutes, so a plain `cargo test` skips it. Run everything, including that test, with:
 
 ```bash
 BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -- --include-ignored
+```
+
+```powershell
+$env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- --include-ignored
 ```
 
 | File | What it proves |
