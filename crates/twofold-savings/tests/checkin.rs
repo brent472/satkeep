@@ -149,3 +149,25 @@ fn a_check_in_can_only_use_the_two_of_three_path() {
         assert!(reason.contains("script-verify-flag-failed"), "{holder:?}: {reason}");
     }
 }
+
+#[test]
+fn an_immature_coinbase_coin_holds_up_the_check_in() {
+    // Only on test networks, where Savings can be funded by mining: a block
+    // reward can't be spent for 100 blocks, so a check-in can't include it
+    // and is refused until it can.
+    use bdk_bitcoind_rpc::bitcoincore_rpc::RpcApi;
+    use serde_json::{Value, json};
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    savings.fund(&node, btc(1.0));
+    let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
+    node.rpc().call::<Value>("generatetoaddress", &[json!(1), json!(address.to_string())]).unwrap();
+    savings.sync(&node);
+    let delays = savings.delays();
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::CheckinMissesCoin { .. })));
+
+    node.mine(99); // the reward now has 100 confirmations and can be spent
+    savings.sync(&node);
+    let (tx, _) = check_in(&mut savings, &node);
+    assert_eq!(tx.input.len(), 2);
+}
