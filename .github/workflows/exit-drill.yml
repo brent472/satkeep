@@ -1,0 +1,89 @@
+# Exit drill: recover and spend a Savings wallet with Liana and with Bitcoin
+# Core alone, no Twofold code after setup. Regtest only; keys are generated
+# inside the run and never printed. See docs/exit-drill.md.
+name: Exit drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LIANA_VERSION: "15.0"
+  # The Liana Linux release checked on 2026-10-23: its SHA256, and the key
+  # that signs Liana's checksums (Edouard Paris; the same key signs the
+  # v15.0 git tag). The public key is .github/exit-drill/liana-signing-key.asc.
+  LIANA_TARBALL_SHA256: 24c3b5e74edeaff2ef80231fc65e2bcbcc44590ef3d88c6270e49046a3b5abe0
+  LIANA_KEY_PRIMARY: 5B63F3B97699C7EEF3B040B19B7F629A53E77B83
+  LIANA_KEY_SIGNING: 4730DDCC64DFAEC16CEFEB5BE65F7A089C20DC8F
+  CORE_VERSION: "31.1"
+  # Bitcoin Core's SHA256SUMS must carry at least this many good signatures
+  # from the builder keys in bitcoin-core/guix.sigs.
+  CORE_MIN_SIGNATURES: "3"
+
+jobs:
+  drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download Liana and verify it against its signed checksums
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/liana-release" && cd "$RUNNER_TEMP/liana-release"
+          tarball="liana-${LIANA_VERSION}-x86_64-linux-gnu.tar.gz"
+          base="https://github.com/wizardsardine/liana/releases/download/v${LIANA_VERSION}"
+          for f in "$tarball" "liana-${LIANA_VERSION}-shasums.txt" "liana-${LIANA_VERSION}-shasums.txt.asc"; do
+            curl -sSfL -o "$f" "$base/$f"
+          done
+          export GNUPGHOME="$RUNNER_TEMP/gnupg-liana"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import "$GITHUB_WORKSPACE/.github/exit-drill/liana-signing-key.asc"
+          if ! gpg --batch --with-colons --fingerprint | grep -q "^fpr:::::::::${LIANA_KEY_PRIMARY}:"; then
+            echo "::error::The committed Liana key isn't the pinned one"; exit 1
+          fi
+          gpg --batch --status-fd 1 --verify "liana-${LIANA_VERSION}-shasums.txt.asc" "liana-${LIANA_VERSION}-shasums.txt" > gpg-status 2>/dev/null || true
+          if ! grep -Eq "^\[GNUPG:\] VALIDSIG ${LIANA_KEY_SIGNING} .* ${LIANA_KEY_PRIMARY}$" gpg-status; then
+            echo "::error::Liana's checksums aren't signed by the pinned key"; cat gpg-status; exit 1
+          fi
+          echo "Liana's checksums: good signature from ${LIANA_KEY_PRIMARY}"
+          grep " ${tarball}\$" "liana-${LIANA_VERSION}-shasums.txt" | sha256sum -c -
+          echo "${LIANA_TARBALL_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball"
+          lianad=$(find "$PWD" -name lianad -type f | head -1)
+          echo "LIANAD=$lianad" >> "$GITHUB_ENV"
+          echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
+
+      - name: Download Bitcoin Core and verify it against its signed checksums
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/core-release" && cd "$RUNNER_TEMP/core-release"
+          tarball="bitcoin-${CORE_VERSION}-x86_64-linux-gnu.tar.gz"
+          base="https://bitcoincore.org/bin/bitcoin-core-${CORE_VERSION}"
+          for f in "$tarball" SHA256SUMS SHA256SUMS.asc; do curl -sSfL -o "$f" "$base/$f"; done
+          git clone -q --depth 1 https://github.com/bitcoin-core/guix.sigs
+          export GNUPGHOME="$RUNNER_TEMP/gnupg-core"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import guix.sigs/builder-keys/*.gpg 2>/dev/null || true
+          gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS > gpg-status 2>/dev/null || true
+          good=$(grep -c '^\[GNUPG:\] GOODSIG' gpg-status || true)
+          if [ "$good" -lt "$CORE_MIN_SIGNATURES" ]; then
+            echo "::error::Bitcoin Core's SHA256SUMS has $good good builder signatures; need $CORE_MIN_SIGNATURES"; exit 1
+          fi
+          echo "Bitcoin Core's SHA256SUMS: $good good builder signatures"
+          grep " ${tarball}\$" SHA256SUMS | sha256sum -c -
+          tar xzf "$tarball"
+          echo "BITCOIN_BIN=$PWD/bitcoin-${CORE_VERSION}/bin" >> "$GITHUB_ENV"
+
+      - name: Build twofold (used only to make keys and export the descriptor)
+        run: |
+          cargo build --release --locked -p twofold-cli
+          echo "TWOFOLD=$GITHUB_WORKSPACE/target/release/twofold" >> "$GITHUB_ENV"
+
+      - name: Run the drill
+        run: |
+          export WORK="$RUNNER_TEMP/drill"
+          mkdir -p "$WORK"
+          python3 contrib/exit-drill/drill.py
