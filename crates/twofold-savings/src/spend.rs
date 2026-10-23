@@ -1,19 +1,25 @@
 //! Building and finalizing Savings spends, with Twofold's own delay check.
 //!
-//! BDK alone does not stop a delayed-path spend before the delay is met.
-//! When it finalizes, miniscript combines BDK's height check with the
-//! PSBT's own sequence check using OR, so a sequence that matches the
-//! leaf's delay is enough, however young the coin. The network would then
-//! reject the transaction (BIP 68), so funds are never at risk, but Twofold
-//! would hand the user a spend that cannot confirm. [`build_spend`] and
-//! [`finalize`] both run [`check_delays`] so Twofold refuses first, with a
-//! clear reason.
+//! When BDK finalizes, miniscript combines BDK's height check with the
+//! PSBT's own sequence check using OR, which goes wrong both ways:
+//!
+//! - A sequence that matches a leaf's delay is enough, however young the
+//!   coin (the network rejects it: `non-BIP68-final`).
+//! - The coin's age is enough, even when the sequence carries no delay
+//!   (the network rejects it: CSV fails).
+//!
+//! Funds are never at risk, because the network enforces both, but Twofold
+//! would hand the user a transaction that can't confirm. So [`build_spend`]
+//! and [`finalize`] run [`check_delays`] (sequence against coin age), and
+//! [`finalize`] uses miniscript's PSBT-only finalizer (leaf against
+//! sequence). Together they match the network's rule.
 
 use bdk_wallet::coin_selection::DefaultCoinSelectionAlgorithm;
 use bdk_wallet::descriptor::policy::Condition;
-use bdk_wallet::{SignOptions, TxBuilder, Wallet};
+use bdk_wallet::{TxBuilder, Wallet};
 
 use crate::bitcoin::psbt::Psbt;
+use crate::miniscript::psbt::{InputError, PsbtExt};
 use crate::bitcoin::{Sequence, Transaction, relative};
 use crate::{Delays, Error};
 
@@ -101,16 +107,26 @@ pub fn check_delays(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
 ///
 /// Refuses if any coin is too young for its delay ([`check_delays`]) or if
 /// the signatures present don't satisfy any spending path.
+///
+/// Uses miniscript's PSBT finalizer rather than BDK's: its only satisfier
+/// is the PSBT itself, so a delayed leaf is used only when the input's
+/// sequence commits to that delay, exactly as the network requires (CSV).
+/// BDK's finalizer also accepts a delayed leaf on the coin's age alone,
+/// even when the sequence carries no delay, and would produce a transaction
+/// the network rejects.
 pub fn finalize(wallet: &Wallet, psbt: &Psbt) -> Result<Transaction, Error> {
     check_delays(wallet, psbt)?;
     let mut psbt = psbt.clone();
-    let options = SignOptions {
-        // Relative delays are judged against the block the spend would go in.
-        assume_height: Some(wallet.latest_checkpoint().height() + 1),
-        ..Default::default()
-    };
-    if !wallet.finalize_psbt(&mut psbt, options)? {
-        return Err(Error::NotEnoughApprovals);
+    let secp = crate::bitcoin::key::Secp256k1::verification_only();
+    if let Err(errors) = psbt.finalize_mut(&secp) {
+        let unsatisfied = errors
+            .iter()
+            .all(|e| matches!(e, crate::miniscript::psbt::Error::InputError(InputError::CouldNotSatisfyTr, _)));
+        if unsatisfied {
+            return Err(Error::NotEnoughApprovals);
+        }
+        let reasons: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        return Err(Error::CannotFinalize(reasons.join("; ")));
     }
     Ok(psbt.extract_tx()?)
 }

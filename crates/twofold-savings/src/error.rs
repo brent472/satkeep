@@ -27,10 +27,28 @@ pub enum Error {
     BadHolderKey,
     #[error("BDK could not build the payment: {0}")]
     Build(#[from] bdk_wallet::error::CreateTxError),
+    #[error("could not finalize the payment: {0}")]
+    CannotFinalize(String),
     #[error("BDK could not sign or finalize the payment: {0}")]
     Finalize(#[from] bdk_wallet::signer::SignerError),
     #[error("could not extract the finished transaction: {0}")]
     Extract(#[from] crate::bitcoin::psbt::ExtractTxError),
+    #[error("the check-in interval must be at least 1 block")]
+    CheckinIntervalZero,
+    #[error("the check-in margin must be at least 1 block")]
+    CheckinMarginZero,
+    #[error("the check-in interval ({interval} blocks) must be shorter than the device delay ({device} blocks) by at least the margin ({margin} blocks)")]
+    CheckinTooLate { interval: u16, margin: u16, device: u16 },
+    #[error("there are no Savings coins to check in")]
+    CheckinNoCoins,
+    #[error("this payment isn't a check-in")]
+    NotACheckin,
+    #[error("a check-in must use the 2-of-3 path, not a delayed path")]
+    CheckinUsesDelayedPath,
+    #[error("a check-in must send everything to one new Savings address, and nothing anywhere else")]
+    CheckinPaysOut,
+    #[error("this check-in leaves out coin {coin}; every coin must be included (run `twofold checkin` again)")]
+    CheckinMissesCoin { coin: crate::bitcoin::OutPoint },
     #[error("miniscript rejected the Savings descriptor: {0}")]
     Miniscript(#[from] crate::miniscript::Error),
 }

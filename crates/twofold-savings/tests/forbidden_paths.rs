@@ -252,3 +252,19 @@ fn library_refuses_to_build_an_heir_spend_one_block_early() {
     savings.age_to(&node, funded_at, delay);
     assert!(savings.build(Path::Heir, &node.new_address()).is_ok());
 }
+
+#[test]
+fn bdk_alone_would_finalize_a_delayed_leaf_whose_sequence_has_no_delay() {
+    // The same OR, the other way round: once the coin is old enough, BDK
+    // uses the device leaf even though the input's sequence carries no
+    // delay, so CSV fails on the network. Twofold finalizes with
+    // miniscript's PSBT-only finalizer instead, which refuses.
+    let (node, mut savings, funded_at) = setup();
+    savings.age_to(&node, funded_at, u32::from(savings.delays().device()));
+    let mut psbt = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
+    savings.sign(&mut psbt, &[Holder::Device]);
+    let tx = savings.bdk_only_finalize(&psbt).expect("BDK finalizes it");
+    assert_eq!(savings.path_used(&tx), Path::Device);
+    assert!(node.accepts(&tx).unwrap_err().contains(SCRIPT_FAILED));
+    assert!(matches!(savings.finalize(&psbt), Err(Error::NotEnoughApprovals)));
+}
