@@ -86,3 +86,42 @@ fn a_substituted_witness_script_is_refused() {
     psbt.inputs[1].witness_script = Some(twofold_savings::bitcoin::ScriptBuf::from_bytes(changed));
     assert!(matches!(spend::check_inputs(&savings.wallet, &psbt), Err(Error::InputMismatch { input: 1 })));
 }
+
+#[test]
+fn every_p2wsh_input_carries_its_previous_transaction() {
+    // What Twofold builds: payments, and the move to a wallet with a
+    // beneficiary, include each P2WSH coin's whole previous transaction,
+    // and it hashes to the input's txid.
+    let node = Node::start();
+    let mut savings = two_coins(&node, Delays::none());
+    let payment = spend_both(&mut savings, &node);
+    let target = savings.with_heir_added(20);
+    let moved = twofold_savings::migrate::build_move(&mut savings.wallet, &savings.policy, &target.policy, common::FEE_RATE).unwrap();
+    for psbt in [&payment, &moved] {
+        for (txin, input) in psbt.unsigned_tx.input.iter().zip(&psbt.inputs) {
+            let prev = input.non_witness_utxo.as_ref().expect("the previous transaction is included");
+            assert_eq!(prev.compute_txid(), txin.previous_output.txid);
+        }
+    }
+}
+
+#[test]
+fn a_missing_previous_transaction_is_refused() {
+    let node = Node::start();
+    let mut savings = two_coins(&node, Delays::none());
+    let mut psbt = spend_both(&mut savings, &node);
+    psbt.inputs[1].non_witness_utxo = None;
+    assert!(matches!(spend::check_inputs(&savings.wallet, &psbt), Err(Error::MissingPreviousTransaction { input: 1 })));
+}
+
+#[test]
+fn a_previous_transaction_that_doesnt_hash_to_the_txid_is_refused() {
+    // Same amount and script in the right output, but not the real
+    // transaction: one byte of its lock time changed.
+    let node = Node::start();
+    let mut savings = two_coins(&node, Delays::none());
+    let mut psbt = spend_both(&mut savings, &node);
+    let prev = psbt.inputs[1].non_witness_utxo.as_mut().unwrap();
+    prev.lock_time = twofold_savings::bitcoin::absolute::LockTime::from_consensus(prev.lock_time.to_consensus_u32() ^ 1);
+    assert!(matches!(spend::check_inputs(&savings.wallet, &psbt), Err(Error::InputMismatch { input: 1 })));
+}

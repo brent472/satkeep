@@ -27,6 +27,8 @@ pub enum Error {
     UnknownCoin { input: usize },
     #[error("input {input}'s amount or script in this payment doesn't match the wallet's own record of that coin; the payment may have been altered")]
     InputMismatch { input: usize },
+    #[error("input {input} spends a P2WSH coin but this payment doesn't include the coin's previous transaction, which signers need to check its amount")]
+    MissingPreviousTransaction { input: usize },
     #[error("not enough keys have approved this payment")]
     NotEnoughApprovals,
     #[error("that isn't a valid key for a Savings key holder: it must be a 12-word recovery phrase")]

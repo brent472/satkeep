@@ -192,3 +192,23 @@ fn the_same_holds_for_taproot_savings() {
     let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
     assert!(err.contains("couldn't sign every coin in this payment"), "{err}");
 }
+
+#[test]
+fn refuses_a_p2wsh_payment_without_or_with_a_wrong_previous_transaction() {
+    let node = Node::start();
+    let (cli, holders, psbt) = plain_two_coin_payment(&node);
+    let original = fs::read_to_string(&psbt).unwrap();
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
+
+    edit_psbt(&psbt, |p| p.inputs[1].non_witness_utxo = None);
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("doesn't include the coin's previous transaction"), "{err}");
+
+    fs::write(&psbt, &original).unwrap();
+    edit_psbt(&psbt, |p| {
+        let prev = p.inputs[1].non_witness_utxo.as_mut().unwrap();
+        prev.version = twofold_savings::bitcoin::transaction::Version(prev.version.0 ^ 4);
+    });
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("doesn't match the wallet's own record"), "{err}");
+}
