@@ -480,10 +480,11 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
         // checked against: a coin confirmed in block c has tip - c + 1.
         let confirmations = coin.chain_position.confirmation_height_upper_bound().map_or(0, |c| tip + 1 - c);
         println!(
-            "  {}  {}  {} confirmations  device path {}  heir path {}",
+            "  {}  {}  {} confirmation{}  device path {}  heir path {}",
             btc(coin.txout.value),
             coin.outpoint,
             confirmations,
+            if confirmations == 1 { "" } else { "s" },
             opens_in(confirmations, delays.device()),
             opens_in(confirmations, delays.heir()),
         );

@@ -22,7 +22,10 @@ fn creates_a_wallet_receives_and_shows_the_balance() {
     let pending = cli.ok(&["balance"]);
     assert!(pending.contains("Waiting for confirmation: 1.00000000 BTC"), "{pending}");
 
-    node.mine(3);
+    node.mine(1);
+    let out = cli.ok(&["balance"]);
+    assert!(out.contains("1 confirmation  device path opens in 9 blocks"), "{out}");
+    node.mine(2);
     let out = cli.ok(&["balance"]);
     assert!(out.contains("Total: 1.00000000 BTC"), "{out}");
     assert!(out.contains("3 confirmations  device path opens in 7 blocks  heir path opens in 17 blocks"), "{out}");
