@@ -46,7 +46,7 @@ def main():
     failed = []
 
     if "tprv" in log or "xprv" in log:
-        failed.append("the log contains `tprv` or `xprv`")
+        failed.append("the log contains an extended private key prefix")
 
     printed = words_of(log)
     run = longest = 0
@@ -73,7 +73,7 @@ def main():
     if failed:
         return 1
     extra = f", and nothing from the {phrases} known phrases" if args.keys else ""
-    print(f"Key material check passed: no tprv/xprv, at most {longest} BIP39 words in a row{extra}")
+    print(f"Key material check passed: no extended private key prefix, at most {longest} BIP39 words in a row{extra}")
     return 0
 
 

@@ -144,7 +144,7 @@ jobs:
           job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.name == "drill") | .id')
           log="$RUNNER_TEMP/drill-job.log"
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
+            if gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
             sleep 15
           done
           [ -s "$log" ] || { echo "::error::Couldn't fetch the drill job's log"; exit 1; }
