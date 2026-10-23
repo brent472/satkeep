@@ -31,6 +31,9 @@ pub use format::{Header, LockEntry, LockKind};
 
 use crate::HolderKey;
 use crate::bitcoin::hex::DisplayHex;
+use crate::bitcoin::secp256k1::rand::distributions::{Distribution, Standard};
+use crate::bitcoin::secp256k1::rand::rngs::OsRng;
+use crate::bitcoin::secp256k1::rand::Rng;
 use format::{NONCE_LEN, WRAPPED_KEY_LEN};
 
 /// Identifies one wallet's backups. Random, made with the wallet.
@@ -259,12 +262,12 @@ fn decode_payload(plaintext: &[u8]) -> Option<(&str, &str)> {
 /// through getrandom), for the data key, the nonces and the wallet id.
 /// Panics if the operating system can't supply randomness, rather than
 /// carry on without it.
-fn random<const N: usize>() -> [u8; N] {
-    use crate::bitcoin::secp256k1::rand::RngCore;
-    use crate::bitcoin::secp256k1::rand::rngs::OsRng;
-    let mut out = [0u8; N];
-    OsRng.fill_bytes(&mut out);
-    out
+fn random<T>() -> T
+where
+    Standard: Distribution<T>,
+{
+    // Generated whole by the generator, never a fixed buffer filled in after.
+    OsRng.r#gen()
 }
 
 fn aead(key: &[u8; 32]) -> XChaCha20Poly1305 {

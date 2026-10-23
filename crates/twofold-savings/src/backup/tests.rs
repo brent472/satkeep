@@ -64,7 +64,7 @@ fn the_backup_alone_reveals_nothing_but_its_date_and_devices() {
         assert!(!file.windows(word.len()).any(|w| w == word.as_bytes()), "a phrase word is in the file");
     }
     assert!(!text.contains("savings setup"), "the setup is encrypted too");
-    assert!(file.len() < 1024, "a backup is well under 1 MB: {} bytes", file.len());
+    assert!(file.len() < 1024, "a backup is well under 1 MB");
 }
 
 #[test]
