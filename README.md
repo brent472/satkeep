@@ -19,6 +19,7 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | Path | What it is |
 | --- | --- |
 | [`docs/milestone-1.md`](docs/milestone-1.md) | Builder brief for the current milestone |
+| [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Twofold: spending Savings with Liana, or Bitcoin Core alone, and why not Sparrow |
 | [`crates/twofold-savings`](crates/twofold-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/twofold-cli`](crates/twofold-cli/README.md) | `twofold`, a developer command-line tool for Savings on test networks |
 | [`docs/master-brief.md`](docs/master-brief.md) | Full product, UX and security brief (Markdown copy) |

@@ -131,13 +131,11 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - `export_descriptor()` returns the public descriptor with `<0;1>` and its checksum. `export_receive_and_change()` returns separate receive and change descriptors.
 - Neither contains private keys, but both reveal every Savings address and balance, so treat them as private.
 - Bitcoin Core reads the export and derives exactly the addresses BDK hands out (`tests/export.rs`).
-- **Liana import:** Liana v15.0 (`lianad`, regtest) accepts the export. Spending through Liana is the exit drill's job.
+- **Leaving without Twofold:** Liana v15.0 imports the export, and so does Bitcoin Core 31.1 on its own. Each one spends through every path on regtest and refuses a delayed spend one block early. See the [exit drill](../../docs/exit-drill.md). Sparrow can't import Savings at all.
 
 ## Not yet verified
 
-To check during the exit drill (importing the export into Liana and spending without Twofold):
-
-- **Spending through Liana.** The 2-of-3, DEVICE-alone and HEIR-alone paths, and a refused early spend.
+- **The exit through Liana's desktop app**, the route Windows users have, and the exit on signet. Both are listed in the [exit drill](../../docs/exit-drill.md).
 - **One signer on two paths.** Liana's own wallets write one signer used on two paths as the *same* xpub with different multipath steps (`<0;1>` and `<2;3>`); its published test vectors do this.
   - Liana counts a key as the xpub *plus* its paths, so it also accepts our separate-account keys for DEVICE and DEVICE_R. Exporting to Liana needs no change.
   - `SavingsKeys::new` refuses the same xpub on two paths, so Twofold couldn't import a wallet made *in* Liana. If we ever need that, allow the same xpub when the paths differ, while still refusing any overlap that would make two roles derive the same key.
