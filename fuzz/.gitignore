@@ -1,0 +1,6 @@
+/target/
+/artifacts/
+/coverage/
+# libFuzzer grows the corpus as it runs; only the hand-made seeds are kept.
+/corpus/*/*
+!/corpus/config/savings.json

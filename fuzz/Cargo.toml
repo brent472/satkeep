@@ -1,0 +1,43 @@
+[package]
+name = "twofold-fuzz"
+version = "0.0.0"
+description = "cargo-fuzz targets for the code that reads outside input"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace, so the main build never compiles libFuzzer.
+[workspace]
+members = ["."]
+
+[dependencies]
+# Approved for the fuzz crate only. It also provides `arbitrary`.
+libfuzzer-sys = "0.4.13"
+bdk_wallet = "3.2.0"
+serde_json = "1.0"
+twofold-cli = { path = "../crates/twofold-cli" }
+twofold-savings = { path = "../crates/twofold-savings" }
+
+[[bin]]
+name = "psbt"
+path = "fuzz_targets/psbt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "holder_key"
+path = "fuzz_targets/holder_key.rs"
+test = false
+doc = false
+bench = false
