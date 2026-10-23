@@ -132,6 +132,11 @@ pub fn restore(file: &[u8], device: &mut dyn SecurityDevice) -> Result<Restored,
         .find(|e| e.kind == LockKind::Device && e.device_id == device_id && e.method == method)
         .ok_or(BackupError::WrongDevice)?;
     let wallet_id = parsed.header.wallet_id;
+    // Only ever ask the device for this wallet's own label, so a changed
+    // file can't get it to derive a key for anything else.
+    if entry.request != unlock_request(&wallet_id) {
+        return Err(BackupError::CannotUnlock);
+    }
 
     let device_secret = device.unlock_secret(&entry.request)?;
     let kek = key_encryption_key(&device_secret, &wallet_id, device_id, method);

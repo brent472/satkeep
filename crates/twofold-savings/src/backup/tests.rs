@@ -87,7 +87,8 @@ fn each_backup_uses_a_new_data_key() {
 fn restore_with_the_backup_and_its_device_gives_back_the_same_phrase() {
     let (phone, mut device, wallet_id, file) = backed_up();
     let restored = open(&file, &mut device).unwrap();
-    assert_eq!(restored.phone.to_secret_string(), phone.to_secret_string());
+    // assert!, not assert_eq!: a failure must not print the phrase.
+    assert!(restored.phone.to_secret_string() == phone.to_secret_string(), "restored a different phrase");
     assert_eq!(restored.phone.to_secret_string().split(' ').count(), crate::PHRASE_WORDS);
     assert_eq!(restored.phone.public_key(0), phone.public_key(0));
     assert_eq!(restored.phone.public_key(1), phone.public_key(1));
@@ -208,6 +209,17 @@ fn cut_short_padded_or_garbage_files_are_refused() {
     let mut newer = file.clone();
     newer[4] = 2;
     assert_eq!(read_header(&newer).err(), Some(BackupError::UnsupportedVersion));
+}
+
+#[test]
+fn a_changed_device_request_is_refused_before_the_device_is_asked() {
+    let (_, mut device, _, file) = backed_up();
+    let request_at = FIRST_ENTRY_KIND + 1 + 32 + 1 + 2;
+    let mut changed = file.clone();
+    changed[request_at] ^= 0x20;
+    let asked = device.requests();
+    assert_eq!(open(&changed, &mut device).err(), Some(BackupError::CannotUnlock));
+    assert_eq!(device.requests(), asked, "a request this wallet didn't make never reaches the device");
 }
 
 #[test]

@@ -79,7 +79,8 @@ backup::replace_device(&mut cloud, &phone, &setup, wallet_id, created, &mut new_
 - **Devices.** A `SecurityDevice` gives a 32-byte secret for a request, the same every time, only after its own PIN, the way Trezor's SLIP-0011 CipherKeyValue works. `SimulatedDevice` does that in software, with a retry limit. Real devices aren't connected yet.
 - **The recovery contact's lock entry** is reserved in the format, and never opened by a device. Nothing makes or opens one yet.
 - **The cloud.** `MemoryCloud` stands in for iCloud and Google Drive and, like them, never truly forgets: deleted and replaced files stay retrievable. A test pins the consequence: replacing the device doesn't stop the old device opening an *old* copy, which is why a lost or stolen device also means a new phone key (decision D3 in the research).
-- **Nothing secret is printed or put in an error.** `Restored` and `SimulatedDevice` aren't `Debug`, and the phrase, data key, device secret and key-encryption key are wiped from memory after use.
+- **Nothing secret is printed or put in an error.** `Restored` and `SimulatedDevice` aren't `Debug`, and the phrase, data key, device secret and key-encryption key are wiped from memory after use. The cipher wipes its own copy of the key too; HKDF's working state isn't wiped (the `hkdf` crate doesn't support it).
+- **The device is only ever asked for this wallet's own label.** A changed file can't make it derive a key for anything else.
 
 ## Finding for the reviewer: BDK alone finalizes delayed spends wrongly, both ways
 

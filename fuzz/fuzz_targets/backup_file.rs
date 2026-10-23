@@ -72,7 +72,8 @@ fuzz_target!(|data: &[u8]| {
         let mut device = d.borrow_mut();
         device.enter_pin(PIN).expect("right PIN");
         if let Ok(restored) = backup::restore(&file, &mut *device) {
-            assert_eq!(restored.phone.to_secret_string(), fixture.phrase, "a backup opened to a different key");
+            // assert!, not assert_eq!: a failure must not print a phrase.
+            assert!(restored.phone.to_secret_string() == fixture.phrase, "a backup opened to a different key");
             assert!(!edited || file == fixture.file, "an edited backup opened");
         }
     });
