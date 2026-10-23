@@ -80,8 +80,9 @@ pub fn build_spend(
 
 /// Checks every input of `psbt` is one of this wallet's unspent coins, and
 /// that the PSBT tells the truth about it: its `witness_utxo` (amount and
-/// script) must equal the wallet's own record, and a `non_witness_utxo`, if
-/// any, must be the coin's real transaction.
+/// script) must equal the wallet's own record, a `non_witness_utxo`, if
+/// any, must be the coin's real transaction, and a P2WSH `witness_script`
+/// must hash to the coin's script.
 ///
 /// This matters most for P2WSH coins (Savings with no beneficiary): a SegWit
 /// v0 signature commits only to the amount of the input it signs. A PSBT
@@ -99,6 +100,13 @@ pub fn check_inputs(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
         let utxo = wallet.get_utxo(txin.previous_output).ok_or(Error::UnknownCoin { input })?;
         if meta.witness_utxo.as_ref() != Some(&utxo.txout) {
             return Err(Error::InputMismatch { input });
+        }
+        // A P2WSH input's script must be the one its address commits to, so a
+        // signature is never made over a substituted script.
+        if let Some(script) = &meta.witness_script {
+            if crate::bitcoin::ScriptBuf::new_p2wsh(&script.wscript_hash()) != utxo.txout.script_pubkey {
+                return Err(Error::InputMismatch { input });
+            }
         }
         if let Some(prev) = &meta.non_witness_utxo {
             let vout = usize::try_from(txin.previous_output.vout).map_err(|_| Error::InputMismatch { input })?;

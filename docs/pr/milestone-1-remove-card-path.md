@@ -52,6 +52,7 @@ Removes the card-only delayed path, and adds Savings with no beneficiary, follow
     - with no beneficiary: any single key at any age, the heir path, or a long sequence
   - **Move:** both coins in one transaction, then HEIR spends from the new wallet at its delay. One key alone can't approve a move. Refused: a move that pays elsewhere, names a different HEIR, isn't marked, has an extra output, goes to a wallet with other keys, or leaves out a coin.
   - **Check-in:** only with a beneficiary; restarts the heir delay; the yearly defaults fit the 61,320-block placeholder exactly.
+- **Input checks:** every input's amount, script and previous transaction must match the wallet. A PSBT that understates a coin, swaps its previous transaction, substitutes its witness script, or hides a coin from a signer is refused (`tests/inputs.rs`, `approve.rs`).
 - **`cargo clippy -D warnings`** (workspace and fuzz crate) and **`cargo deny check`** pass.
 - **Exit drill, [run 40025126932](https://github.com/brent472/twofold/actions/runs/40025126932): 17 of 17 checks pass.**
   - **Taproot shape:** Liana (HotSigner) and Bitcoin Core each spend 2 of 3 and HEIR at exactly 20 blocks, and refuse HEIR one block early. DEVICE alone is refused.
@@ -62,6 +63,21 @@ Removes the card-only delayed path, and adds Savings with no beneficiary, follow
 
 ## Security review
 
-SECURITY_REVIEW
+`/security-review` was run three times: on the branch before the P2WSH change, on the P2WSH change, and to verify the fix.
+
+**1. HIGH, found and fixed:** the P2WSH change reopened a SegWit v0 "fee lie".
+- **The cause:** a SegWit v0 signature commits only to the amount of the input it signs, and `sign` showed a fee computed from the PSBT's own claimed amounts.
+- **The attack:** someone preparing a PSBT could understate one input and strip its key data, so the holder signs only the other input while seeing a tiny fee. Two such partial approvals plus the preparer's own key could make a valid transaction that burns most of the coins as fee.
+- **The fix:** `spend::check_inputs` makes every input's amount and script match the wallet's own record, its previous transaction (if any) be the real one, and a P2WSH witness script hash to the coin's script. `check_checkin`, `check_move`, `sign` and `broadcast` all run it, so the fee shown is the fee paid. `sign` also refuses, and saves nothing, unless the key added a signature to every input.
+- **Tests:** `crates/twofold-savings/tests/inputs.rs`, and three CLI tests in `approve.rs` covering P2WSH and Taproot.
+- **Verified** by a separate review: "Fixed". It also showed the every-input rule proves a signature was added, not that each one is usable, which is now documented as such; the amount check is what protects the value.
+
+**2. MEDIUM, found and fixed:** whoever prepares a move chooses HEIR and the delay, and `sign` didn't show which HEIR. `sign` now shows HEIR's full key and the delay, and `add-heir` prints them with the destination address.
+
+**Noted, not changed (documented in the library README):**
+- **No minimum heir delay:** nothing yet sets a floor on the heir delay in a move. It's shown at `sign`.
+- **The old wallet's heir path:** after the beneficiary changes, the old wallet keeps its heir path, so leftovers there stay claimable by the former HEIR.
+- **Lock time and version:** the transaction's lock time and version aren't shown at `sign`. At worst a payment can't be sent; no value moves.
+- **A stray `.pyc`:** a Python bytecode file was committed by accident. It held no key material; it's removed and `__pycache__` is now ignored.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

@@ -356,8 +356,11 @@ fn run(cli: Cli) -> Result<()> {
                 bail!("that key isn't part of this payment, or it has already approved it");
             }
             // A payment that hides an input from this key (by leaving out the
-            // data it needs to sign it) is refused: an approval covers every
-            // coin the payment spends, or none.
+            // data it needs to sign it) is refused. This only proves the key
+            // added a signature to each input, not that each one is usable;
+            // what protects the value is check_inputs, run before anything is
+            // shown: every amount matches the wallet, so the fee shown is the
+            // fee paid.
             let after = signatures_per_input(&payment);
             if before.iter().zip(&after).any(|(b, a)| a <= b) {
                 bail!(

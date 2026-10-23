@@ -198,9 +198,10 @@ Assumptions, to settle with the outside reviewer:
 
 ### Checking what a PSBT says about its coins
 
-- **`spend::check_inputs`:** every input must be one of the wallet's own unspent coins, with the amount and script the wallet has on record, and its previous transaction (if included) must be the real one. `check_checkin`, `check_move` and the CLI's `sign` and `broadcast` all run it.
+- **`spend::check_inputs`:** every input must be one of the wallet's own unspent coins, with the amount and script the wallet has on record; its previous transaction (if included) must be the real one; and a P2WSH witness script must hash to the coin's script. `check_checkin`, `check_move` and the CLI's `sign` and `broadcast` all run it.
 - **Why:** a SegWit v0 signature (P2WSH Savings) commits only to the amount of the input it signs. A PSBT that understated another input could show a tiny fee while the real one burns most of the coins. Taproot signatures commit to every input's amount, so there a lie only breaks the signatures, but the check runs for both shapes.
-- **Every input or none:** the CLI's `sign` also refuses unless the key signed every input, so a PSBT that hides a coin from one holder (by leaving out its key data) can't collect partial approvals to combine later. Found by the security review of the P2WSH change; `tests/inputs.rs` and the CLI's `tests/approve.rs` pin both.
+- **A signature on every input:** the CLI's `sign` also refuses unless the key added a signature to every input, so a PSBT that simply hides a coin from one holder is refused. That proves a signature was added, not that each one is usable (a forged key path could still draw a useless one); what protects the value is `check_inputs`. Found by the security reviews of the P2WSH change; `tests/inputs.rs` and the CLI's `tests/approve.rs` pin both.
+- **Not checked yet:** the transaction's lock time and version aren't shown at `sign`. A far-future lock time would only make an approved payment impossible to send, not move value.
 
 ### Fees
 

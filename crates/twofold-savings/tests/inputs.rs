@@ -72,3 +72,17 @@ fn a_holder_only_signs_inputs_it_can_see_which_is_why_the_cli_checks_every_input
     savings.sign(&mut psbt, &[Holder::Phone]);
     assert_eq!((psbt.inputs[0].partial_sigs.len(), psbt.inputs[1].partial_sigs.len()), (1, 0));
 }
+
+#[test]
+fn a_substituted_witness_script_is_refused() {
+    // A different script than the coin's address commits to: a signature
+    // over it would be useless, and nothing should be signed.
+    let node = Node::start();
+    let mut savings = two_coins(&node, Delays::none());
+    let mut psbt = spend_both(&mut savings, &node);
+    let other = psbt.inputs[0].witness_script.clone().unwrap();
+    let mut changed = other.to_bytes();
+    changed[0] = if changed[0] == 0x52 { 0x51 } else { 0x52 }; // OP_2 <-> OP_1: 1 of 3
+    psbt.inputs[1].witness_script = Some(twofold_savings::bitcoin::ScriptBuf::from_bytes(changed));
+    assert!(matches!(spend::check_inputs(&savings.wallet, &psbt), Err(Error::InputMismatch { input: 1 })));
+}
