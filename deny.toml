@@ -1,0 +1,52 @@
+# cargo-deny policy for Twofold. Run `cargo deny check`; CI runs it on every
+# PR. A new dependency needs a reason in its PR (see the README).
+
+[graph]
+all-features = true
+
+[advisories]
+# Fail on any RustSec advisory that affects a crate we use: vulnerabilities,
+# unsound code and unmaintained crates, plus any yanked version.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+# An advisory may only be ignored here with a reason, in a reviewed PR.
+ignore = []
+
+[bans]
+# Duplicates are reported. For the crates that hold keys and build
+# transactions, two versions in the build is an error: types from one don't
+# fit the other, and it means part of the code runs older crypto.
+multiple-versions = "warn"
+wildcards = "deny"
+# Our own crates refer to each other by path; they're never published.
+allow-wildcard-paths = true
+deny = [
+    { crate = "bitcoin", deny-multiple-versions = true, reason = "builds and signs transactions" },
+    { crate = "secp256k1", deny-multiple-versions = true, reason = "holds and uses private keys" },
+    { crate = "miniscript", deny-multiple-versions = true, reason = "decides which spending path is valid" },
+]
+
+[sources]
+# crates.io only: no git dependencies and no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+# Permissive licences only, compatible with Twofold's MIT licence.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "CC0-1.0",
+    "ISC",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+exceptions = [
+    # MIT plus a no-false-attribution clause; still permissive.
+    { crate = "hex_lit", allow = ["MITNFA"] },
+]

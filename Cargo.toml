@@ -6,6 +6,7 @@ members = ["crates/twofold-cli", "crates/twofold-savings", "crates/twofold-teste
 edition = "2024"
 rust-version = "1.85"
 publish = false
+license = "MIT"
 
 [workspace.dependencies]
 # miniscript and bitcoin are used through bdk_wallet's re-exports so their

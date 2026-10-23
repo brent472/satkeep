@@ -54,7 +54,7 @@ impl SavingsPolicy {
             unreachable!("built as tr()")
         };
         let tree = draft.tap_tree().clone().expect("built with a tree");
-        let internal = unspendable_internal_key(&tree).expect("SavingsKeys only holds multipath xpubs");
+        let internal = unspendable_internal_key(&tree).ok_or(Error::InternalKey)?;
         let descriptor = Descriptor::new_tr(internal, Some(tree))?;
         descriptor.sanity_check()?;
         Ok(Self { keys, delays, network, descriptor })

@@ -85,7 +85,10 @@ fn check_shape(role: Role, key: &DescriptorPublicKey) -> Result<(), Error> {
     let DescriptorPublicKey::MultiXPub(k) = key else {
         return Err(Error::KeyShape(role));
     };
-    let receive_and_change = k.derivation_paths.paths().len() == 2;
+    // Two different branches. `<1;1>` parses as two but collapses to one
+    // when written back out, and would make receive and change the same.
+    let paths = k.derivation_paths.paths();
+    let receive_and_change = paths.len() == 2 && paths[0] != paths[1];
     if !receive_and_change || k.wildcard != Wildcard::Unhardened {
         return Err(Error::KeyShape(role));
     }
@@ -170,6 +173,16 @@ mod tests {
         let mut k = five();
         k[0] = fresh(Network::Bitcoin);
         assert!(matches!(build(k), Err(Error::MainnetKey(Role::Phone))));
+    }
+
+    #[test]
+    fn rejects_a_key_whose_receive_and_change_paths_are_the_same() {
+        // Found by fuzzing: `<1;1>` passed the shape check, then collapsed to
+        // a single path inside the descriptor and crashed SavingsPolicy::new.
+        let mut k = five();
+        let same_twice = k[2].to_string().replace("/<0;1>/*", "/<1;1>/*");
+        k[2] = DescriptorPublicKey::from_str(&same_twice).unwrap();
+        assert!(matches!(build(k), Err(Error::KeyShape(Role::DeviceDelayed))));
     }
 
     #[test]

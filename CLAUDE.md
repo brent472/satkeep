@@ -17,6 +17,8 @@ Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone
 - Small branches, one change each, merged by pull request. Don't push straight to `main`.
 - Tests come with the code: every spending path needs a test that it works and a test that the forbidden version fails.
 - Prefer established libraries (BDK, rust-miniscript) over hand-rolled crypto or script.
+- Before opening any PR, run a security review of the diff (`/security-review` if your Claude Code has it) and put the findings, or "none", in the PR description.
+- A new dependency needs a reason in its PR; `cargo deny check` must pass (see the README).
 
 ## Copy and design
 

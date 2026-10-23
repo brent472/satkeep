@@ -15,6 +15,8 @@ pub enum Error {
     DuplicateKey(Role, Role),
     #[error("Twofold only runs on test networks for now; mainnet is refused")]
     Mainnet,
+    #[error("couldn't build the unspendable internal key from these keys")]
+    InternalKey,
     #[error("input {input} needs {needed} confirmations before it can be spent this way, and has {has}")]
     TooEarly { input: usize, needed: u16, has: u32 },
     #[error("input {input} uses a time-based delay; Savings only uses block-based delays")]
@@ -26,13 +28,13 @@ pub enum Error {
     #[error("that isn't a valid test-network private key for a Savings key holder")]
     BadHolderKey,
     #[error("BDK could not build the payment: {0}")]
-    Build(#[from] bdk_wallet::error::CreateTxError),
+    Build(#[source] Box<bdk_wallet::error::CreateTxError>),
     #[error("could not finalize the payment: {0}")]
     CannotFinalize(String),
     #[error("BDK could not sign or finalize the payment: {0}")]
-    Finalize(#[from] bdk_wallet::signer::SignerError),
+    Finalize(#[source] Box<bdk_wallet::signer::SignerError>),
     #[error("could not extract the finished transaction: {0}")]
-    Extract(#[from] crate::bitcoin::psbt::ExtractTxError),
+    Extract(#[source] Box<crate::bitcoin::psbt::ExtractTxError>),
     #[error("the check-in interval must be at least 1 block")]
     CheckinIntervalZero,
     #[error("the check-in margin must be at least 1 block")]
@@ -52,5 +54,24 @@ pub enum Error {
     #[error("this check-in leaves out coin {coin}; every coin must be included (run `twofold checkin` again)")]
     CheckinMissesCoin { coin: crate::bitcoin::OutPoint },
     #[error("miniscript rejected the Savings descriptor: {0}")]
-    Miniscript(#[from] crate::miniscript::Error),
+    Miniscript(#[source] Box<crate::miniscript::Error>),
+}
+
+// Other crates' errors are boxed so `Error`, and every `Result` that carries
+// it, stays small.
+macro_rules! boxed_from {
+    ($($source:ty => $variant:ident),* $(,)?) => {$(
+        impl From<$source> for Error {
+            fn from(e: $source) -> Self {
+                Error::$variant(Box::new(e))
+            }
+        }
+    )*};
+}
+
+boxed_from! {
+    bdk_wallet::error::CreateTxError => Build,
+    bdk_wallet::signer::SignerError => Finalize,
+    crate::bitcoin::psbt::ExtractTxError => Extract,
+    crate::miniscript::Error => Miniscript,
 }

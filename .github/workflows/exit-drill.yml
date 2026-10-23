@@ -18,8 +18,11 @@ env:
   LIANA_KEY_PRIMARY: 5B63F3B97699C7EEF3B040B19B7F629A53E77B83
   LIANA_KEY_SIGNING: 4730DDCC64DFAEC16CEFEB5BE65F7A089C20DC8F
   CORE_VERSION: "31.1"
-  # Bitcoin Core's SHA256SUMS must carry at least this many good signatures
-  # from the builder keys in bitcoin-core/guix.sigs.
+  # Bitcoin Core 31.1's Linux tarball, checked on 2026-10-23 (its SHA256SUMS
+  # had 11 good builder signatures). The download must match this and
+  # SHA256SUMS, and SHA256SUMS must carry at least CORE_MIN_SIGNATURES good
+  # signatures from the builder keys in bitcoin-core/guix.sigs.
+  CORE_TARBALL_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
   CORE_MIN_SIGNATURES: "3"
 
 jobs:
@@ -57,25 +60,7 @@ jobs:
           echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
 
       - name: Download Bitcoin Core and verify it against its signed checksums
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/core-release" && cd "$RUNNER_TEMP/core-release"
-          tarball="bitcoin-${CORE_VERSION}-x86_64-linux-gnu.tar.gz"
-          base="https://bitcoincore.org/bin/bitcoin-core-${CORE_VERSION}"
-          for f in "$tarball" SHA256SUMS SHA256SUMS.asc; do curl -sSfL -o "$f" "$base/$f"; done
-          git clone -q --depth 1 https://github.com/bitcoin-core/guix.sigs
-          export GNUPGHOME="$RUNNER_TEMP/gnupg-core"
-          mkdir -m 700 "$GNUPGHOME"
-          gpg --batch --quiet --import guix.sigs/builder-keys/*.gpg 2>/dev/null || true
-          gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS > gpg-status 2>/dev/null || true
-          good=$(grep -c '^\[GNUPG:\] GOODSIG' gpg-status || true)
-          if [ "$good" -lt "$CORE_MIN_SIGNATURES" ]; then
-            echo "::error::Bitcoin Core's SHA256SUMS has $good good builder signatures; need $CORE_MIN_SIGNATURES"; exit 1
-          fi
-          echo "Bitcoin Core's SHA256SUMS: $good good builder signatures"
-          grep " ${tarball}\$" SHA256SUMS | sha256sum -c -
-          tar xzf "$tarball"
-          echo "BITCOIN_BIN=$PWD/bitcoin-${CORE_VERSION}/bin" >> "$GITHUB_ENV"
+        run: .github/scripts/fetch-bitcoin-core.sh
 
       - name: Build twofold (used only to make keys and export the descriptor)
         run: |

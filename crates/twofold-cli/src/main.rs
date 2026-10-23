@@ -1,9 +1,6 @@
 //! `twofold`: a developer command-line tool for the Twofold Savings wallet.
 //! Test networks only. See the crate README.
 
-mod node;
-mod wallet_dir;
-
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -20,7 +17,8 @@ use twofold_savings::checkin::{self, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
 use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey};
 
-use wallet_dir::{Config, Opened, TestNetwork};
+use twofold_cli::wallet_dir::{self, Config, Opened, TestNetwork};
+use twofold_cli::node;
 
 #[derive(Parser)]
 #[command(name = "twofold", version, about = "Twofold Savings wallet developer tool. Test networks only.")]

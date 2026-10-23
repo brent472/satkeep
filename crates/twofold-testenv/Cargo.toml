@@ -5,6 +5,7 @@ description = "Throwaway regtest nodes for Twofold's tests. Test-only."
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 bdk_wallet.workspace = true
