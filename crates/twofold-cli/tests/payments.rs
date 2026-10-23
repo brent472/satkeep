@@ -177,7 +177,7 @@ fn keygen_keys_can_create_a_wallet_and_approve() {
     let [(phone, _), (device, device_r), (helper, _), (heir, _)] = <[_; 4]>::try_from(public).unwrap();
     cli.ok(&[
         "create", "--network", "regtest", "--phone", &phone, "--device", &device, "--device-r", &device_r,
-        "--helper", &helper, "--heir", &heir, "--device-delay", "10", "--heir-delay", "20",
+        "--helper", &helper, "--heir", &heir, "--device-delay", "10", "--heir-delay", "20", "--checkin-interval", "5", "--checkin-margin", "2",
     ]);
     let address = cli.ok(&["address"]);
     let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();

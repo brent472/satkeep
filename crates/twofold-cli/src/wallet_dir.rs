@@ -9,6 +9,7 @@ use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
 use twofold_savings::bitcoin::Network;
+use twofold_savings::checkin::{CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN};
 use twofold_savings::miniscript::descriptor::DescriptorPublicKey;
 use twofold_savings::{Delays, SavingsKeys, SavingsPolicy};
 
@@ -53,6 +54,13 @@ pub struct Config {
     pub heir: String,
     /// Block height when the wallet was created. Sync starts here.
     pub birthday: u32,
+    /// Blocks between check-ins. Missing in wallets made before check-ins
+    /// existed; see [`Config::checkin_rule`].
+    #[serde(default)]
+    pub checkin_interval: Option<u16>,
+    /// Blocks the interval must leave before the device delay.
+    #[serde(default)]
+    pub checkin_margin: Option<u16>,
 }
 
 impl Config {
@@ -69,6 +77,21 @@ impl Config {
         )?;
         let delays = Delays::new(self.device_delay, self.heir_delay)?;
         Ok(SavingsPolicy::new(keys, delays, self.network.network())?)
+    }
+
+    /// The check-in rule. A wallet made before check-ins existed gets the
+    /// defaults, if they fit its device delay.
+    pub fn checkin_rule(&self) -> Result<CheckinRule> {
+        let delays = Delays::new(self.device_delay, self.heir_delay)?;
+        let interval = self.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL);
+        let margin = self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN);
+        CheckinRule::new(interval, margin, delays).map_err(|e| {
+            if self.checkin_interval.is_none() {
+                anyhow::anyhow!("this wallet has no check-in interval set and the defaults don't fit it ({e})")
+            } else {
+                e.into()
+            }
+        })
     }
 }
 
