@@ -4,14 +4,20 @@
 mod node;
 mod wallet_dir;
 
-use std::path::PathBuf;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use bdk_bitcoind_rpc::bitcoincore_rpc::Client;
 use bdk_wallet::KeychainKind;
-use clap::{Parser, Subcommand};
-use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY};
+use clap::{Parser, Subcommand, ValueEnum};
+use twofold_savings::bitcoin::psbt::Psbt;
+use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
+use twofold_savings::spend::{self, Path as SpendPath};
+use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey};
 
 use wallet_dir::{Config, Opened, TestNetwork};
 
@@ -36,6 +42,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Make a new test key for one holder and save it to a file.
+    Keygen {
+        /// File to create. Must end in .key (the repo's .gitignore covers
+        /// *.key) and must not already exist.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Create a Savings wallet from five public keys.
     Create {
         #[arg(long, value_enum)]
@@ -70,6 +83,71 @@ enum Command {
         #[arg(long)]
         split: bool,
     },
+    /// Prepare a payment from Savings and save it, unsigned, as a PSBT file.
+    Send {
+        /// Address to pay
+        #[arg(long)]
+        to: String,
+        /// Amount in BTC, like 0.25
+        #[arg(long, required_unless_present = "all", conflicts_with = "all")]
+        amount: Option<String>,
+        /// Send everything in Savings, less the network fee
+        #[arg(long)]
+        all: bool,
+        /// Which approval path the payment uses
+        #[arg(long, value_enum, default_value_t = PathArg::TwoOfThree)]
+        path: PathArg,
+        /// Network fee rate in sat/vB
+        #[arg(long, default_value_t = 2)]
+        fee_rate: u64,
+        /// File to save the payment to. Must not already exist.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Approve a payment with one holder's key. Updates the PSBT file in place.
+    Sign {
+        #[arg(long)]
+        psbt: PathBuf,
+        /// File holding the private key (from `twofold keygen`)
+        #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
+        key: Option<PathBuf>,
+        /// Read the private key from standard input instead
+        #[arg(long)]
+        key_stdin: bool,
+    },
+    /// Check a payment has the approvals it needs and send it to the network.
+    Broadcast {
+        #[arg(long)]
+        psbt: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PathArg {
+    /// Any 2 of PHONE, DEVICE, HELPER. No wait.
+    TwoOfThree,
+    /// DEVICE alone, once every coin used has waited the device delay
+    Device,
+    /// HEIR alone, once every coin used has waited the heir delay
+    Heir,
+}
+
+impl PathArg {
+    fn path(self) -> SpendPath {
+        match self {
+            PathArg::TwoOfThree => SpendPath::TwoOfThree,
+            PathArg::Device => SpendPath::Device,
+            PathArg::Heir => SpendPath::Heir,
+        }
+    }
+
+    fn who_approves(self) -> &'static str {
+        match self {
+            PathArg::TwoOfThree => "any 2 of PHONE, DEVICE, HELPER",
+            PathArg::Device => "DEVICE alone",
+            PathArg::Heir => "HEIR alone",
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -84,6 +162,69 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Keygen { ref out } => keygen(out)?,
+        Command::Send { ref to, ref amount, all: _, path, fee_rate, ref out } => {
+            let (mut opened, _client) = open_and_sync(&cli)?;
+            let network = opened.network().network();
+            let to = Address::from_str(to)
+                .context("that isn't a valid address")?
+                .require_network(network)
+                .with_context(|| format!("that address isn't for {}", opened.network().core_name()))?;
+            let amount = match amount {
+                Some(text) => Some(
+                    Amount::from_str_in(text, Denomination::Bitcoin).context("the amount must be in BTC, like 0.25")?,
+                ),
+                None => None, // --all
+            };
+            let fee_rate = FeeRate::from_sat_per_vb(fee_rate)
+                .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
+                .context("the fee rate must be at least 1 sat/vB")?;
+            let delays = opened.policy.delays();
+            let script = to.script_pubkey();
+            let psbt = spend::build_spend(&mut opened.wallet, delays, path.path(), |b| {
+                match amount {
+                    Some(amount) => b.add_recipient(script.clone(), amount),
+                    None => b.drain_wallet().drain_to(script.clone()),
+                };
+                b.fee_rate(fee_rate);
+            })?;
+            write_new(out, psbt.to_string().as_bytes())?;
+            opened.persist()?;
+            let paid: Amount =
+                psbt.unsigned_tx.output.iter().filter(|o| o.script_pubkey == script).map(|o| o.value).sum();
+            println!("Prepared a payment of {} to {to}.", btc(paid));
+            println!("Network fee: {}", btc(psbt.fee()?));
+            println!("Saved, unsigned, to {}.", out.display());
+            println!("Needs approval from {}: run `twofold sign`, then `twofold broadcast`.", path.who_approves());
+        }
+        Command::Sign { ref psbt, ref key, key_stdin } => {
+            let mut payment = read_psbt(psbt)?;
+            let mut text = String::new();
+            if key_stdin {
+                std::io::stdin().read_to_string(&mut text).context("reading the key from standard input")?;
+            } else {
+                let path = key.as_ref().expect("clap requires --key or --key-stdin");
+                text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            }
+            let holder = HolderKey::from_secret_str(&text)?;
+            drop(text);
+            let added = holder.sign(&mut payment)?;
+            if added == 0 {
+                bail!("that key isn't part of this payment, or it has already approved it");
+            }
+            fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
+            println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
+        }
+        Command::Broadcast { ref psbt } => {
+            let (mut opened, client) = open_and_sync(&cli)?;
+            let payment = read_psbt(psbt)?;
+            let tx = spend::finalize(&opened.wallet, &payment)?;
+            let txid = node::broadcast(&client, &tx)?;
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+            opened.wallet.apply_unconfirmed_txs([(tx, now)]);
+            opened.persist()?;
+            println!("Sent. Transaction ID: {txid}");
+        }
         Command::Create { network, phone, device, device_r, helper, heir, device_delay, heir_delay } => {
             let client = connect(&cli.rpc_url, &cli.rpc_cookie, network)?;
             let config = Config {
@@ -128,6 +269,39 @@ fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Writes a fresh key to `out`. Refuses anything but a new `.key` file, so
+/// the repo's `.gitignore` keeps it out of commits.
+fn keygen(out: &Path) -> Result<()> {
+    if out.extension().and_then(|e| e.to_str()) != Some("key") {
+        bail!("the key file's name must end in .key, so .gitignore keeps it out of commits");
+    }
+    let key = HolderKey::generate();
+    write_new(out, format!("{}\n", key.to_secret_string()).as_bytes())?;
+    println!("Saved a new test key to {}.", out.display());
+    println!("Anyone with this file can approve as its holder. Keep it private and never commit it.");
+    println!("Public key (for PHONE, DEVICE, HELPER or HEIR):");
+    println!("  {}", key.public_key(0));
+    println!("Second public key (DEVICE only, for DEVICE_R):");
+    println!("  {}", key.public_key(1));
+    Ok(())
+}
+
+/// Creates `path` and writes `contents`; refuses if it already exists.
+fn write_new(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("creating {} (it must not already exist)", path.display()))?;
+    file.write_all(contents).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn read_psbt(path: &Path) -> Result<Psbt> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Psbt::from_str(text.trim()).with_context(|| format!("{} isn't a valid PSBT", path.display()))
 }
 
 fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork) -> Result<Client> {

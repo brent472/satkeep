@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail};
 use bdk_bitcoind_rpc::Emitter;
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Auth, Client, RpcApi};
 use bdk_wallet::Wallet;
-use serde_json::Value;
+use serde_json::{Value, json};
+use twofold_savings::bitcoin::{Transaction, Txid, consensus};
 
 use crate::wallet_dir::TestNetwork;
 
@@ -52,6 +53,12 @@ pub fn sync(client: &Client, wallet: &mut Wallet, birthday: u32) -> Result<()> {
     wallet.apply_unconfirmed_txs(mempool.update);
     wallet.apply_evicted_txs(mempool.evicted);
     Ok(())
+}
+
+pub fn broadcast(client: &Client, tx: &Transaction) -> Result<Txid> {
+    let hex = consensus::encode::serialize_hex(tx);
+    let txid: String = client.call("sendrawtransaction", &[json!(hex)]).context("the node refused the payment")?;
+    Ok(txid.parse()?)
 }
 
 /// Where Bitcoin Core keeps its RPC cookie for `network` by default.
