@@ -99,3 +99,22 @@ fn refuses_a_payment_from_another_wallet() {
     let err = expect_failure(&args, ours.run_with_stdin(&args, &format!("y\n{}\n", holders.phone.to_secret_string())));
     assert!(err.contains("isn't an unspent coin of this Savings wallet"), "{err}");
 }
+
+#[test]
+fn accepts_what_windows_powershell_pipes() {
+    // Windows PowerShell 5.1 sends a byte-order mark and CRLF line endings:
+    // `"y" | twofold sign …` arrives as EF BB BF 'y' CR LF.
+    let node = Node::start();
+    let (cli, holders) = funded(&node);
+    let psbt = cli.path("pay.psbt");
+    cli.ok(&["send", "--to", &node.new_address().to_string(), "--all", "--out", &psbt]);
+
+    let args = ["sign", "--psbt", &psbt, "--key-stdin"];
+    let input = format!("\u{feff}y\r\n{}\r\n", holders.phone.to_secret_string());
+    assert!(expect_ok(&args, cli.run_with_stdin(&args, &input)).contains("Added 1 signature"));
+
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
+    let input = format!("\u{feff}{}\r\n", holders.helper.to_secret_string());
+    assert!(expect_ok(&args, cli.run_with_stdin(&args, &input)).contains("Added 1 signature"));
+    cli.ok(&["broadcast", "--psbt", &psbt]);
+}

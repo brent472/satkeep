@@ -288,7 +288,7 @@ fn run(cli: Cli) -> Result<()> {
                 print!("Approve? (y/N) ");
                 std::io::stdout().flush()?;
                 let answer = lines.next().transpose().context("reading the answer")?.unwrap_or_default();
-                if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+                if !matches!(without_bom(&answer).trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
                     println!();
                     bail!("not approved; nothing was signed");
                 }
@@ -403,7 +403,13 @@ fn write_new(path: &Path, contents: &[u8]) -> Result<()> {
 
 fn read_psbt(path: &Path) -> Result<Psbt> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Psbt::from_str(text.trim()).with_context(|| format!("{} isn't a valid PSBT", path.display()))
+    Psbt::from_str(without_bom(&text).trim()).with_context(|| format!("{} isn't a valid PSBT", path.display()))
+}
+
+/// Drops a leading byte-order mark. Windows PowerShell 5.1 puts one in front
+/// of anything it pipes to a program, and Notepad can save one too.
+fn without_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork) -> Result<Client> {

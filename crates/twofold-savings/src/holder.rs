@@ -40,7 +40,10 @@ impl HolderKey {
     /// Reads a key written by [`HolderKey::to_secret_string`]. Refuses
     /// mainnet keys. The error never repeats the input.
     pub fn from_secret_str(s: &str) -> Result<Self, Error> {
-        let master = Xpriv::from_str(s.trim()).map_err(|_| Error::BadHolderKey)?;
+        // Windows tools (PowerShell 5.1 pipes, Notepad) may put a byte-order
+        // mark in front of the text.
+        let text = s.trim().trim_start_matches('\u{feff}');
+        let master = Xpriv::from_str(text).map_err(|_| Error::BadHolderKey)?;
         if master.network == NetworkKind::Main {
             return Err(Error::BadHolderKey);
         }
@@ -109,6 +112,13 @@ mod tests {
         let again = HolderKey::from_secret_str(&key.to_secret_string()).unwrap();
         assert_eq!(key.public_key(0), again.public_key(0));
         assert_ne!(key.public_key(0), key.public_key(1));
+    }
+
+    #[test]
+    fn reads_a_key_with_a_byte_order_mark_or_crlf() {
+        let key = HolderKey::generate();
+        let again = HolderKey::from_secret_str(&format!("\u{feff}{}\r\n", key.to_secret_string())).unwrap();
+        assert_eq!(key.public_key(0), again.public_key(0));
     }
 
     #[test]
