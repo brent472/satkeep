@@ -5,22 +5,17 @@ use crate::bitcoin::NetworkKind;
 use crate::miniscript::descriptor::{DescriptorPublicKey, Wildcard};
 
 /// Who holds a key in the Savings policy.
-///
-/// DEVICE holds two keys: [`Role::Device`] for the everyday 2-of-3 path and
-/// [`Role::DeviceDelayed`] for the delayed device-only path. Keeping them
-/// separate is what Liana expects and what miniscript requires for SegWit v0;
-/// it does not change who can spend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     Phone,
     Device,
-    DeviceDelayed,
     Helper,
+    /// The beneficiary. Only in Savings that has one.
     Heir,
 }
 
 impl Role {
-    pub const ALL: [Role; 5] = [Role::Phone, Role::Device, Role::DeviceDelayed, Role::Helper, Role::Heir];
+    pub const ALL: [Role; 4] = [Role::Phone, Role::Device, Role::Helper, Role::Heir];
 }
 
 impl fmt::Display for Role {
@@ -28,14 +23,14 @@ impl fmt::Display for Role {
         f.write_str(match self {
             Role::Phone => "PHONE",
             Role::Device => "DEVICE",
-            Role::DeviceDelayed => "DEVICE_R",
             Role::Helper => "HELPER",
             Role::Heir => "HEIR",
         })
     }
 }
 
-/// The five public keys that make up a Savings wallet.
+/// The public keys of a Savings wallet: PHONE, DEVICE and HELPER, plus HEIR
+/// once a beneficiary is added.
 ///
 /// Each key must be a test-network extended public key with a receive and a
 /// change path (`…/<0;1>/*`), and no two keys may share an extended key.
@@ -43,26 +38,26 @@ impl fmt::Display for Role {
 pub struct SavingsKeys {
     phone: DescriptorPublicKey,
     device: DescriptorPublicKey,
-    device_delayed: DescriptorPublicKey,
     helper: DescriptorPublicKey,
-    heir: DescriptorPublicKey,
+    heir: Option<DescriptorPublicKey>,
 }
 
 impl SavingsKeys {
     pub fn new(
         phone: DescriptorPublicKey,
         device: DescriptorPublicKey,
-        device_delayed: DescriptorPublicKey,
         helper: DescriptorPublicKey,
-        heir: DescriptorPublicKey,
+        heir: Option<DescriptorPublicKey>,
     ) -> Result<Self, Error> {
-        let keys = Self { phone, device, device_delayed, helper, heir };
-        for role in Role::ALL {
-            check_shape(role, keys.get(role))?;
+        let keys = Self { phone, device, helper, heir };
+        let present: Vec<(Role, &DescriptorPublicKey)> =
+            Role::ALL.iter().filter_map(|r| keys.get(*r).map(|k| (*r, k))).collect();
+        for (role, key) in &present {
+            check_shape(*role, key)?;
         }
-        for (i, a) in Role::ALL.iter().enumerate() {
-            for b in &Role::ALL[i + 1..] {
-                if xpub(keys.get(*a)) == xpub(keys.get(*b)) {
+        for (i, (a, ka)) in present.iter().enumerate() {
+            for (b, kb) in &present[i + 1..] {
+                if xpub(ka) == xpub(kb) {
                     return Err(Error::DuplicateKey(*a, *b));
                 }
             }
@@ -70,14 +65,26 @@ impl SavingsKeys {
         Ok(keys)
     }
 
-    pub fn get(&self, role: Role) -> &DescriptorPublicKey {
+    /// The key for `role`; `None` only for HEIR in Savings with no
+    /// beneficiary.
+    pub fn get(&self, role: Role) -> Option<&DescriptorPublicKey> {
         match role {
-            Role::Phone => &self.phone,
-            Role::Device => &self.device,
-            Role::DeviceDelayed => &self.device_delayed,
-            Role::Helper => &self.helper,
-            Role::Heir => &self.heir,
+            Role::Phone => Some(&self.phone),
+            Role::Device => Some(&self.device),
+            Role::Helper => Some(&self.helper),
+            Role::Heir => self.heir.as_ref(),
         }
+    }
+
+    /// The same PHONE, DEVICE and HELPER with `heir` added, for moving
+    /// Savings to a wallet with a beneficiary.
+    pub fn with_heir(&self, heir: DescriptorPublicKey) -> Result<Self, Error> {
+        Self::new(self.phone.clone(), self.device.clone(), self.helper.clone(), Some(heir))
+    }
+
+    /// Whether `other` has the same PHONE, DEVICE and HELPER keys.
+    pub fn same_two_of_three(&self, other: &SavingsKeys) -> bool {
+        self.phone == other.phone && self.device == other.device && self.helper == other.helper
     }
 }
 
@@ -138,56 +145,70 @@ mod tests {
     use super::*;
     use crate::bitcoin::Network;
 
-    fn five() -> [DescriptorPublicKey; 5] {
+    fn four() -> [DescriptorPublicKey; 4] {
         std::array::from_fn(|_| fresh(Network::Regtest))
     }
 
-    fn build(k: [DescriptorPublicKey; 5]) -> Result<SavingsKeys, Error> {
-        let [p, d, dr, h, heir] = k;
-        SavingsKeys::new(p, d, dr, h, heir)
+    fn build(k: [DescriptorPublicKey; 4]) -> Result<SavingsKeys, Error> {
+        let [p, d, h, heir] = k;
+        SavingsKeys::new(p, d, h, Some(heir))
     }
 
     #[test]
-    fn accepts_five_fresh_test_keys() {
-        let k = five();
+    fn accepts_fresh_test_keys_with_or_without_an_heir() {
+        let k = four();
         let keys = build(k.clone()).unwrap();
-        assert_eq!(keys.get(Role::Helper), &k[3]);
+        assert_eq!(keys.get(Role::Helper), Some(&k[2]));
+        assert_eq!(keys.get(Role::Heir), Some(&k[3]));
+        let [p, d, h, _] = k;
+        let plain = SavingsKeys::new(p, d, h, None).unwrap();
+        assert_eq!(plain.get(Role::Heir), None);
+    }
+
+    #[test]
+    fn adding_an_heir_keeps_the_other_keys() {
+        let [p, d, h, heir] = four();
+        let plain = SavingsKeys::new(p.clone(), d.clone(), h.clone(), None).unwrap();
+        let with = plain.with_heir(heir.clone()).unwrap();
+        assert_eq!(with, SavingsKeys::new(p, d, h, Some(heir)).unwrap());
+        assert!(plain.same_two_of_three(&with));
+        let phone = plain.get(Role::Phone).unwrap().clone();
+        assert!(matches!(plain.with_heir(phone), Err(Error::DuplicateKey(Role::Phone, Role::Heir))));
     }
 
     #[test]
     fn rejects_a_repeated_key() {
-        let mut k = five();
-        k[4] = k[3].clone(); // HEIR reuses HELPER's key
+        let mut k = four();
+        k[3] = k[2].clone(); // HEIR reuses HELPER's key
         assert!(matches!(build(k), Err(Error::DuplicateKey(Role::Helper, Role::Heir))));
-    }
-
-    #[test]
-    fn rejects_device_reusing_its_key_for_the_delayed_path() {
-        let mut k = five();
-        k[2] = k[1].clone();
-        assert!(matches!(build(k), Err(Error::DuplicateKey(Role::Device, Role::DeviceDelayed))));
+        let mut k = four();
+        k[1] = k[0].clone();
+        assert!(matches!(build(k), Err(Error::DuplicateKey(Role::Phone, Role::Device))));
     }
 
     #[test]
     fn rejects_a_mainnet_key() {
-        let mut k = five();
+        let mut k = four();
         k[0] = fresh(Network::Bitcoin);
         assert!(matches!(build(k), Err(Error::MainnetKey(Role::Phone))));
+        let mut k = four();
+        k[3] = fresh(Network::Bitcoin);
+        assert!(matches!(build(k), Err(Error::MainnetKey(Role::Heir))));
     }
 
     #[test]
     fn rejects_a_key_whose_receive_and_change_paths_are_the_same() {
         // Found by fuzzing: `<1;1>` passed the shape check, then collapsed to
         // a single path inside the descriptor and crashed SavingsPolicy::new.
-        let mut k = five();
+        let mut k = four();
         let same_twice = k[2].to_string().replace("/<0;1>/*", "/<1;1>/*");
         k[2] = DescriptorPublicKey::from_str(&same_twice).unwrap();
-        assert!(matches!(build(k), Err(Error::KeyShape(Role::DeviceDelayed))));
+        assert!(matches!(build(k), Err(Error::KeyShape(Role::Helper))));
     }
 
     #[test]
     fn rejects_a_key_without_receive_and_change_paths() {
-        let mut k = five();
+        let mut k = four();
         let single_path = k[1].to_string().replace("/<0;1>/*", "/0/*");
         k[1] = DescriptorPublicKey::from_str(&single_path).unwrap();
         assert!(matches!(build(k), Err(Error::KeyShape(Role::Device))));

@@ -28,30 +28,30 @@ use crate::{Delays, Error};
 pub enum Path {
     /// Any 2 of PHONE, DEVICE and HELPER. No delay.
     TwoOfThree,
-    /// DEVICE alone, once each coin has waited the device delay.
-    Device,
-    /// HEIR alone, once each coin has waited the heir delay.
+    /// HEIR alone, once each coin has waited the heir delay. Only in Savings
+    /// with a beneficiary.
     Heir,
 }
 
 impl Path {
-    /// The input sequence this path needs, or `None` for no delay.
+    /// The input sequence this path needs, or `None` for no delay (and for
+    /// the heir path in Savings with no beneficiary, which has no such path;
+    /// [`build_spend`] refuses it).
     pub fn sequence(self, delays: Delays) -> Option<Sequence> {
         match self {
             Path::TwoOfThree => None,
-            Path::Device => Some(Sequence::from_height(delays.device())),
-            Path::Heir => Some(Sequence::from_height(delays.heir())),
+            Path::Heir => delays.heir().map(Sequence::from_height),
         }
     }
 }
 
 /// The path a PSBT's inputs ask for, read from their sequences: a sequence
-/// equal to the device or heir delay means that delayed path, anything else
-/// the 2-of-3 path. `None` if the inputs disagree, which [`build_spend`]
-/// never produces.
+/// equal to the heir delay means the heir path, anything else the 2-of-3
+/// path. `None` if the inputs disagree, which [`build_spend`] never
+/// produces.
 pub fn path_of(psbt: &Psbt, delays: Delays) -> Option<Path> {
     let path_of_input = |sequence: Sequence| {
-        [Path::Device, Path::Heir].into_iter().find(|p| p.sequence(delays) == Some(sequence)).unwrap_or(Path::TwoOfThree)
+        if Path::Heir.sequence(delays) == Some(sequence) { Path::Heir } else { Path::TwoOfThree }
     };
     let mut paths = psbt.unsigned_tx.input.iter().map(|i| path_of_input(i.sequence));
     let first = paths.next()?;
@@ -60,19 +60,69 @@ pub fn path_of(psbt: &Psbt, delays: Delays) -> Option<Path> {
 
 /// Builds an unsigned spend through `path`. `configure` adds the recipients
 /// and fee rate. Refuses if any coin chosen is too young for the path's
-/// delay.
+/// delay, and refuses the heir path in Savings with no beneficiary.
 pub fn build_spend(
     wallet: &mut Wallet,
     delays: Delays,
     path: Path,
     configure: impl FnOnce(&mut TxBuilder<'_, DefaultCoinSelectionAlgorithm>),
 ) -> Result<Psbt, Error> {
+    if path == Path::Heir && delays.heir().is_none() {
+        return Err(Error::NoHeirPath);
+    }
     let mut builder = wallet.build_tx();
     configure(&mut builder);
     builder.set_condition(Condition { csv: path.sequence(delays), timelock: None });
     let psbt = builder.finish()?;
     check_delays(wallet, &psbt)?;
     Ok(psbt)
+}
+
+/// Checks every input of `psbt` is one of this wallet's unspent coins, and
+/// that the PSBT tells the truth about it: its `witness_utxo` (amount and
+/// script) must equal the wallet's own record, a P2WSH coin must come with
+/// its previous transaction (`non_witness_utxo`), any previous transaction
+/// must hash to the input's txid and hold that same output, and a P2WSH
+/// `witness_script` must hash to the coin's script.
+///
+/// This matters most for P2WSH coins (Savings with no beneficiary): a SegWit
+/// v0 signature commits only to the amount of the input it signs. A PSBT
+/// that understates another input's amount would show a fee far smaller
+/// than the real one, and two such approvals, each covering a different
+/// input, could be combined into a transaction that burns the difference as
+/// fee. With every amount checked against the wallet, the fee shown is the
+/// fee paid. (A Taproot signature commits to every input's amount, so there
+/// a lie only makes the signatures invalid.)
+pub fn check_inputs(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
+    if psbt.inputs.len() != psbt.unsigned_tx.input.len() {
+        return Err(Error::InputMismatch { input: psbt.inputs.len().min(psbt.unsigned_tx.input.len()) });
+    }
+    for (input, (txin, meta)) in psbt.unsigned_tx.input.iter().zip(&psbt.inputs).enumerate() {
+        let utxo = wallet.get_utxo(txin.previous_output).ok_or(Error::UnknownCoin { input })?;
+        if meta.witness_utxo.as_ref() != Some(&utxo.txout) {
+            return Err(Error::InputMismatch { input });
+        }
+        // A P2WSH input's script must be the one its address commits to, so a
+        // signature is never made over a substituted script.
+        if let Some(script) = &meta.witness_script {
+            if crate::bitcoin::ScriptBuf::new_p2wsh(&script.wscript_hash()) != utxo.txout.script_pubkey {
+                return Err(Error::InputMismatch { input });
+            }
+        }
+        // A P2WSH coin must come with its whole previous transaction, as
+        // hardware signers have required since the 2020 SegWit fee issue: a
+        // signer without the wallet can then check the amount itself.
+        if utxo.txout.script_pubkey.is_p2wsh() && meta.non_witness_utxo.is_none() {
+            return Err(Error::MissingPreviousTransaction { input });
+        }
+        if let Some(prev) = &meta.non_witness_utxo {
+            let vout = usize::try_from(txin.previous_output.vout).map_err(|_| Error::InputMismatch { input })?;
+            if prev.compute_txid() != txin.previous_output.txid || prev.output.get(vout) != Some(&utxo.txout) {
+                return Err(Error::InputMismatch { input });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Checks every input of `psbt` is old enough for the delay its sequence
@@ -119,9 +169,17 @@ pub fn finalize(wallet: &Wallet, psbt: &Psbt) -> Result<Transaction, Error> {
     let mut psbt = psbt.clone();
     let secp = crate::bitcoin::key::Secp256k1::verification_only();
     if let Err(errors) = psbt.finalize_mut(&secp) {
-        let unsatisfied = errors
-            .iter()
-            .all(|e| matches!(e, crate::miniscript::psbt::Error::InputError(InputError::CouldNotSatisfyTr, _)));
+        // Taproot and P2WSH inputs report "not enough signatures" differently.
+        let unsatisfied = errors.iter().all(|e| {
+            matches!(
+                e,
+                crate::miniscript::psbt::Error::InputError(InputError::CouldNotSatisfyTr, _)
+                    | crate::miniscript::psbt::Error::InputError(
+                        InputError::MiniscriptError(crate::miniscript::Error::CouldNotSatisfy),
+                        _
+                    )
+            )
+        });
         if unsatisfied {
             return Err(Error::NotEnoughApprovals);
         }
@@ -149,12 +207,21 @@ mod tests {
 
     #[test]
     fn reads_the_path_from_the_input_sequences() {
-        let d = Delays::new(10, 20).unwrap();
-        let (device, heir) = (Sequence::from_height(10), Sequence::from_height(20));
+        let d = Delays::with_heir(20).unwrap();
+        let (other, heir) = (Sequence::from_height(10), Sequence::from_height(20));
         assert_eq!(path_of(&psbt_with(&[Sequence::ENABLE_RBF_NO_LOCKTIME]), d), Some(Path::TwoOfThree));
-        assert_eq!(path_of(&psbt_with(&[device, device]), d), Some(Path::Device));
-        assert_eq!(path_of(&psbt_with(&[heir]), d), Some(Path::Heir));
-        assert_eq!(path_of(&psbt_with(&[device, heir]), d), None, "inputs disagree");
+        assert_eq!(path_of(&psbt_with(&[other]), d), Some(Path::TwoOfThree), "no other delayed path");
+        assert_eq!(path_of(&psbt_with(&[heir, heir]), d), Some(Path::Heir));
+        assert_eq!(path_of(&psbt_with(&[other, heir]), d), None, "inputs disagree");
         assert_eq!(path_of(&psbt_with(&[]), d), None);
+    }
+
+    #[test]
+    fn without_a_beneficiary_every_sequence_reads_as_2_of_3() {
+        let none = Delays::none();
+        assert_eq!(Path::Heir.sequence(none), None);
+        for seq in [Sequence::ENABLE_RBF_NO_LOCKTIME, Sequence::from_height(20), Sequence::from_height(u16::MAX)] {
+            assert_eq!(path_of(&psbt_with(&[seq]), none), Some(Path::TwoOfThree));
+        }
     }
 }

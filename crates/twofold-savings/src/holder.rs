@@ -21,8 +21,8 @@ pub const PHRASE_WORDS: usize = 12;
 /// Every key comes from a standard BIP39 recovery phrase: 12 English words,
 /// no passphrase. The phrase gives a BIP32 master key on the test network,
 /// and public keys are derived at `m/87'/1'/account'` and used as
-/// `…/<0;1>/*`. Every holder uses account 0; DEVICE also uses account 1 for
-/// its delayed-path key (DEVICE_R). These paths are test-only placeholders.
+/// `…/<0;1>/*`. Every holder uses account 0. These paths are test-only
+/// placeholders.
 ///
 /// Deliberately not `Debug` or `Display`, so it can't end up in a log or an
 /// error message by accident. [`HolderKey::to_secret_string`] is the only way
@@ -33,8 +33,8 @@ pub struct HolderKey {
     master: Xpriv,
 }
 
-/// Accounts a holder may have a key on: 0 for everyone, 1 for DEVICE_R.
-const ACCOUNTS: [u32; 2] = [0, 1];
+/// Accounts a holder has a key on: account 0, for everyone.
+const ACCOUNTS: [u32; 1] = [0];
 
 impl HolderKey {
     /// A fresh random 12-word phrase from the operating system's random
@@ -87,11 +87,19 @@ impl HolderKey {
             .expect("a well-formed descriptor key")
     }
 
-    /// Adds this holder's signatures to every script leaf of `psbt` it has a
-    /// key in. Returns how many signatures were added.
+    /// Adds this holder's signatures to `psbt` wherever it has a key: every
+    /// script leaf of a Taproot Savings coin, or the multisig script of a
+    /// P2WSH one (Savings with no beneficiary). Returns how many signatures
+    /// were added.
     pub fn sign(&self, psbt: &mut Psbt) -> Result<usize, Error> {
         let before = signature_count(psbt);
         let secp = Secp256k1::new();
+        // A Savings PSBT is one shape: P2WSH inputs carry their witness script.
+        let context = if psbt.inputs.iter().any(|i| i.witness_script.is_some()) {
+            SignerContext::Segwitv0
+        } else {
+            SignerContext::Tap { is_internal_key: false }
+        };
         let fp = self.master.fingerprint(&secp);
         for account in ACCOUNTS {
             let origin = account_path(account);
@@ -105,7 +113,7 @@ impl HolderKey {
                     derivation_path: DerivationPath::from_str(branch).expect("valid path"),
                     wildcard: Wildcard::Unhardened,
                 };
-                let signer = SignerWrapper::new(key, SignerContext::Tap { is_internal_key: false });
+                let signer = SignerWrapper::new(key, context);
                 signer.sign_transaction(psbt, &SignOptions::default(), &secp)?;
             }
         }
@@ -137,7 +145,7 @@ fn account_path(account: u32) -> DerivationPath {
 }
 
 fn signature_count(psbt: &Psbt) -> usize {
-    psbt.inputs.iter().map(|i| i.tap_script_sigs.len()).sum()
+    psbt.inputs.iter().map(|i| i.tap_script_sigs.len() + i.partial_sigs.len()).sum()
 }
 
 #[cfg(test)]

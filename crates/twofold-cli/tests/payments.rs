@@ -9,12 +9,12 @@ use twofold_savings::HolderKey;
 use twofold_savings::bitcoin::key::Secp256k1;
 use twofold_savings::bitcoin::{Address, Amount, Network};
 
-/// Creates a wallet with 10/20-block delays and funds it with 1 BTC in a
-/// coin that has 1 confirmation.
+/// Creates a wallet with a beneficiary and a 20-block heir delay, and funds
+/// it with 1 BTC in a coin that has 1 confirmation.
 fn funded(node: &Node) -> (Cli<'_>, Holders) {
     let cli = Cli::new(node);
     let holders = Holders::generate();
-    cli.create(&holders, 10, 20);
+    cli.create(&holders, 20);
     let address = cli.ok(&["address"]);
     let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
     node.send_to(&address, Amount::from_btc(1.0).unwrap());
@@ -56,26 +56,41 @@ fn two_of_three_payment_needs_two_approvals_and_returns_change() {
 }
 
 #[test]
-fn device_alone_waits_for_its_delay() {
+fn device_alone_can_never_send() {
+    // The card-only delayed path is gone: there's no such path to ask for,
+    // and DEVICE's signature alone never satisfies 2 of 3, however old the
+    // coin.
     let node = Node::start();
     let (cli, holders) = funded(&node);
     let psbt = cli.path("device.psbt");
-    let send = ["send", "--to", &to(&node), "--all", "--path", "device", "--out", &psbt];
-
-    let err = cli.fails(&send);
-    assert!(err.contains("needs 10 confirmations") && err.contains("has 1"), "{err}");
-    node.mine(8);
-    let err = cli.fails(&send);
-    assert!(err.contains("has 9"), "one block early is still refused: {err}");
+    let err = cli.fails(&["send", "--to", &to(&node), "--all", "--path", "device", "--out", &psbt]);
+    assert!(err.contains("invalid value 'device'"), "{err}");
     assert!(!file_exists(&psbt), "no payment file is written when refused");
 
-    node.mine(1);
-    let out = cli.ok(&send);
-    assert!(out.contains("Needs approval from DEVICE alone"), "{out}");
+    node.mine(30);
+    cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
+    cli.sign(&psbt, &holders.device);
+    let err = cli.fails(&["broadcast", "--psbt", &psbt]);
+    assert!(err.contains("not enough keys have approved"), "{err}");
+}
+
+#[test]
+fn without_a_beneficiary_there_is_no_heir_path() {
+    let node = Node::start();
+    let cli = Cli::new(&node);
+    let holders = Holders::generate();
+    cli.create_plain(&holders);
+    let address = cli.ok(&["address"]);
+    let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
+    node.send_to(&address, Amount::from_btc(1.0).unwrap());
+    node.mine(30);
+    let psbt = cli.path("heir.psbt");
+    let err = cli.fails(&["send", "--to", &to(&node), "--all", "--path", "heir", "--out", &psbt]);
+    assert!(err.contains("has no beneficiary, so there is no heir path"), "{err}");
+    cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
+    cli.sign(&psbt, &holders.phone);
     cli.sign(&psbt, &holders.device);
     cli.ok(&["broadcast", "--psbt", &psbt]);
-    node.mine(1);
-    assert!(cli.ok(&["balance"]).contains("Total: 0.00000000 BTC"));
 }
 
 #[test]
@@ -169,16 +184,16 @@ fn keygen_keys_can_create_a_wallet_and_approve() {
         let keys: Vec<&str> = out.lines().filter(|l| l.starts_with("  ")).map(str::trim).collect();
         let saved = HolderKey::from_secret_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         common::remember(&saved);
-        assert_eq!(keys, [saved.public_key(0).to_string(), saved.public_key(1).to_string()]);
-        public.push((keys[0].to_string(), keys[1].to_string()));
+        assert_eq!(keys, [saved.public_key(0).to_string()], "one public key per holder");
+        public.push(keys[0].to_string());
     }
     let err = cli.fails(&["keygen", "--out", &cli.path("phone.key")]);
     assert!(err.contains("must not already exist"), "{err}");
 
-    let [(phone, _), (device, device_r), (helper, _), (heir, _)] = <[_; 4]>::try_from(public).unwrap();
+    let [phone, device, helper, heir] = <[_; 4]>::try_from(public).unwrap();
     cli.ok(&[
-        "create", "--network", "regtest", "--phone", &phone, "--device", &device, "--device-r", &device_r,
-        "--helper", &helper, "--heir", &heir, "--device-delay", "10", "--heir-delay", "20", "--checkin-interval", "5", "--checkin-margin", "2",
+        "create", "--network", "regtest", "--phone", &phone, "--device", &device, "--helper", &helper,
+        "--heir", &heir, "--heir-delay", "20", "--checkin-interval", "10", "--checkin-margin", "5",
     ]);
     let address = cli.ok(&["address"]);
     let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();

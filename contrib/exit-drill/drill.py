@@ -5,14 +5,27 @@ Twofold is used only to make fresh test keys and export the wallet
 descriptor. Everything after that is done by Liana (lianad + liana-cli) and
 Bitcoin Core (bitcoind + bitcoin-cli) on a fresh regtest node:
 
+Savings comes in two shapes, and the drill covers both, with the same keys:
+
+A. Savings with a beneficiary: 2 of 3, plus HEIR alone after the heir delay.
   1. Liana imports the descriptor and shows the same addresses as Twofold
      and Bitcoin Core.
-  2. Liana spends with 2 of 3 keys, with DEVICE alone after its delay and
-     with HEIR alone after its delay, and refuses each delayed spend one
-     block early. Liana's own signer (HotSigner, via twofold_sign.rs) signs
-     with the recovery phrases in Twofold's key files.
-  3. Bitcoin Core alone does the same spends, and the node refuses each
-     delayed spend one block early. Core can't read a recovery phrase, so
+  2. Liana spends with 2 of 3 keys, and with HEIR alone after its delay,
+     and refuses the heir spend one block early. Liana's own signer
+     (HotSigner, via twofold_sign.rs) signs with the recovery phrases in
+     Twofold's key files.
+  3. Bitcoin Core alone does the same spends, the node refuses the heir
+     spend one block early, and DEVICE alone is refused at any age (there
+     is no card-only path).
+B. Savings with no beneficiary yet: plain 2 of 3 in the standard P2WSH
+   format, wsh(sortedmulti(2, PHONE, DEVICE, HELPER)). (Liana can't take it:
+   "A Liana policy requires at least one recovery path.")
+  4. The export is in the form Sparrow's descriptor parser accepts, checked
+     against the patterns in Sparrow's own source (Sparrow isn't run).
+  5. Bitcoin Core alone derives the same addresses, spends with 2 of 3
+     keys, and refuses any single key.
+
+Core can't read a recovery phrase, so
      this script turns each phrase into a master key (tprv) with Python's
      standard library: BIP39 seed, then BIP32 master key. That's written
      from the BIPs, separately from Twofold's code and Liana's.
@@ -46,7 +59,7 @@ LIANA_SIGN = os.environ["LIANA_SIGN"]
 TWOFOLD = os.environ["TWOFOLD"]
 WORK = os.environ["WORK"]
 
-DEVICE_DELAY, HEIR_DELAY = 10, 20
+HEIR_DELAY = 20
 DATADIR = os.path.join(WORK, "bitcoind")
 COOKIE = os.path.join(DATADIR, "regtest", ".cookie")
 LIANA_CONF = os.path.join(WORK, "lianad.toml")
@@ -152,8 +165,35 @@ def describe_spend(txid):
 
 
 def signature_count(psbt):
+    """Taproot script-path signatures, plus P2WSH ones."""
     decoded = cli_json("decodepsbt", psbt)
-    return sum(len(i.get("taproot_script_path_sigs", [])) for i in decoded["inputs"])
+    return sum(len(i.get("taproot_script_path_sigs", [])) + len(i.get("partial_signatures", {})) for i in decoded["inputs"])
+
+
+# Sparrow 2.5.5's descriptor parser (drongo, OutputDescriptor.java at commit
+# e1c26413e4973752c9d7d43e37e39b411f21b48c), ported as-is.
+SPARROW_XPUB = re.compile(r"(\[[^\]]+\])?(.(?:pub|prv)[^/\,)]{100,112})(/[/\d*'hH<>;]+)?")
+SPARROW_KEY_ORIGIN = re.compile(r"\[([A-Fa-f0-9]{8})([/\d'hH]+)?\]")
+SPARROW_MULTI = re.compile(r"multi\(\s*(\d+)", re.IGNORECASE)
+SPARROW_MULTIPATH = re.compile(r"<([\d*'hH;]+)>")
+SPARROW_CHECKSUM = re.compile(r"#([qpzry9x8gf2tvdw0s3jn54khce6mua7l]{8})$")
+
+
+def sparrow_reads(descriptor):
+    """Whether `descriptor` has the shape Sparrow imports as a P2WSH multisig
+    wallet: wsh(sortedmulti(k, …)) with every key an xpub with a key origin
+    and a <0;1> receive/change step, and a checksum. A format check only."""
+    body = descriptor.split("#")[0]
+    keys = SPARROW_XPUB.findall(body)
+    multi = SPARROW_MULTI.search(body)
+    return (
+        body.startswith("wsh(sortedmulti(")
+        and bool(SPARROW_CHECKSUM.search(descriptor))
+        and multi is not None and 1 <= int(multi.group(1)) <= len(keys)
+        and len(keys) == 3
+        and all(SPARROW_KEY_ORIGIN.fullmatch(origin) for origin, _, _ in keys)
+        and all(path.endswith("/<0;1>/*") and SPARROW_MULTIPATH.search(path) for _, _, path in keys)
+    )
 
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -210,7 +250,72 @@ def txid_of(psbt):
     return cli_json("decodepsbt", psbt)["tx"]["txid"]
 
 
+def core_wallets(prefix, holders, descriptor):
+    """A watch-only Bitcoin Core wallet for `descriptor`, and one signer
+    wallet per holder with that holder's master key in place of its tpub.
+    Returns the receive and change descriptors and the signer wallet names."""
+    receive_desc, change_desc = descriptor_halves(descriptor)
+    cli("-named", "createwallet", f"wallet_name={prefix}watch", "disable_private_keys=true", "blank=true")
+    cli("importdescriptors", json.dumps([
+        {"desc": receive_desc, "active": True, "internal": False, "range": [0, 200], "timestamp": "now"},
+        {"desc": change_desc, "active": True, "internal": True, "range": [0, 200], "timestamp": "now"},
+    ]), wallet=f"{prefix}watch")
+    body = descriptor.split("#")[0]
+    key = re.compile(r"\[([0-9a-f]{8})/87'/1'/(\d+)'\]tpub[1-9A-HJ-NP-Za-km-z]+/<0;1>/\*")
+    signers = {}
+    for name, h in holders.items():
+        if f"[{h['fp']}/" not in body:
+            continue  # HEIR has no key in Savings with no beneficiary
+        private = key.sub(lambda m: f"{h['secret']}/87h/1h/{m.group(2)}h/<0;1>/*" if m.group(1) == h["fp"] else m.group(0), body)
+        imports = []
+        for branch, internal in (("0", False), ("1", True)):
+            single = private.replace("<0;1>", branch)
+            checksum = cli_json("getdescriptorinfo", stdin_args=[single])["checksum"]
+            imports.append({"desc": f"{single}#{checksum}", "active": True, "internal": internal, "range": [0, 200], "timestamp": "now"})
+        wallet = f"{prefix}{name}"
+        cli("-named", "createwallet", f"wallet_name={wallet}", "blank=true")
+        res = cli_json("importdescriptors", stdin_args=[json.dumps(imports)], wallet=wallet)
+        if not all(r.get("success") for r in res):
+            raise RuntimeError(f"importing {name}'s key into Bitcoin Core failed")  # no detail: it could echo the key
+        # The master key made here must be the one behind Twofold's public keys.
+        derived = cli_json("listdescriptors", wallet=wallet)["descriptors"]
+        if not any(f"[{h['fp']}/87h/1h/0h]" in d["desc"] or f"[{h['fp']}/87'/1'/0']" in d["desc"] for d in derived):
+            raise RuntimeError(f"Bitcoin Core's key for {name} isn't the one in Twofold's public key")
+        signers[name] = wallet
+    return receive_desc, change_desc, signers
+
+
+def descriptor_halves(descriptor):
+    """The receive and change descriptors, each with its own checksum."""
+    body = descriptor.split("#")[0]
+    halves = []
+    for branch in ("0", "1"):
+        single = body.replace("<0;1>", branch)
+        halves.append(f"{single}#{cli_json('getdescriptorinfo', single)['checksum']}")
+    return halves
+
+
+def start_liana(name, descriptor):
+    """Starts lianad on `descriptor`. Returns the process and its config path."""
+    conf = os.path.join(WORK, f"{name}.toml")
+    with open(conf, "w") as f:
+        f.write(
+            f'data_dir = "{os.path.join(WORK, name)}"\nlog_level = "info"\nmain_descriptor = "{descriptor}"\n\n'
+            f'[bitcoin_config]\nnetwork = "regtest"\npoll_interval_secs = 1\n\n'
+            f'[bitcoind_config]\naddr = "127.0.0.1:18443"\ncookie_path = "{COOKIE}"\n'
+        )
+    log = open(os.path.join(WORK, f"{name}.log"), "w")
+    return subprocess.Popen([LIANAD, "--conf", conf], stdout=log, stderr=subprocess.STDOUT), conf
+
+
+def stop(process):
+    if process.poll() is None:
+        process.terminate()
+        process.wait(timeout=30)
+
+
 def main():
+    global LIANA_CONF
     os.makedirs(DATADIR, exist_ok=True)
     code, _, err = run([os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001"])
     if code != 0:
@@ -223,7 +328,7 @@ def main():
 
     burn = cli_json("deriveaddresses", cli_json("getdescriptorinfo", f"rawtr({NUMS_XONLY})")["descriptor"])[0]
 
-    # --- Twofold: fresh keys and the descriptor, nothing more ------------------
+    # --- Twofold: fresh keys and the two descriptors, nothing more -------------
     os.environ["TWOFOLD_HOME"] = os.path.join(WORK, "twofold")
     os.environ["TWOFOLD_RPC_URL"] = "http://127.0.0.1:18443"
     os.environ["TWOFOLD_RPC_COOKIE"] = COOKIE
@@ -238,73 +343,68 @@ def main():
         secret = phrase_to_tprv(phrase)
         holders[name] = {"public": public, "secret": secret, "fp": public[0][1:9]}
     check("`twofold keygen` saves a 12-word recovery phrase for each holder", True)
-    twofold(
-        "create", "--device-delay", str(DEVICE_DELAY), "--heir-delay", str(HEIR_DELAY),
-        "--checkin-interval", "5", "--checkin-margin", "2",
-        "--phone", holders["phone"]["public"][0], "--device", holders["device"]["public"][0],
-        "--device-r", holders["device"]["public"][1], "--helper", holders["helper"]["public"][0],
-        "--heir", holders["heir"]["public"][0],
-    )
+    keys = ["--phone", holders["phone"]["public"][0], "--device", holders["device"]["public"][0],
+            "--helper", holders["helper"]["public"][0]]
+    twofold("create", *keys, "--heir", holders["heir"]["public"][0], "--heir-delay", str(HEIR_DELAY),
+            "--checkin-interval", "10", "--checkin-margin", "5")
     descriptor = twofold("export")
-    receive_desc, change_desc = twofold("export", "--split").splitlines()
-    print(f"Exported descriptor: {descriptor}")
+    print(f"Exported descriptor, with a beneficiary: {descriptor}")
     twofold_receive = [twofold("address") for _ in range(5)]
+    plain_dir = os.path.join(WORK, "twofold-plain")
+    twofold("--wallet-dir", plain_dir, "create", *keys)
+    plain_descriptor = twofold("--wallet-dir", plain_dir, "export")
+    print(f"Exported descriptor, no beneficiary: {plain_descriptor}")
+    plain_receive = [twofold("--wallet-dir", plain_dir, "address") for _ in range(5)]
 
-    # --- Bitcoin Core wallets: one watch-only, one signer per holder ----------
-    cli("-named", "createwallet", "wallet_name=watch", "disable_private_keys=true", "blank=true")
-    cli("importdescriptors", json.dumps([
-        {"desc": receive_desc, "active": True, "internal": False, "range": [0, 200], "timestamp": "now"},
-        {"desc": change_desc, "active": True, "internal": True, "range": [0, 200], "timestamp": "now"},
-    ]), wallet="watch")
-    body = descriptor.split("#")[0]
-    key = re.compile(r"\[([0-9a-f]{8})/87'/1'/(\d+)'\]tpub[1-9A-HJ-NP-Za-km-z]+/<0;1>/\*")
-    for name, h in holders.items():
-        private = key.sub(lambda m: f"{h['secret']}/87h/1h/{m.group(2)}h/<0;1>/*" if m.group(1) == h["fp"] else m.group(0), body)
-        imports = []
-        for branch, internal in (("0", False), ("1", True)):
-            single = private.replace("<0;1>", branch)
-            checksum = cli_json("getdescriptorinfo", stdin_args=[single])["checksum"]
-            imports.append({"desc": f"{single}#{checksum}", "active": True, "internal": internal, "range": [0, 200], "timestamp": "now"})
-        cli("-named", "createwallet", f"wallet_name={name}", "blank=true")
-        res = cli_json("importdescriptors", stdin_args=[json.dumps(imports)], wallet=name)
-        if not all(r.get("success") for r in res):
-            raise RuntimeError(f"importing {name}'s key into Bitcoin Core failed")  # no detail: it could echo the key
-        # The master key made here must be the one behind Twofold's public keys.
-        derived = cli_json("listdescriptors", wallet=name)["descriptors"]
-        if not any(f"[{h['fp']}/87h/1h/0h]" in d["desc"] or f"[{h['fp']}/87'/1'/0']" in d["desc"] for d in derived):
-            raise RuntimeError(f"Bitcoin Core's key for {name} isn't the one in Twofold's public key")
+    # --- Bitcoin Core wallets: watch-only and signers, for each shape ----------
+    receive_desc, change_desc, signers = core_wallets("", holders, descriptor)
+    plain_receive_desc, _, plain_signers = core_wallets("plain-", holders, plain_descriptor)
     check("Bitcoin Core's keys, made from each phrase by Python's standard library, match Twofold's public keys", True)
 
-    # --- Liana imports the descriptor ------------------------------------------
-    with open(LIANA_CONF, "w") as f:
-        f.write(
-            f'data_dir = "{os.path.join(WORK, "liana")}"\nlog_level = "info"\nmain_descriptor = "{descriptor}"\n\n'
-            f'[bitcoin_config]\nnetwork = "regtest"\npoll_interval_secs = 1\n\n'
-            f'[bitcoind_config]\naddr = "127.0.0.1:18443"\ncookie_path = "{COOKIE}"\n'
-        )
-    lianad_log = open(os.path.join(WORK, "lianad.log"), "w")
-    lianad = subprocess.Popen([LIANAD, "--conf", LIANA_CONF], stdout=lianad_log, stderr=subprocess.STDOUT)
+    def core_psbt(watch, outpoint_, sequence=None):
+        txid_, vout = outpoint_.split(":")
+        spend_input = {"txid": txid_, "vout": int(vout)}
+        if sequence is not None:
+            spend_input["sequence"] = sequence
+        return cli_json("walletcreatefundedpsbt", json.dumps([spend_input]), json.dumps([{burn: 0.5}]), "0",
+                        json.dumps({"add_inputs": False, "fee_rate": 2}), "true", wallet=watch)["psbt"]
+
+    def core_finalize(psbt_):
+        final = cli_json("finalizepsbt", psbt_)
+        if not final.get("complete"):
+            raise RuntimeError("Bitcoin Core couldn't finalize the spend")
+        return final["hex"]
+
+    def core_complete(psbt_):
+        return cli_json("finalizepsbt", psbt_).get("complete", False)
+
+    def node_accepts(hex_):
+        r = cli_json("testmempoolaccept", json.dumps([hex_]))[0]
+        return r["allowed"], r.get("reject-reason", "")
+
+    # =========================== A. With a beneficiary ==========================
+    lianad, LIANA_CONF = start_liana("liana", descriptor)
     try:
         wait_for_liana_sync()
         print(f"Liana {liana('getinfo')['version']} running on the exported descriptor")
-        check("Liana v15.0 imports the descriptor from `twofold export`", True)
+        check("A. Liana v15.0 imports the descriptor with a beneficiary from `twofold export`", True)
 
         listed = liana("listaddresses", 0, 5)["addresses"]
         liana_receive = [a["receive"] for a in listed]
         liana_change = [a["change"] for a in listed]
         core_receive = cli_json("deriveaddresses", receive_desc, "[0,4]")
         core_change = cli_json("deriveaddresses", change_desc, "[0,4]")
-        check("Liana's first 5 receive addresses match `twofold address`", liana_receive == twofold_receive)
-        check("Liana's first 5 receive and change addresses match Bitcoin Core's", (liana_receive, liana_change) == (core_receive, core_change))
+        check("A. Liana's first 5 receive addresses match `twofold address`", liana_receive == twofold_receive)
+        check("A. Liana's first 5 receive and change addresses match Bitcoin Core's", (liana_receive, liana_change) == (core_receive, core_change))
 
-        # --- Fund: one block reward to a Liana address, matured -----------------
+        # --- Fund: one block reward to Liana, one to plain Savings, matured ----
         mine(1, liana("getnewaddress")["address"])
+        mine(1, plain_receive[0])
         mine(100, burn)
         wait_for_liana_sync()
 
         # --- Liana, 2 of 3: PHONE + HELPER. Also creates the coins for the rest -
-        targets = {label: liana("getnewaddress")["address"] for label in
-                   ["liana-device", "liana-heir", "core-2of3", "core-device", "core-heir"]}
+        targets = {label: liana("getnewaddress")["address"] for label in ["liana-heir", "core-2of3", "core-heir", "core-device"]}
         destinations = {burn: SAT, **{address: SAT for address in targets.values()}}
         created = liana("createspend", destinations, [], 2)
         if "psbt" not in created:
@@ -318,7 +418,7 @@ def main():
         mine(1, burn)
         wait_for_liana_sync()
         sequence, witness = describe_spend(txid)
-        check("Liana spends with 2 of 3 keys (PHONE + HELPER, signed by Liana's HotSigner)",
+        check("A. Liana spends with 2 of 3 keys (PHONE + HELPER, signed by Liana's HotSigner)",
               mined_in_tip(txid) and witness == 5 and sequence >= 0xFFFFFFFD, f"txid {txid}")
         funded_at = height()
         decoded = cli_json("getrawtransaction", txid, "true", cli("getbestblockhash"))
@@ -326,35 +426,16 @@ def main():
                     for label, address in targets.items()}
 
         # --- Bitcoin Core alone, 2 of 3: PHONE + DEVICE -------------------------
-        def core_psbt(label, sequence=None):
-            txid_, vout = outpoint[label].split(":")
-            spend_input = {"txid": txid_, "vout": int(vout)}
-            if sequence is not None:
-                spend_input["sequence"] = sequence
-            return cli_json("walletcreatefundedpsbt", json.dumps([spend_input]), json.dumps([{burn: 0.5}]), "0",
-                            json.dumps({"add_inputs": False, "fee_rate": 2}), "true", wallet="watch")["psbt"]
-
-        def core_finalize(psbt_):
-            final = cli_json("finalizepsbt", psbt_)
-            if not final.get("complete"):
-                raise RuntimeError("Bitcoin Core couldn't finalize the spend")
-            return final["hex"]
-
-        def node_accepts(hex_):
-            r = cli_json("testmempoolaccept", json.dumps([hex_]))[0]
-            return r["allowed"], r.get("reject-reason", "")
-
-        psbt = core_psbt("core-2of3")
+        psbt = core_psbt("watch", outpoint["core-2of3"])
         for holder in ("phone", "device"):
-            psbt = sign(psbt, holder)
-        hex_ = core_finalize(psbt)
-        txid = cli("sendrawtransaction", hex_)
+            psbt = sign(psbt, signers[holder])
+        txid = cli("sendrawtransaction", core_finalize(psbt))
         mine(1, burn)
         sequence, witness = describe_spend(txid)
-        check("Bitcoin Core alone spends with 2 of 3 keys (PHONE + DEVICE)",
+        check("A. Bitcoin Core alone spends with 2 of 3 keys (PHONE + DEVICE)",
               mined_in_tip(txid) and witness == 5 and sequence >= 0xFFFFFFFD, f"txid {txid}")
 
-        # --- Delayed paths, each refused one block early, then accepted ---------
+        # --- The heir path: refused one block early, then accepted -------------
         def age():
             return height() - funded_at + 1  # confirmations; a spend in the next block sees this many
 
@@ -362,41 +443,72 @@ def main():
             mine(n - age(), burn)
             wait_for_liana_sync()
 
-        for path, holder, delay in (("device", "device", DEVICE_DELAY), ("heir", "heir", HEIR_DELAY)):
-            age_to(delay - 1)
-            try:
-                liana("createrecovery", burn, 2, delay, [outpoint[f"liana-{path}"]])
-                check(f"Liana refuses {path.upper()} alone one block early ({delay - 1} of {delay} confirmations)", False, "it built the spend")
-            except LianaError as e:
-                check(f"Liana refuses {path.upper()} alone one block early ({delay - 1} of {delay} confirmations)", True, f'"{e}"')
-            early = core_psbt(f"core-{path}", sequence=delay)
-            early = sign(early, holder)
-            allowed, reason = node_accepts(core_finalize(early))
-            check(f"Bitcoin Core alone: the node refuses {path.upper()} alone one block early",
-                  not allowed and "non-BIP68-final" in reason, f'"{reason}"')
+        delay = HEIR_DELAY
+        age_to(delay - 1)
+        try:
+            liana("createrecovery", burn, 2, delay, [outpoint["liana-heir"]])
+            check(f"A. Liana refuses HEIR alone one block early ({delay - 1} of {delay} confirmations)", False, "it built the spend")
+        except LianaError as e:
+            check(f"A. Liana refuses HEIR alone one block early ({delay - 1} of {delay} confirmations)", True, f'"{e}"')
+        early = sign(core_psbt("watch", outpoint["core-heir"], sequence=delay), signers["heir"])
+        allowed, reason = node_accepts(core_finalize(early))
+        check("A. Bitcoin Core alone: the node refuses HEIR alone one block early",
+              not allowed and "non-BIP68-final" in reason, f'"{reason}"')
 
-            # Exactly at the delay: Liana's and Core's spends both go out, then one block.
-            age_to(delay)
-            psbt = liana("createrecovery", burn, 2, delay, [outpoint[f"liana-{path}"]])["psbt"]
-            psbt = liana_sign(psbt, holder)
-            liana("updatespend", psbt)
-            liana_txid = txid_of(psbt)
-            liana("broadcastspend", liana_txid)
+        # Exactly at the delay: Liana's and Core's spends both go out, then one block.
+        age_to(delay)
+        psbt = liana("createrecovery", burn, 2, delay, [outpoint["liana-heir"]])["psbt"]
+        psbt = liana_sign(psbt, "heir")
+        liana("updatespend", psbt)
+        liana_txid = txid_of(psbt)
+        liana("broadcastspend", liana_txid)
 
-            hex_ = core_finalize(sign(core_psbt(f"core-{path}", sequence=delay), holder))
-            allowed, reason = node_accepts(hex_)
-            core_txid = cli("sendrawtransaction", hex_) if allowed else None
+        hex_ = core_finalize(sign(core_psbt("watch", outpoint["core-heir"], sequence=delay), signers["heir"]))
+        allowed, reason = node_accepts(hex_)
+        core_txid = cli("sendrawtransaction", hex_) if allowed else None
 
-            mine(1, burn)
-            wait_for_liana_sync()
-            check(f"Liana spends with {path.upper()} alone at exactly {delay} confirmations (signed by Liana's HotSigner)",
-                  mined_in_tip(liana_txid) and describe_spend(liana_txid) == (delay, 3), f"txid {liana_txid}")
-            check(f"Bitcoin Core alone spends with {path.upper()} alone at exactly {delay} confirmations",
-                  bool(core_txid) and mined_in_tip(core_txid) and describe_spend(core_txid) == (delay, 3),
-                  f"txid {core_txid}" if core_txid else f'"{reason}"')
+        mine(1, burn)
+        wait_for_liana_sync()
+        check(f"A. Liana spends with HEIR alone at exactly {delay} confirmations (signed by Liana's HotSigner)",
+              mined_in_tip(liana_txid) and describe_spend(liana_txid) == (delay, 3), f"txid {liana_txid}")
+        check(f"A. Bitcoin Core alone spends with HEIR alone at exactly {delay} confirmations",
+              bool(core_txid) and mined_in_tip(core_txid) and describe_spend(core_txid) == (delay, 3),
+              f"txid {core_txid}" if core_txid else f'"{reason}"')
+
+        # --- DEVICE alone, past every delay: no path takes it --------------------
+        alone = sign(core_psbt("watch", outpoint["core-device"]), signers["device"])
+        check(f"A. DEVICE alone is refused at {age()} confirmations: there is no card-only path",
+              not core_complete(alone), "Bitcoin Core can't complete the spend")
     finally:
-        lianad.terminate()
-        lianad.wait(timeout=30)
+        stop(lianad)
+
+    # =========================== B. No beneficiary yet ==========================
+    check("B. Savings with no beneficiary exports as wsh(sortedmulti(2, …)), the standard P2WSH multisig format",
+          plain_descriptor.startswith("wsh(sortedmulti(2,") and "older(" not in plain_descriptor)
+    check("B. The export has the form Sparrow's own descriptor parser imports (checked against its source, not run)",
+          sparrow_reads(plain_descriptor))
+    core_plain = cli_json("deriveaddresses", plain_receive_desc, "[0,4]")
+    check("B. Bitcoin Core derives the same first 5 addresses as `twofold address`", core_plain == plain_receive)
+
+    try:
+        plain_coin = next(u for u in cli_json("listunspent", "1", "9999999", "[]", "true", wallet="plain-watch"))
+        plain_outpoint = f"{plain_coin['txid']}:{plain_coin['vout']}"
+        for holder in ("phone", "device", "helper"):
+            alone = sign(core_psbt("plain-watch", plain_outpoint, sequence=HEIR_DELAY), plain_signers[holder])
+            if core_complete(alone):
+                check(f"B. {holder.upper()} alone is refused", False, "Bitcoin Core completed it")
+        check(f"B. Bitcoin Core alone: no single key spends it, even with a {HEIR_DELAY}-block sequence on a coin over 100 blocks old", True)
+
+        psbt = core_psbt("plain-watch", plain_outpoint)
+        for holder in ("phone", "device"):
+            psbt = sign(psbt, plain_signers[holder])
+        txid = cli("sendrawtransaction", core_finalize(psbt))
+        mine(1, burn)
+        sequence, witness = describe_spend(txid)
+        # P2WSH 2-of-3: CHECKMULTISIG's empty item, two signatures, the script.
+        check("B. Bitcoin Core alone spends it with 2 of 3 keys (PHONE + DEVICE)",
+              mined_in_tip(txid) and witness == 4 and sequence >= 0xFFFFFFFD, f"txid {txid}")
+    finally:
         run([os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "stop"])
 
 

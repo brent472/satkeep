@@ -27,15 +27,9 @@ impl Holders {
         Self { phone: new_key(), device: new_key(), helper: new_key(), heir: new_key() }
     }
 
-    /// PHONE, DEVICE, DEVICE_R, HELPER, HEIR, as `create` takes them.
-    pub fn public_keys(&self) -> [String; 5] {
-        [
-            self.phone.public_key(0),
-            self.device.public_key(0),
-            self.device.public_key(1),
-            self.helper.public_key(0),
-            self.heir.public_key(0),
-        ]
+    /// PHONE, DEVICE, HELPER, HEIR, as `create` takes them.
+    pub fn public_keys(&self) -> [String; 4] {
+        [self.phone.public_key(0), self.device.public_key(0), self.helper.public_key(0), self.heir.public_key(0)]
         .map(|k| k.to_string())
     }
 }
@@ -116,29 +110,27 @@ impl<'a> Cli<'a> {
         expect_ok(&args, self.run_with_stdin(&args, &holder.to_secret_string()))
     }
 
-    /// `twofold create` with these holders' public keys. Check-ins every
-    /// half the device delay, with a 1-block margin.
-    pub fn create(&self, holders: &Holders, device_delay: u16, heir_delay: u16) -> String {
-        self.create_with_checkin(holders, device_delay, heir_delay, device_delay / 2, 1)
+    /// `twofold create` with these holders' public keys and HEIR as the
+    /// beneficiary. Check-ins every half the heir delay, with a 1-block
+    /// margin.
+    pub fn create(&self, holders: &Holders, heir_delay: u16) -> String {
+        self.create_with_checkin(holders, heir_delay, heir_delay / 2, 1)
     }
 
-    pub fn create_with_checkin(
-        &self,
-        holders: &Holders,
-        device_delay: u16,
-        heir_delay: u16,
-        checkin_interval: u16,
-        checkin_margin: u16,
-    ) -> String {
-        let [dd, hd, ci, cm] = [device_delay, heir_delay, checkin_interval, checkin_margin].map(|n| n.to_string());
+    pub fn create_with_checkin(&self, holders: &Holders, heir_delay: u16, checkin_interval: u16, checkin_margin: u16) -> String {
+        let [hd, ci, cm] = [heir_delay, checkin_interval, checkin_margin].map(|n| n.to_string());
         let keys = holders.public_keys();
         self.ok(&[
             "create", "--network", "regtest",
-            "--phone", &keys[0], "--device", &keys[1], "--device-r", &keys[2],
-            "--helper", &keys[3], "--heir", &keys[4],
-            "--device-delay", &dd, "--heir-delay", &hd,
-            "--checkin-interval", &ci, "--checkin-margin", &cm,
+            "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2], "--heir", &keys[3],
+            "--heir-delay", &hd, "--checkin-interval", &ci, "--checkin-margin", &cm,
         ])
+    }
+
+    /// `twofold create` with no beneficiary: plain 2 of 3.
+    pub fn create_plain(&self, holders: &Holders) -> String {
+        let keys = holders.public_keys();
+        self.ok(&["create", "--network", "regtest", "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2]])
     }
 
     pub fn wallet_dir(&self) -> std::path::PathBuf {

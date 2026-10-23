@@ -102,7 +102,7 @@ payload:
   1. Make a **new** data key and re-encrypt under it for the new device.
   2. Write the new file, delete the old one, and check that no old copy is left where the API lets us look.
   3. The old device's wrap is useless against the new file. Old copies are another matter (section 7.3).
-- **Check-in** (every 6 months).
+- **Check-in** (once a year, with a beneficiary).
   - The check-in already needs two keys. When the second key is one of them, the app also unlocks the backup's header test value, which proves the backup still opens.
   - That catches a device whose firmware changed how it answers (section 3.2) before it's needed.
 

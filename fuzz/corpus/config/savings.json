@@ -1,13 +1,11 @@
 {
   "network": "regtest",
-  "device_delay": 10,
-  "heir_delay": 20,
   "phone": "[37435aca/48'/1'/0'/2']tpubDEcZc7Um5KPZLF11qLYNgcteH1PH7CSKtTFTuTYuL6jqsP73gBHvLY42FuyvkTWN8C4q1YiDAUAeEuA78CDuuD2x17UKJymkBacCJz8P6NU/<0;1>/*",
   "device": "[05813578/48'/1'/0'/2']tpubDEymPgUFZDLzEePYsai2ZXc9ntsnZBohJvGuHgpZsY5bsUDJMD6de6tevVd1z1EdGPYLdNaPvD4Ck7NgcteYDUPWwExvscfaSUu19k48Mvp/<0;1>/*",
-  "device_r": "[172ba1bc/48'/1'/0'/2']tpubDEgTZEAraUrKmnbyKJuXYGFPzNCm82bjMqd2GRy2HKviJ1moLtEZrHoUeG2o6uyWLEGx4yBWpctAmxcBx1b5nrrrBo5LjskRxRMDmwkuKxq/<0;1>/*",
   "helper": "[da2ee873/48'/1'/0'/2']tpubDEbXY6RbN9mxAvQW797WxReGGkrdyRfdYcehVVaQQcQ3kyfhxSMcnU9qGpUVRHXXALvBtc99jcuxx5tkzcLaJbAukSNpP9h2ti4XFRosv1g/<0;1>/*",
   "heir": "[3b1913e1/48'/1'/0'/2']tpubDFeZ2ezf4VUuTnjdhxJ1DKhLa2t6vzXZNz8NnEgeT2PN4pPqTCTeWUcaxKHPJcf1C8WzkLA71zSjDwuo4zqu4kkiL91ZUmJydC8f1gx89wM/<0;1>/*",
+  "heir_delay": 20,
   "birthday": 0,
-  "checkin_interval": 5,
-  "checkin_margin": 2
+  "checkin_interval": 10,
+  "checkin_margin": 5
 }

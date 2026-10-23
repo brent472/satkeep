@@ -26,7 +26,7 @@ fn a_recovery_phrase_is_refused_on_the_command_line_and_never_repeated() {
         vec!["sign", "--psbt", &psbt, &joined],
         vec!["sign", "--psbt", &psbt, &key],
         unquoted,
-        vec!["create", "--phone", &key, "--device", "x", "--device-r", "x", "--helper", "x", "--heir", "x"],
+        vec!["create", "--phone", &key, "--device", "x", "--helper", "x", "--heir", "x"],
     ];
     for args in attempts {
         // `run` also fails the test if the output contains words of the key.
@@ -74,7 +74,7 @@ fn keygen_defaults_to_twofold_home_and_writes_a_test_key() {
     assert_eq!(saved.split_whitespace().count(), 12, "the file holds a 12-word recovery phrase");
     let key = HolderKey::from_secret_str(&saved).unwrap();
     common::remember(&key);
-    assert!(out.contains(&key.public_key(0).to_string()) && out.contains(&key.public_key(1).to_string()));
+    assert!(out.contains(&key.public_key(0).to_string()) && !out.contains(&key.public_key(1).to_string()), "one public key: {out}");
 
     let signet = expect_ok(&["keygen"], cli.run_in_home(&["--network", "signet", "keygen", "--name", "phone"]));
     assert!(signet.contains(&cli.home().join("signet").join("keys").join("phone.key").display().to_string()));
@@ -119,17 +119,8 @@ fn wallet_files_default_to_twofold_home() {
     let node = Node::start();
     let cli = Cli::new(&node);
     let holders = Holders::generate();
-    let keys = [
-        holders.phone.public_key(0),
-        holders.device.public_key(0),
-        holders.device.public_key(1),
-        holders.helper.public_key(0),
-        holders.heir.public_key(0),
-    ]
-    .map(|k| k.to_string());
-    let create = [
-        "create", "--phone", &keys[0], "--device", &keys[1], "--device-r", &keys[2], "--helper", &keys[3], "--heir", &keys[4],
-    ];
+    let keys = holders.public_keys();
+    let create = ["create", "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2], "--heir", &keys[3]];
     let out = expect_ok(&create, cli.run_in_home(&create));
     let dir = cli.home().join("regtest");
     assert!(out.contains(&dir.display().to_string()), "{out}");

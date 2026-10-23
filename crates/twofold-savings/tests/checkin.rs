@@ -1,4 +1,4 @@
-//! The check-in on regtest: it restarts both delays, must include every
+//! The check-in on regtest: it restarts the heir delay, must include every
 //! coin, and can only go through the 2-of-3 path.
 
 mod common;
@@ -28,13 +28,13 @@ fn check_in(savings: &mut Savings, node: &Node) -> (Transaction, u32) {
 }
 
 #[test]
-fn a_check_in_restarts_both_delays_for_the_new_coin() {
+fn a_check_in_restarts_the_heir_delay_for_the_new_coin() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     let first = savings.fund(&node, btc(1.0));
     savings.fund(&node, btc(0.5));
-    // One block before the first coin's device path would open.
-    savings.age_to(&node, first, 9);
+    // One block before the first coin's heir path would open.
+    savings.age_to(&node, first, 19);
 
     let (tx, checked_in_at) = check_in(&mut savings, &node);
     assert_eq!(tx.input.len(), 2, "both coins went in");
@@ -42,22 +42,13 @@ fn a_check_in_restarts_both_delays_for_the_new_coin() {
     assert_eq!(savings.path_used(&tx), Path::TwoOfThree);
     assert_eq!(savings.wallet.list_unspent().count(), 1);
 
-    // The first coin's device path would be open now. The new coin's isn't:
-    // both delays start again from its own confirmation.
+    // The first coin's heir path would be open now. The new coin's isn't:
+    // the delay starts again from its own confirmation.
     let to = node.new_address();
-    assert!(matches!(savings.build(Path::Device, &to), Err(Error::TooEarly { needed: 10, has: 1, .. })));
     assert!(matches!(savings.build(Path::Heir, &to), Err(Error::TooEarly { needed: 20, has: 1, .. })));
-    let mut early = savings.build_unchecked(Path::Device, &to);
-    savings.sign(&mut early, &[Holder::Device]);
-    assert!(node.accepts(&savings.forced(&early, Path::Device)).unwrap_err().contains("non-BIP68-final"));
-
-    // DEVICE alone opens at exactly 10 confirmations of the new coin.
-    savings.age_to(&node, checked_in_at, 9);
-    assert!(matches!(savings.build(Path::Device, &to), Err(Error::TooEarly { has: 9, .. })));
-    savings.age_to(&node, checked_in_at, 10);
-    let mut device = savings.build(Path::Device, &to).unwrap();
-    savings.sign(&mut device, &[Holder::Device]);
-    assert_eq!(node.accepts(&savings.finalize(&device).unwrap()), Ok(()));
+    let mut early = savings.build_unchecked(Path::Heir, &to);
+    savings.sign(&mut early, &[Holder::Heir]);
+    assert!(node.accepts(&savings.forced(&early, Path::Heir)).unwrap_err().contains("non-BIP68-final"));
 
     // HEIR alone at exactly 20.
     savings.age_to(&node, checked_in_at, 19);
@@ -71,7 +62,7 @@ fn a_check_in_restarts_both_delays_for_the_new_coin() {
 #[test]
 fn a_check_in_that_leaves_out_a_coin_is_refused() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let delays = savings.delays();
     let stale = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
@@ -108,7 +99,7 @@ fn a_check_in_that_leaves_out_a_coin_is_refused() {
 #[test]
 fn a_check_in_must_pay_only_back_into_savings() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let delays = savings.delays();
     let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
@@ -123,31 +114,43 @@ fn a_check_in_must_pay_only_back_into_savings() {
 #[test]
 fn a_check_in_can_only_use_the_two_of_three_path() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     let funded = savings.fund(&node, btc(1.0));
-    savings.age_to(&node, funded, 20); // both delayed paths open
+    savings.age_to(&node, funded, 20); // the heir path is open
     let delays = savings.delays();
     let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
     assert_eq!(spend::path_of(&full, delays), Some(Path::TwoOfThree));
 
-    // A self-send through a delayed path, marked as a check-in, is refused.
+    // A self-send through the heir path, marked as a check-in, is refused.
     let own = savings.wallet.reveal_next_address(KeychainKind::External).address;
-    for path in [Path::Device, Path::Heir] {
-        let mut delayed = savings.build_unchecked(path, &own);
-        delayed.proprietary = full.proprietary.clone();
-        assert!(matches!(check_checkin(&savings.wallet, &delayed, delays), Err(Error::CheckinUsesDelayedPath)));
-    }
+    let mut delayed = savings.build_unchecked(Path::Heir, &own);
+    delayed.proprietary = full.proprietary.clone();
+    assert!(matches!(check_checkin(&savings.wallet, &delayed, delays), Err(Error::CheckinUsesDelayedPath)));
 
     // The check-in itself carries no delay in its sequence, so even with the
-    // delayed paths open, DEVICE or HEIR alone can't approve it. The network
-    // agrees: a hand-built delayed-leaf spend of it fails on the script.
-    for (holder, path) in [(Holder::Device, Path::Device), (Holder::Heir, Path::Heir)] {
+    // heir path open, HEIR alone can't approve it, and nor can DEVICE alone.
+    // The network agrees: a hand-built spend of it fails on the script.
+    for (holder, path) in [(Holder::Heir, Path::Heir), (Holder::Device, Path::TwoOfThree)] {
         let mut alone = full.clone();
         savings.sign(&mut alone, &[holder]);
         assert!(matches!(savings.finalize(&alone), Err(Error::NotEnoughApprovals)), "{holder:?}");
         let reason = node.accepts(&savings.forced(&alone, path)).unwrap_err();
         assert!(reason.contains("script-verify-flag-failed"), "{holder:?}: {reason}");
     }
+}
+
+#[test]
+fn savings_with_no_beneficiary_has_no_check_in() {
+    // No delayed path, so nothing to restart: a check-in is refused, before
+    // and after any coin has waited.
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::none());
+    let funded = savings.fund(&node, btc(1.0));
+    savings.age_to(&node, funded, 30);
+    let delays = savings.delays();
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::NoCheckinWithoutHeir)));
+    let any = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
+    assert!(matches!(check_checkin(&savings.wallet, &any, delays), Err(Error::NoCheckinWithoutHeir)));
 }
 
 #[test]
@@ -158,7 +161,7 @@ fn an_immature_coinbase_coin_holds_up_the_check_in() {
     use bdk_bitcoind_rpc::bitcoincore_rpc::RpcApi;
     use serde_json::{Value, json};
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
     node.rpc().call::<Value>("generatetoaddress", &[json!(1), json!(address.to_string())]).unwrap();
@@ -178,7 +181,7 @@ fn an_unconfirmed_incoming_coin_neither_blocks_nor_joins_a_check_in() {
     // replaceable transaction. If the check-in had to include that coin, the
     // sender could stall it or knock it out by replacing the coin.
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
     node.send_to(&address, btc(0.5)); // not mined
@@ -213,7 +216,7 @@ fn an_unconfirmed_incoming_coin_neither_blocks_nor_joins_a_check_in() {
 #[test]
 fn a_confirmed_coin_left_out_is_still_refused() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     savings.fund(&node, btc(0.5));
     let delays = savings.delays();
@@ -241,7 +244,7 @@ fn a_confirmed_coin_left_out_is_still_refused() {
 #[test]
 fn no_confirmed_coins_means_nothing_to_check_in() {
     let node = Node::start();
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
     node.send_to(&address, btc(1.0)); // not mined
     savings.sync(&node);

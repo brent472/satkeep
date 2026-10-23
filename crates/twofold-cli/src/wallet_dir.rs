@@ -42,50 +42,68 @@ impl TestNetwork {
 }
 
 /// What `savings.json` holds: everything needed to rebuild the policy.
+///
+/// `heir` and `heir_delay` are both there in Savings with a beneficiary and
+/// both missing in Savings with none.
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub network: TestNetwork,
-    pub device_delay: u16,
-    pub heir_delay: u16,
     pub phone: String,
     pub device: String,
-    pub device_r: String,
     pub helper: String,
-    pub heir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heir_delay: Option<u16>,
     /// Block height when the wallet was created. Sync starts here.
     pub birthday: u32,
-    /// Blocks between check-ins. Missing in wallets made before check-ins
-    /// existed; see [`Config::checkin_rule`].
-    #[serde(default)]
+    /// Blocks between check-ins, with a beneficiary. Missing in wallets made
+    /// before check-ins existed; see [`Config::checkin_rule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkin_interval: Option<u16>,
-    /// Blocks the interval must leave before the device delay.
-    #[serde(default)]
+    /// Blocks the interval must leave before the heir delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkin_margin: Option<u16>,
+    /// Only in wallets made before the card-only delayed path was removed.
+    /// Read so such a wallet gets a clear error; never written.
+    #[serde(default, skip_serializing)]
+    pub device_r: Option<String>,
 }
 
 impl Config {
     pub fn policy(&self) -> Result<SavingsPolicy> {
+        if self.device_r.is_some() {
+            bail!(
+                "this wallet was made with the card-only delayed path (DEVICE_R), which Twofold no longer has; \
+                 make a new wallet with `twofold create` (test networks only, so its coins aren't real)"
+            );
+        }
         let key = |name: &str, text: &str| -> Result<DescriptorPublicKey> {
             text.parse().map_err(|e| anyhow::anyhow!("the {name} key isn't a valid public key: {e}"))
         };
-        let keys = SavingsKeys::new(
-            key("PHONE", &self.phone)?,
-            key("DEVICE", &self.device)?,
-            key("DEVICE_R", &self.device_r)?,
-            key("HELPER", &self.helper)?,
-            key("HEIR", &self.heir)?,
-        )?;
-        let delays = Delays::new(self.device_delay, self.heir_delay)?;
-        Ok(SavingsPolicy::new(keys, delays, self.network.network())?)
+        let heir = self.heir.as_deref().map(|h| key("HEIR", h)).transpose()?;
+        let keys = SavingsKeys::new(key("PHONE", &self.phone)?, key("DEVICE", &self.device)?, key("HELPER", &self.helper)?, heir)?;
+        Ok(SavingsPolicy::new(keys, self.delays()?, self.network.network())?)
     }
 
-    /// The check-in rule. A wallet made before check-ins existed gets the
-    /// defaults, if they fit its device delay.
-    pub fn checkin_rule(&self) -> Result<CheckinRule> {
-        let delays = Delays::new(self.device_delay, self.heir_delay)?;
+    pub fn delays(&self) -> Result<Delays> {
+        Ok(match self.heir_delay {
+            Some(blocks) => Delays::with_heir(blocks)?,
+            None => Delays::none(),
+        })
+    }
+
+    /// The check-in rule, or `None` for Savings with no beneficiary, which
+    /// needs no check-in. A wallet made before check-ins existed gets the
+    /// defaults, if they fit its heir delay.
+    pub fn checkin_rule(&self) -> Result<Option<CheckinRule>> {
+        let delays = self.delays()?;
+        if delays.heir().is_none() {
+            return Ok(None);
+        }
         let interval = self.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL);
         let margin = self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN);
-        CheckinRule::new(interval, margin, delays).map_err(|e| {
+        CheckinRule::new(interval, margin, delays).map(Some).map_err(|e| {
             if self.checkin_interval.is_none() {
                 anyhow::anyhow!("this wallet has no check-in interval set and the defaults don't fit it ({e})")
             } else {

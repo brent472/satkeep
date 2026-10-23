@@ -1,6 +1,6 @@
 # Twofold — working rules
 
-Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus delayed recovery and inheritance paths. Full spec: `docs/master-brief.md` in the private repo `brent472/twofold-private` (clone it beside this repo, as `../twofold-private`, to read it). Current task: `docs/milestone-1.md`.
+Twofold is a phone-first bitcoin self-custody wallet. The user sees one balance: a small everyday pocket on the phone key (up to a cap the owner sets) for Face ID payments, and Savings, which needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus a delayed inheritance path once a beneficiary is added. Full spec: `docs/master-brief.md` in the private repo `brent472/twofold-private` (clone it beside this repo, as `../twofold-private`, to read it). Current task: `docs/milestone-1.md`.
 
 ## Non-negotiables
 
@@ -10,8 +10,8 @@ Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone
 - **No key telemetry.** Nothing that could reveal key material is logged, printed in CI, or sent anywhere.
 - **Write assumptions down.** Every assumption about policy, timelocks, fees or signing goes in the README of the crate or in `docs/`.
 - **The helper can never spend alone.** Any design or code where one key — including the helper — can move Savings without a delay is a bug.
-- **Timelocks are placeholders** until an outside Bitcoin reviewer signs off (9 months ≈ 39,420 blocks; 14 months ≈ 61,320 blocks; relative-timelock cap is 65,535 blocks). Keep them configurable.
-- **Check-in rule:** the refresh transaction must run sooner than the shortest delayed path (plan: every 6 months).
+- **Timelocks are placeholders** until an outside Bitcoin reviewer signs off (heir: 14 months ≈ 61,320 blocks; relative-timelock cap is 65,535 blocks; the 9-month card-only path was removed in brief 3.8). Keep them configurable.
+- **Check-in rule:** the refresh transaction must run sooner than the heir path (plan: once a year, one tap, never automatic).
 
 ## How we work
 
@@ -25,4 +25,4 @@ Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone
 
 - Product copy comes from Section 19 of the master brief (in the private repo `brent472/twofold-private`); don't invent UI wording.
 - Typography is Inter throughout; the brand sheet in `docs/brand/` is the visual master.
-- Plain words in the app: key, approve, network fee, Spending, Savings. No "multisig", "UTXO", "PSBT", "xpub" or "seed" in main flows.
+- Plain words in the app: key, approve, network fee, Savings, everyday payments. No "multisig", "UTXO", "PSBT", "xpub" or "seed" in main flows.

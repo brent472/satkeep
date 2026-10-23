@@ -13,7 +13,7 @@ use bdk_wallet::{KeychainKind, SignOptions, Wallet};
 use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use twofold_savings::bitcoin::{Address, Amount, FeeRate, Network, Transaction, Witness, XOnlyPublicKey};
-use twofold_savings::miniscript::{Miniscript, Tap};
+use twofold_savings::miniscript::{Miniscript, Segwitv0, Tap};
 use twofold_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
 
 /// Fixed fee rate for every test spend. Regtest has no fee estimates; this
@@ -22,8 +22,8 @@ pub const FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(2);
 
 pub use twofold_testenv::Node;
 
-/// The four holders in a Savings wallet. DEVICE holds two keys: account 0 for
-/// the 2-of-3 path and account 1 for its delayed path.
+/// The four holders. HEIR's key is only in the wallet when it has a
+/// beneficiary; in plain Savings, HEIR is a stranger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Holder {
     Phone,
@@ -48,17 +48,24 @@ pub struct Savings {
 }
 
 impl Savings {
+    /// Fresh keys. With an heir delay, Savings with a beneficiary; with
+    /// `Delays::none()`, plain 2 of 3.
     pub fn new(delays: Delays) -> Self {
-        let (phone, device, helper, heir) =
-            (HolderKey::generate(), HolderKey::generate(), HolderKey::generate(), HolderKey::generate());
-        let keys = SavingsKeys::new(
-            phone.public_key(0),
-            device.public_key(0),
-            device.public_key(1),
-            helper.public_key(0),
-            heir.public_key(0),
-        )
-        .unwrap();
+        let keys = [(); 4].map(|_| HolderKey::generate());
+        Self::from_keys(keys, delays)
+    }
+
+    /// The same PHONE, DEVICE and HELPER, and the same HEIR holder, as a
+    /// wallet with a beneficiary: what adding one moves Savings to.
+    pub fn with_heir_added(&self, heir_delay: u16) -> Self {
+        let copy = |k: &HolderKey| HolderKey::from_secret_str(&k.to_secret_string()).unwrap();
+        let keys = [copy(&self.phone), copy(&self.device), copy(&self.helper), copy(&self.heir)];
+        Self::from_keys(keys, Delays::with_heir(heir_delay).unwrap())
+    }
+
+    fn from_keys([phone, device, helper, heir]: [HolderKey; 4], delays: Delays) -> Self {
+        let heir_key = delays.heir().map(|_| heir.public_key(0));
+        let keys = SavingsKeys::new(phone.public_key(0), device.public_key(0), helper.public_key(0), heir_key).unwrap();
         let policy = SavingsPolicy::new(keys, delays, Network::Regtest).unwrap();
         let (receive, change) = policy.receive_and_change();
         let wallet = Wallet::create(receive.to_string(), change.to_string())
@@ -66,6 +73,17 @@ impl Savings {
             .create_wallet_no_persist()
             .unwrap();
         Self { policy, wallet, phone, device, helper, heir }
+    }
+
+    /// The paths this wallet has: 2 of 3, plus the heir path with a
+    /// beneficiary.
+    pub fn paths(&self) -> Vec<Path> {
+        if self.policy.has_heir() { vec![Path::TwoOfThree, Path::Heir] } else { vec![Path::TwoOfThree] }
+    }
+
+    /// The heir delay. Panics for plain Savings.
+    pub fn heir_delay(&self) -> u32 {
+        self.delays().heir().expect("a wallet with a beneficiary").into()
     }
 
     pub fn delays(&self) -> Delays {
@@ -184,7 +202,12 @@ impl Savings {
     /// Builds the spend by hand, sidestepping BDK and miniscript: puts
     /// whatever signatures the PSBT has for `path`'s leaf into a witness for
     /// that leaf, missing ones as empty, and lets the network judge it.
+    /// For P2WSH Savings (no beneficiary), the multisig script instead.
     pub fn forced(&self, psbt: &Psbt, path: Path) -> Transaction {
+        if !self.policy.has_heir() {
+            assert_eq!(path, Path::TwoOfThree, "P2WSH Savings has only the 2-of-3 path");
+            return self.forced_p2wsh(psbt);
+        }
         let mut tx = psbt.unsigned_tx.clone();
         for (i, input) in psbt.inputs.iter().enumerate() {
             let (control, (script, _)) = input
@@ -211,8 +234,46 @@ impl Savings {
         tx
     }
 
-    /// Which path a finalized Taproot script-path spend revealed.
+    /// The P2WSH 2-of-3 by hand: CHECKMULTISIG's dummy item, the signatures
+    /// the PSBT has in the script's key order, empty slots up to two, then
+    /// the script. With fewer than two real signatures the script fails.
+    fn forced_p2wsh(&self, psbt: &Psbt) -> Transaction {
+        let mut tx = psbt.unsigned_tx.clone();
+        for (i, input) in psbt.inputs.iter().enumerate() {
+            let script = input.witness_script.as_ref().unwrap_or_else(|| panic!("input {i} has no witness script"));
+            let ms = Miniscript::<twofold_savings::bitcoin::PublicKey, Segwitv0>::parse(script).unwrap();
+            let mut witness = Witness::new();
+            witness.push([]);
+            let mut slots = 0;
+            for key in ms.iter_pk() {
+                if let Some(sig) = input.partial_sigs.get(&key) {
+                    if slots < 2 {
+                        witness.push(sig.to_vec());
+                        slots += 1;
+                    }
+                }
+            }
+            for _ in slots..2 {
+                witness.push([]);
+            }
+            witness.push(script.as_bytes());
+            tx.input[i].witness = witness;
+        }
+        tx
+    }
+
+    /// Which path a finalized spend used: for Taproot, the leaf it revealed;
+    /// for P2WSH, always 2 of 3.
     pub fn path_used(&self, tx: &Transaction) -> Path {
+        if !self.policy.has_heir() {
+            let script = tx.input[0].witness.last().expect("a witness");
+            let ms = Miniscript::<twofold_savings::bitcoin::PublicKey, Segwitv0>::parse(
+                twofold_savings::bitcoin::Script::from_bytes(script),
+            )
+            .expect("a multisig witness script");
+            assert!(ms.to_string().starts_with("sortedmulti(2,") || ms.to_string().starts_with("multi(2,"), "{ms}");
+            return Path::TwoOfThree;
+        }
         let leaf = tx.input[0].witness.taproot_leaf_script().expect("a script-path spend");
         assert_eq!(leaf.version, LeafVersion::TapScript);
         self.leaf_of(leaf.script)
@@ -222,9 +283,7 @@ impl Savings {
         let ms = Miniscript::<XOnlyPublicKey, Tap>::parse(script).unwrap().to_string();
         if ms.starts_with("multi_a(2,") {
             Path::TwoOfThree
-        } else if ms.ends_with(&format!("older({}))", self.delays().device())) {
-            Path::Device
-        } else if ms.ends_with(&format!("older({}))", self.delays().heir())) {
+        } else if self.delays().heir().is_some_and(|hd| ms.ends_with(&format!("older({hd}))"))) {
             Path::Heir
         } else {
             panic!("unexpected leaf {ms}")
