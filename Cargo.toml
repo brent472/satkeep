@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/twofold-savings", "crates/twofold-testenv"]
+members = ["crates/twofold-cli", "crates/twofold-savings", "crates/twofold-testenv"]
 
 [workspace.package]
 edition = "2024"

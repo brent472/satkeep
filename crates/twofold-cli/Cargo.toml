@@ -1,0 +1,24 @@
+[package]
+name = "twofold-cli"
+version = "0.1.0"
+description = "Developer command-line tool for the Twofold Savings wallet. Test networks only."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "twofold"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+bdk_bitcoind_rpc.workspace = true
+bdk_wallet = { workspace = true, features = ["rusqlite"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+twofold-savings = { path = "../twofold-savings" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+twofold-testenv = { path = "../twofold-testenv" }
