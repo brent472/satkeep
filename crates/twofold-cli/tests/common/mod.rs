@@ -15,6 +15,10 @@ use tempfile::TempDir;
 use twofold_savings::{HolderKey, contains_recovery_phrase};
 pub use twofold_testenv::Node;
 
+/// The minimum heir delay the test wallets accept, far below the placeholder
+/// default, so regtest tests can use heir delays of a few blocks.
+pub const MIN_HEIR_DELAY: &str = "10";
+
 pub struct Holders {
     pub phone: HolderKey,
     pub device: HolderKey,
@@ -112,7 +116,7 @@ impl<'a> Cli<'a> {
 
     /// `twofold create` with these holders' public keys and HEIR as the
     /// beneficiary. Check-ins every half the heir delay, with a 1-block
-    /// margin.
+    /// margin. The minimum heir delay is lowered to [`MIN_HEIR_DELAY`].
     pub fn create(&self, holders: &Holders, heir_delay: u16) -> String {
         self.create_with_checkin(holders, heir_delay, heir_delay / 2, 1)
     }
@@ -123,14 +127,18 @@ impl<'a> Cli<'a> {
         self.ok(&[
             "create", "--network", "regtest",
             "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2], "--heir", &keys[3],
-            "--heir-delay", &hd, "--checkin-interval", &ci, "--checkin-margin", &cm,
+            "--heir-delay", &hd, "--checkin-interval", &ci, "--checkin-margin", &cm, "--min-heir-delay", MIN_HEIR_DELAY,
         ])
     }
 
-    /// `twofold create` with no beneficiary: plain 2 of 3.
+    /// `twofold create` with no beneficiary: plain 2 of 3. Its minimum heir
+    /// delay, kept by `add-heir`, is [`MIN_HEIR_DELAY`].
     pub fn create_plain(&self, holders: &Holders) -> String {
         let keys = holders.public_keys();
-        self.ok(&["create", "--network", "regtest", "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2]])
+        self.ok(&[
+            "create", "--network", "regtest", "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2],
+            "--min-heir-delay", MIN_HEIR_DELAY,
+        ])
     }
 
     pub fn wallet_dir(&self) -> std::path::PathBuf {

@@ -31,11 +31,16 @@ struct Fixture {
     wallet: Wallet,
     policy: SavingsPolicy,
     delays: Delays,
-    /// Valid PSBTs built by the library: 2-of-3, heir, drain, move,
-    /// check-in (last).
+    /// Where the settings say a move goes: the same keys with another HEIR.
+    next: SavingsPolicy,
+    /// Valid PSBTs built by the library: 2-of-3, heir, drain, move, a move
+    /// somewhere the settings don't say, check-in (last).
     templates: Vec<Psbt>,
     scripts: Vec<ScriptBuf>,
 }
+
+/// The minimum heir delay in the fixture.
+const MIN: u16 = 10;
 
 thread_local! {
     static FIXTURE: &'static Fixture = Box::leak(Box::new(build_fixture()));
@@ -45,13 +50,15 @@ thread_local! {
 /// confirmed at heights 1, 12 and 24 of a 25-block chain, plus one
 /// unconfirmed. Heir delay 20.
 fn build_fixture() -> Fixture {
-    let [phone, device, helper, heir, next_heir] = std::array::from_fn(|_| HolderKey::generate());
+    let [phone, device, helper, heir, next_heir, stranger] = std::array::from_fn(|_| HolderKey::generate());
     let keys = SavingsKeys::new(phone.public_key(0), device.public_key(0), helper.public_key(0), Some(heir.public_key(0)))
         .expect("fresh keys");
     let delays = Delays::with_heir(20).expect("valid delay");
     let policy = SavingsPolicy::new(keys, delays, Network::Regtest).expect("valid policy");
-    let next = migrate::wallet_with_heir(&policy, next_heir.public_key(0), Delays::with_heir(30).expect("valid delay"))
+    let next = migrate::wallet_with_heir(&policy, next_heir.public_key(0), Delays::with_heir(30).expect("valid delay"), MIN)
         .expect("a changed beneficiary");
+    let elsewhere = migrate::wallet_with_heir(&policy, stranger.public_key(0), Delays::with_heir(15).expect("valid delay"), MIN)
+        .expect("another beneficiary");
     let (receive, change) = policy.receive_and_change();
     let mut wallet = Wallet::create(receive.to_string(), change.to_string())
         .network(Network::Regtest)
@@ -110,7 +117,8 @@ fn build_fixture() -> Fixture {
     let mut b = wallet.build_tx();
     b.drain_wallet().drain_to(foreign.clone()).fee_rate(fee).set_condition(Condition::default());
     templates.push(b.finish().expect("drain spend"));
-    templates.push(migrate::build_move(&mut wallet, &policy, &next, fee).expect("template move"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &next, MIN, fee).expect("template move"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &elsewhere, MIN, fee).expect("template move elsewhere"));
     templates.push(build_checkin(&mut wallet, delays, fee).expect("template check-in"));
 
     let scripts = vec![
@@ -118,9 +126,10 @@ fn build_fixture() -> Fixture {
         wallet.reveal_next_address(KeychainKind::External).address.script_pubkey(),
         wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey(),
         migrate::destination(&next),
+        migrate::destination(&elsewhere),
         ScriptBuf::new(),
     ];
-    Fixture { wallet, policy, delays, templates, scripts }
+    Fixture { wallet, policy, delays, next, templates, scripts }
 }
 
 /// Edits a valid PSBT, driven by the fuzzer's bytes.
@@ -164,11 +173,12 @@ fn edit(psbt: &mut Psbt, f: &Fixture, u: &mut Unstructured) -> ArbResult<()> {
                 tx.output[i].value = Amount::from_sat(u.arbitrary()?);
             }
             8 => {
-                // Swap in the check-in marker, the move marker, or none.
-                let move_template = &f.templates[f.templates.len() - 2];
-                psbt.proprietary = match u.int_in_range(0..=2)? {
-                    0 => f.templates.last().expect("check-in template").proprietary.clone(),
-                    1 => move_template.proprietary.clone(),
+                // Swap in the check-in marker, either move marker, or none.
+                let n = f.templates.len();
+                psbt.proprietary = match u.int_in_range(0..=3)? {
+                    0 => f.templates[n - 1].proprietary.clone(),
+                    1 => f.templates[n - 2].proprietary.clone(),
+                    2 => f.templates[n - 3].proprietary.clone(),
                     _ => Default::default(),
                 };
             }
@@ -201,7 +211,7 @@ fuzz_target!(|data: &[u8]| {
         let path = spend::path_of(&psbt, f.delays);
         let marked = checkin::is_checkin(&psbt);
         let complete = check_checkin(&f.wallet, &psbt, f.delays);
-        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy);
+        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy, &f.next, MIN);
         let _ = spend::check_delays(&f.wallet, &psbt);
 
         // A check-in that passes must really be one: marked, 2-of-3, and a
@@ -217,14 +227,13 @@ fuzz_target!(|data: &[u8]| {
         }
 
         // A move that passes must really be one: marked, 2-of-3, and a
-        // single output to the first address of a wallet with the same
-        // PHONE, DEVICE and HELPER and a beneficiary.
-        if let Ok(to) = moved {
+        // single output to the first address of the wallet the settings
+        // say, whatever the PSBT claims.
+        if moved.is_ok() {
             assert!(migrate::is_move(&psbt), "check_move accepted an unmarked PSBT");
             assert_eq!(path, Some(Path::TwoOfThree), "check_move accepted a delayed path");
             assert_eq!(psbt.unsigned_tx.output.len(), 1, "check_move accepted more than one output");
-            assert_eq!(psbt.unsigned_tx.output[0].script_pubkey, migrate::destination(&to), "check_move: wrong output");
-            assert!(to.keys().same_two_of_three(f.policy.keys()) && to.has_heir(), "check_move: wrong wallet");
+            assert_eq!(psbt.unsigned_tx.output[0].script_pubkey, migrate::destination(&f.next), "check_move: wrong output");
         }
     });
 });

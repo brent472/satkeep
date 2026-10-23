@@ -44,7 +44,8 @@ fn creates_a_wallet_with_no_beneficiary_where_nothing_opens_with_time() {
     assert!(out.contains("No beneficiary yet: no key can approve alone, ever"), "{out}");
     assert!(!out.contains("Check in every"), "{out}");
     let saved = std::fs::read_to_string(cli.wallet_dir().join("savings.json")).unwrap();
-    assert!(!saved.contains("heir") && !saved.contains("checkin"), "{saved}");
+    let no_beneficiary = ["\"heir\"", "\"heir_delay\"", "checkin", "moving_to"].iter().all(|k| !saved.contains(k));
+    assert!(no_beneficiary && saved.contains("\"min_heir_delay\": 10"), "{saved}");
 
     receive(&cli, &node);
     node.mine(30);
@@ -147,7 +148,7 @@ fn refuses_a_policy_the_library_refuses() {
     let node = Node::start();
     let cli = Cli::new(&node);
     let k = Holders::generate().public_keys();
-    let base = ["create", "--network", "regtest", "--phone", &k[0], "--device", &k[1], "--helper", &k[2]];
+    let base = ["create", "--network", "regtest", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--min-heir-delay", "10"];
     let err = cli.fails(&[&base[..], &["--heir", &k[2]]].concat());
     assert!(err.contains("HELPER and HEIR keys are the same"), "{err}");
     let err = cli.fails(&[&base[..], &["--heir", &k[3], "--heir-delay", "0"]].concat());

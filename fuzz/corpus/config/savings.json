@@ -7,5 +7,6 @@
   "heir_delay": 20,
   "birthday": 0,
   "checkin_interval": 10,
-  "checkin_margin": 5
+  "checkin_margin": 5,
+  "min_heir_delay": 10
 }

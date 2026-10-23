@@ -1,16 +1,17 @@
 //! Adding a beneficiary on regtest: plain 2-of-3 Savings moves, in one
 //! 2-of-3 transaction, to a new wallet with the same PHONE, DEVICE and
-//! HELPER plus HEIR, and the heir path then works there. Every way of
-//! bending the move is refused.
+//! HELPER plus HEIR, and the heir path then works there. Where it goes comes
+//! from the signer's own settings, never the PSBT, and every way of bending
+//! the move is refused.
 
 mod common;
 
-use common::{FEE_RATE, Holder, Node, Path, Savings};
+use common::{FEE_RATE, Holder, MIN_HEIR_DELAY, Node, Path, Savings};
 use bdk_wallet::descriptor::policy::Condition;
 use twofold_savings::bitcoin::Amount;
 use twofold_savings::bitcoin::psbt::Psbt;
-use twofold_savings::migrate::{build_move, check_move, destination, is_move, wallet_with_heir};
-use twofold_savings::{Delays, Error};
+use twofold_savings::migrate::{build_move, check_move, destination, is_move, pays_to, wallet_with_heir};
+use twofold_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, Error, Role};
 
 const HEIR_DELAY: u16 = 20;
 
@@ -19,7 +20,7 @@ fn btc(n: f64) -> Amount {
 }
 
 /// Plain Savings with two confirmed coins, and the wallet that adding the
-/// beneficiary moves it to.
+/// beneficiary moves it to: what the signers' settings say.
 fn plain_and_target(node: &Node) -> (Savings, Savings) {
     let mut plain = Savings::new(Delays::none());
     plain.fund(node, btc(1.0));
@@ -29,7 +30,12 @@ fn plain_and_target(node: &Node) -> (Savings, Savings) {
 }
 
 fn prepare(plain: &mut Savings, target: &Savings) -> Psbt {
-    build_move(&mut plain.wallet, &plain.policy, &target.policy, FEE_RATE).expect("build the move")
+    build_move(&mut plain.wallet, &plain.policy, &target.policy, MIN_HEIR_DELAY, FEE_RATE).expect("build the move")
+}
+
+/// `check_move` against the wallet the signers' settings say.
+fn check(plain: &Savings, target: &Savings, psbt: &Psbt) -> Result<(), Error> {
+    check_move(&plain.wallet, psbt, &plain.policy, &target.policy, MIN_HEIR_DELAY)
 }
 
 #[test]
@@ -37,9 +43,8 @@ fn adding_a_beneficiary_moves_everything_in_one_transaction_and_the_heir_path_th
     let node = Node::start();
     let (mut plain, mut target) = plain_and_target(&node);
     let mut psbt = prepare(&mut plain, &target);
-    assert!(is_move(&psbt));
-    let checked = check_move(&plain.wallet, &psbt, &plain.policy).unwrap();
-    assert_eq!(checked.descriptor(), target.policy.descriptor(), "the PSBT names the new wallet");
+    assert!(is_move(&psbt) && pays_to(&psbt, &target.policy));
+    check(&plain, &target, &psbt).unwrap();
 
     plain.sign(&mut psbt, &[Holder::Phone, Holder::Helper]);
     let tx = plain.finalize(&psbt).unwrap();
@@ -74,6 +79,63 @@ fn a_move_needs_two_of_three_keys() {
 }
 
 #[test]
+fn a_move_to_a_wallet_with_a_different_heir_key_is_refused() {
+    // Whoever prepares the move builds a complete, consistent move to a
+    // wallet whose HEIR they hold. The signers check it against their own
+    // settings, so it's refused, whether the PSBT owns up to the other HEIR
+    // or claims the right one.
+    let node = Node::start();
+    let (mut plain, target) = plain_and_target(&node);
+    let theirs = plain.with_stranger_as_heir(HEIR_DELAY);
+    assert_ne!(destination(&theirs.policy), destination(&target.policy));
+    let dishonest = prepare(&mut plain, &theirs);
+    assert!(check_move(&plain.wallet, &dishonest, &plain.policy, &theirs.policy, MIN_HEIR_DELAY).is_ok());
+    assert!(matches!(check(&plain, &target, &dishonest), Err(Error::MoveNotAsSetUp)));
+
+    let mut disguised = dishonest.clone();
+    disguised.proprietary = prepare(&mut plain, &target).proprietary;
+    assert!(matches!(check(&plain, &target, &disguised), Err(Error::MoveShape)));
+}
+
+#[test]
+fn a_move_to_a_wallet_with_a_shorter_heir_delay_is_refused() {
+    // The same HEIR, but a shorter wait before HEIR alone can spend.
+    let node = Node::start();
+    let (mut plain, target) = plain_and_target(&node);
+    let shorter = plain.with_heir_added(HEIR_DELAY - 5);
+    let dishonest = prepare(&mut plain, &shorter);
+    assert!(matches!(check(&plain, &target, &dishonest), Err(Error::MoveNotAsSetUp)));
+
+    let mut disguised = dishonest.clone();
+    disguised.proprietary = prepare(&mut plain, &target).proprietary;
+    assert!(matches!(check(&plain, &target, &disguised), Err(Error::MoveShape)));
+}
+
+#[test]
+fn a_move_with_one_extra_output_is_refused() {
+    let node = Node::start();
+    let (mut plain, target) = plain_and_target(&node);
+    let good = prepare(&mut plain, &target);
+
+    // To someone else.
+    let mut split = good.clone();
+    let mut extra = split.unsigned_tx.output[0].clone();
+    extra.value = Amount::from_sat(100_000);
+    split.unsigned_tx.output[0].value -= extra.value;
+    extra.script_pubkey = node.new_address().script_pubkey();
+    split.unsigned_tx.output.push(extra.clone());
+    assert!(matches!(check(&plain, &target, &split), Err(Error::MoveShape)));
+
+    // Back to the old wallet as change: a move leaves nothing behind.
+    let mut change = good.clone();
+    extra.script_pubkey = plain.wallet.peek_address(bdk_wallet::KeychainKind::Internal, 0).script_pubkey();
+    change.unsigned_tx.output.push(extra);
+    assert!(matches!(check(&plain, &target, &change), Err(Error::MoveShape)));
+
+    assert!(check(&plain, &target, &good).is_ok());
+}
+
+#[test]
 fn a_move_that_pays_anywhere_else_is_refused() {
     let node = Node::start();
     let (mut plain, target) = plain_and_target(&node);
@@ -82,46 +144,64 @@ fn a_move_that_pays_anywhere_else_is_refused() {
     // The output swapped for someone else's address.
     let mut elsewhere = good.clone();
     elsewhere.unsigned_tx.output[0].script_pubkey = node.new_address().script_pubkey();
-    assert!(matches!(check_move(&plain.wallet, &elsewhere, &plain.policy), Err(Error::MoveShape)));
+    assert!(matches!(check(&plain, &target, &elsewhere), Err(Error::MoveShape)));
 
-    // The marker rewritten to name a different HEIR: the output no longer
-    // matches the wallet it names.
-    let stranger = Savings::new(Delays::with_heir(HEIR_DELAY).unwrap());
-    let other_heir = stranger.policy.keys().get(twofold_savings::Role::Heir).unwrap().clone();
-    let other = wallet_with_heir(&plain.policy, other_heir, Delays::with_heir(HEIR_DELAY).unwrap()).unwrap();
+    // The marker rewritten to name a different HEIR.
+    let stranger = plain.with_stranger_as_heir(HEIR_DELAY);
+    let other_heir = stranger.policy.keys().get(Role::Heir).unwrap();
     let mut renamed = good.clone();
     for value in renamed.proprietary.values_mut() {
-        *value = format!("{}\n{HEIR_DELAY}", other.keys().get(twofold_savings::Role::Heir).unwrap()).into_bytes();
+        *value = format!("{other_heir}\n{HEIR_DELAY}").into_bytes();
     }
-    assert_ne!(destination(&other), destination(&target.policy));
-    assert!(matches!(check_move(&plain.wallet, &renamed, &plain.policy), Err(Error::MoveShape)));
+    assert!(matches!(check(&plain, &target, &renamed), Err(Error::MoveNotAsSetUp)));
 
     // Not marked as a move at all.
     let mut unmarked = good.clone();
     unmarked.proprietary.clear();
-    assert!(matches!(check_move(&plain.wallet, &unmarked, &plain.policy), Err(Error::NotAMove)));
+    assert!(matches!(check(&plain, &target, &unmarked), Err(Error::NotAMove)));
 
-    // An extra output.
-    let mut split = good.clone();
-    let mut extra = split.unsigned_tx.output[0].clone();
-    extra.script_pubkey = node.new_address().script_pubkey();
-    split.unsigned_tx.output.push(extra);
-    assert!(matches!(check_move(&plain.wallet, &split, &plain.policy), Err(Error::MoveShape)));
+    assert!(check(&plain, &target, &good).is_ok());
+}
 
-    assert!(check_move(&plain.wallet, &good, &plain.policy).is_ok());
+#[test]
+fn an_heir_delay_below_the_minimum_is_refused() {
+    let node = Node::start();
+    let (mut plain, _) = plain_and_target(&node);
+    let heir = plain.with_heir_added(HEIR_DELAY).policy.keys().get(Role::Heir).unwrap().clone();
+    let too_short = |delay| Delays::with_heir(delay).unwrap();
+
+    // In the settings the signers rebuild the new wallet from.
+    let built = wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY - 1), MIN_HEIR_DELAY);
+    assert!(matches!(built, Err(Error::HeirDelayTooShort { heir: 9, minimum: 10 })), "{:?}", built.err());
+    assert!(wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY), MIN_HEIR_DELAY).is_ok());
+
+    // In building and checking a move to such a wallet.
+    let short = plain.with_heir_added(MIN_HEIR_DELAY - 1);
+    let built = build_move(&mut plain.wallet, &plain.policy, &short.policy, MIN_HEIR_DELAY, FEE_RATE);
+    assert!(matches!(built, Err(Error::HeirDelayTooShort { .. })), "{:?}", built.err());
+    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, 1, FEE_RATE).unwrap();
+    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, MIN_HEIR_DELAY);
+    assert!(matches!(checked, Err(Error::HeirDelayTooShort { .. })), "{checked:?}");
+
+    // With the placeholder minimum, a 20-block delay is far too short.
+    let built = wallet_with_heir(&plain.policy, heir, too_short(HEIR_DELAY), DEFAULT_MIN_HEIR_DELAY);
+    assert!(matches!(built, Err(Error::HeirDelayTooShort { heir: 20, minimum: 26_280 })), "{:?}", built.err());
 }
 
 #[test]
 fn a_move_must_keep_phone_device_and_helper() {
     // A wallet with a beneficiary but different keys isn't where Savings
-    // goes when a beneficiary is added.
+    // goes when a beneficiary is added, even if the settings say so.
     let node = Node::start();
-    let (mut plain, _) = plain_and_target(&node);
+    let (mut plain, target) = plain_and_target(&node);
     let someone_else = Savings::new(Delays::with_heir(HEIR_DELAY).unwrap());
-    let built = build_move(&mut plain.wallet, &plain.policy, &someone_else.policy, FEE_RATE);
+    let built = build_move(&mut plain.wallet, &plain.policy, &someone_else.policy, MIN_HEIR_DELAY, FEE_RATE);
     assert!(matches!(built, Err(Error::MoveToWrongWallet)), "{:?}", built.err());
+    let good = prepare(&mut plain, &target);
+    let checked = check_move(&plain.wallet, &good, &plain.policy, &someone_else.policy, MIN_HEIR_DELAY);
+    assert!(matches!(checked, Err(Error::MoveToWrongWallet)), "{checked:?}");
     // And to the very same wallet is no move at all.
-    let same = build_move(&mut plain.wallet, &plain.policy, &plain.policy, FEE_RATE);
+    let same = build_move(&mut plain.wallet, &plain.policy, &plain.policy, MIN_HEIR_DELAY, FEE_RATE);
     assert!(same.is_err());
 }
 
@@ -142,7 +222,7 @@ fn a_move_that_leaves_out_a_confirmed_coin_is_refused() {
     let mut partial = builder.finish().unwrap();
     partial.proprietary = good.proprietary.clone();
     assert!(matches!(
-        check_move(&plain.wallet, &partial, &plain.policy),
+        check(&plain, &target, &partial),
         Err(Error::MoveMissesCoin { coin }) if coin == coins[1]
     ));
 }
@@ -155,7 +235,8 @@ fn changing_the_beneficiary_is_another_move() {
     let mut first = Savings::new(Delays::with_heir(HEIR_DELAY).unwrap());
     first.fund(&node, btc(1.0));
     let mut next = first.with_heir_added(HEIR_DELAY + 10);
-    let mut psbt = build_move(&mut first.wallet, &first.policy, &next.policy, FEE_RATE).unwrap();
+    let mut psbt = build_move(&mut first.wallet, &first.policy, &next.policy, MIN_HEIR_DELAY, FEE_RATE).unwrap();
+    check_move(&first.wallet, &psbt, &first.policy, &next.policy, MIN_HEIR_DELAY).unwrap();
     first.sign(&mut psbt, &[Holder::Device, Holder::Helper]);
     node.broadcast_and_confirm(&first.finalize(&psbt).unwrap());
     next.sync(&node);
@@ -170,6 +251,6 @@ fn nothing_confirmed_means_nothing_to_move() {
     node.send_to(&address, btc(1.0)); // not mined
     plain.sync(&node);
     let target = plain.with_heir_added(HEIR_DELAY);
-    let built = build_move(&mut plain.wallet, &plain.policy, &target.policy, FEE_RATE);
+    let built = build_move(&mut plain.wallet, &plain.policy, &target.policy, MIN_HEIR_DELAY, FEE_RATE);
     assert!(matches!(built, Err(Error::MoveNoCoins)), "{:?}", built.err());
 }

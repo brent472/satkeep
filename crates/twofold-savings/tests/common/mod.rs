@@ -20,6 +20,10 @@ use twofold_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
 /// sits safely above the default relay minimum.
 pub const FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(2);
 
+/// The minimum heir delay in these tests, far below the placeholder default
+/// (`DEFAULT_MIN_HEIR_DELAY`), so regtest can use delays of a few blocks.
+pub const MIN_HEIR_DELAY: u16 = 10;
+
 pub use twofold_testenv::Node;
 
 /// The four holders. HEIR's key is only in the wallet when it has a
@@ -60,6 +64,14 @@ impl Savings {
     pub fn with_heir_added(&self, heir_delay: u16) -> Self {
         let copy = |k: &HolderKey| HolderKey::from_secret_str(&k.to_secret_string()).unwrap();
         let keys = [copy(&self.phone), copy(&self.device), copy(&self.helper), copy(&self.heir)];
+        Self::from_keys(keys, Delays::with_heir(heir_delay).unwrap())
+    }
+
+    /// The same PHONE, DEVICE and HELPER with a beneficiary, but a HEIR key
+    /// nobody here holds: where a dishonest move would send Savings.
+    pub fn with_stranger_as_heir(&self, heir_delay: u16) -> Self {
+        let copy = |k: &HolderKey| HolderKey::from_secret_str(&k.to_secret_string()).unwrap();
+        let keys = [copy(&self.phone), copy(&self.device), copy(&self.helper), HolderKey::generate()];
         Self::from_keys(keys, Delays::with_heir(heir_delay).unwrap())
     }
 
