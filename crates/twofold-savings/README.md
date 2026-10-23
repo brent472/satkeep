@@ -196,6 +196,12 @@ Assumptions, to settle with the outside reviewer:
 - **Wiping memory.** The phrase inside `HolderKey`, the random bytes it came from, and the 64-byte seed are wiped when no longer needed (`zeroize`). The derived master key isn't: the `bitcoin` crate's `Xpriv` has no wiping. `to_secret_string` returns an ordinary `String`, so whoever calls it is responsible for it.
 - **Where the phrase is shown.** Never in the main flow. In the app it will be kept inside the encrypted phone key backup and shown only through an advanced export in Settings (see the phone-key-backup research, next on the list).
 
+### Checking what a PSBT says about its coins
+
+- **`spend::check_inputs`:** every input must be one of the wallet's own unspent coins, with the amount and script the wallet has on record, and its previous transaction (if included) must be the real one. `check_checkin`, `check_move` and the CLI's `sign` and `broadcast` all run it.
+- **Why:** a SegWit v0 signature (P2WSH Savings) commits only to the amount of the input it signs. A PSBT that understated another input could show a tiny fee while the real one burns most of the coins. Taproot signatures commit to every input's amount, so there a lie only breaks the signatures, but the check runs for both shapes.
+- **Every input or none:** the CLI's `sign` also refuses unless the key signed every input, so a PSBT that hides a coin from one holder (by leaving out its key data) can't collect partial approvals to combine later. Found by the security review of the P2WSH change; `tests/inputs.rs` and the CLI's `tests/approve.rs` pin both.
+
 ### Fees
 
 - The library doesn't choose fees: `build_spend` lets the caller set the fee rate.

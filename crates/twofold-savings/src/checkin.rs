@@ -183,6 +183,7 @@ pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(),
     if !is_checkin(psbt) {
         return Err(Error::NotACheckin);
     }
+    spend::check_inputs(wallet, psbt)?;
     if spend::path_of(psbt, delays) != Some(Path::TwoOfThree) {
         return Err(Error::CheckinUsesDelayedPath);
     }

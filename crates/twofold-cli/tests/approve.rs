@@ -118,3 +118,77 @@ fn accepts_what_windows_powershell_pipes() {
     assert!(expect_ok(&args, cli.run_with_stdin(&args, &input)).contains("Added 1 signature"));
     cli.ok(&["broadcast", "--psbt", &psbt]);
 }
+
+/// Savings with no beneficiary (P2WSH, where a signature covers only its own
+/// input's amount), funded with two coins, and an unsigned payment of both.
+fn plain_two_coin_payment(node: &Node) -> (Cli<'_>, Holders, String) {
+    let cli = Cli::new(node);
+    let holders = Holders::generate();
+    cli.create_plain(&holders);
+    for _ in 0..2 {
+        let address = cli.ok(&["address"]);
+        let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
+        node.send_to(&address, Amount::from_btc(1.0).unwrap());
+        node.mine(1);
+    }
+    let psbt = cli.path("pay.psbt");
+    cli.ok(&["send", "--to", &node.new_address().to_string(), "--amount", "1.5", "--out", &psbt]);
+    (cli, holders, psbt)
+}
+
+fn edit_psbt(file: &str, edit: impl FnOnce(&mut twofold_savings::bitcoin::psbt::Psbt)) -> String {
+    let mut psbt = twofold_savings::bitcoin::psbt::Psbt::from_str(fs::read_to_string(file).unwrap().trim()).unwrap();
+    assert_eq!(psbt.inputs.len(), 2, "the payment spends both coins");
+    edit(&mut psbt);
+    fs::write(file, psbt.to_string()).unwrap();
+    psbt.to_string()
+}
+
+#[test]
+fn refuses_a_payment_that_understates_a_coin_and_so_the_fee() {
+    // The PSBT claims input 1 is worth 1,000 sats: its fee would show
+    // almost a whole bitcoin too small.
+    let node = Node::start();
+    let (cli, holders, psbt) = plain_two_coin_payment(&node);
+    let altered = edit_psbt(&psbt, |p| p.inputs[1].witness_utxo.as_mut().unwrap().value = Amount::from_sat(1_000));
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("doesn't match the wallet's own record of that coin"), "{err}");
+    assert_eq!(fs::read_to_string(&psbt).unwrap(), altered, "nothing was signed");
+    let err = cli.fails(&["broadcast", "--psbt", &psbt]);
+    assert!(err.contains("doesn't match the wallet's own record"), "{err}");
+}
+
+#[test]
+fn refuses_to_sign_a_payment_that_hides_a_coin_from_the_key() {
+    // Input 1's key data is stripped, so the key could only sign input 0.
+    // Combined with a mirror-image approval from another holder, two
+    // partial approvals could make a payment nobody approved in full.
+    let node = Node::start();
+    let (cli, holders, psbt) = plain_two_coin_payment(&node);
+    let altered = edit_psbt(&psbt, |p| p.inputs[1].bip32_derivation.clear());
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("couldn't sign every coin in this payment"), "{err}");
+    assert_eq!(fs::read_to_string(&psbt).unwrap(), altered, "nothing was saved");
+}
+
+#[test]
+fn the_same_holds_for_taproot_savings() {
+    let node = Node::start();
+    let cli = Cli::new(&node);
+    let holders = Holders::generate();
+    cli.create(&holders, 20);
+    for _ in 0..2 {
+        let address = cli.ok(&["address"]);
+        let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
+        node.send_to(&address, Amount::from_btc(1.0).unwrap());
+        node.mine(1);
+    }
+    let psbt = cli.path("pay.psbt");
+    cli.ok(&["send", "--to", &node.new_address().to_string(), "--amount", "1.5", "--out", &psbt]);
+    edit_psbt(&psbt, |p| p.inputs[1].tap_key_origins.clear());
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("couldn't sign every coin in this payment"), "{err}");
+}

@@ -22,3 +22,7 @@ bitcoin-data/
 .DS_Store
 .idea/
 .vscode/
+
+# Python bytecode (from running the exit drill scripts)
+__pycache__/
+*.pyc

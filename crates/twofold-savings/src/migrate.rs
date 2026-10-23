@@ -89,6 +89,7 @@ pub fn check_move(wallet: &Wallet, psbt: &Psbt, from: &SavingsPolicy) -> Result<
     if spend::path_of(psbt, from.delays()) != Some(Path::TwoOfThree) {
         return Err(Error::MoveShape);
     }
+    spend::check_inputs(wallet, psbt)?;
     let tx = &psbt.unsigned_tx;
     if tx.output.len() != 1 || tx.output[0].script_pubkey != destination(&to) {
         return Err(Error::MoveShape);

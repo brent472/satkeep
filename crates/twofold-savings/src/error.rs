@@ -25,6 +25,8 @@ pub enum Error {
     TimeBasedDelay { input: usize },
     #[error("input {input} spends a coin this wallet doesn't know")]
     UnknownCoin { input: usize },
+    #[error("input {input}'s amount or script in this payment doesn't match the wallet's own record of that coin; the payment may have been altered")]
+    InputMismatch { input: usize },
     #[error("not enough keys have approved this payment")]
     NotEnoughApprovals,
     #[error("that isn't a valid key for a Savings key holder: it must be a 12-word recovery phrase")]

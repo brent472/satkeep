@@ -34,7 +34,8 @@ Approve? (y/N)
 ```
 
 - **Outputs:** every output's address and amount. Money returning to Savings is marked, as change or as "one of your own Savings addresses".
-- **Network fee and approval path:** the fee, and which path the payment needs, read from the inputs.
+- **Network fee and approval path:** the fee, and which path the payment needs, read from the inputs. Every input's amount is checked against the wallet's own record first, so the fee shown is the fee paid; a payment that misstates a coin is refused.
+- **Every coin or none:** `sign` refuses unless the key signs every coin the payment spends, and then saves nothing.
 - **Answer:** only `y` (or `yes`) signs. Anything else, an empty line or no input at all, signs nothing, leaves the file unchanged and exits with an error.
 - **The key isn't read until you approve**, so a declined payment never touches it.
 - **Standard input order:** with `--key-stdin`, standard input carries the answer first and the key on the next line. `--yes` skips the question, for scripts and tests; then standard input is just the key.

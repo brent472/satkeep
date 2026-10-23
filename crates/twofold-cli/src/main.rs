@@ -350,9 +350,20 @@ fn run(cli: Cli) -> Result<()> {
             });
             let holder = HolderKey::from_secret_str(&text)?;
             drop(text);
+            let before = signatures_per_input(&payment);
             let added = holder.sign(&mut payment)?;
             if added == 0 {
                 bail!("that key isn't part of this payment, or it has already approved it");
+            }
+            // A payment that hides an input from this key (by leaving out the
+            // data it needs to sign it) is refused: an approval covers every
+            // coin the payment spends, or none.
+            let after = signatures_per_input(&payment);
+            if before.iter().zip(&after).any(|(b, a)| a <= b) {
+                bail!(
+                    "that key couldn't sign every coin in this payment, so nothing was saved; \
+                     the payment may have been altered"
+                );
             }
             fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
             println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
@@ -401,6 +412,7 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 None
             };
+            spend::check_inputs(&opened.wallet, &payment)?;
             let tx = spend::finalize(&opened.wallet, &payment)?;
             let txid = node::broadcast(&client, &tx)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
@@ -533,6 +545,11 @@ fn keygen(out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How many signatures each input carries, Taproot and SegWit v0 alike.
+fn signatures_per_input(psbt: &Psbt) -> Vec<usize> {
+    psbt.inputs.iter().map(|i| i.tap_script_sigs.len() + i.partial_sigs.len()).collect()
+}
+
 /// Creates `path` and writes `contents`; refuses if it already exists.
 fn write_new(path: &Path, contents: &[u8]) -> Result<()> {
     let mut file = fs::OpenOptions::new()
@@ -575,6 +592,9 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
             );
         }
     }
+    // Every amount must match the wallet's own record, so the fee shown
+    // below is the fee paid.
+    spend::check_inputs(wallet, payment)?;
     let path = spend::path_of(payment, opened.policy.delays())
         .context("this payment's inputs ask for different approval paths")?;
     let network = opened.network().network();

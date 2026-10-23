@@ -78,6 +78,38 @@ pub fn build_spend(
     Ok(psbt)
 }
 
+/// Checks every input of `psbt` is one of this wallet's unspent coins, and
+/// that the PSBT tells the truth about it: its `witness_utxo` (amount and
+/// script) must equal the wallet's own record, and a `non_witness_utxo`, if
+/// any, must be the coin's real transaction.
+///
+/// This matters most for P2WSH coins (Savings with no beneficiary): a SegWit
+/// v0 signature commits only to the amount of the input it signs. A PSBT
+/// that understates another input's amount would show a fee far smaller
+/// than the real one, and two such approvals, each covering a different
+/// input, could be combined into a transaction that burns the difference as
+/// fee. With every amount checked against the wallet, the fee shown is the
+/// fee paid. (A Taproot signature commits to every input's amount, so there
+/// a lie only makes the signatures invalid.)
+pub fn check_inputs(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
+    if psbt.inputs.len() != psbt.unsigned_tx.input.len() {
+        return Err(Error::InputMismatch { input: psbt.inputs.len().min(psbt.unsigned_tx.input.len()) });
+    }
+    for (input, (txin, meta)) in psbt.unsigned_tx.input.iter().zip(&psbt.inputs).enumerate() {
+        let utxo = wallet.get_utxo(txin.previous_output).ok_or(Error::UnknownCoin { input })?;
+        if meta.witness_utxo.as_ref() != Some(&utxo.txout) {
+            return Err(Error::InputMismatch { input });
+        }
+        if let Some(prev) = &meta.non_witness_utxo {
+            let vout = usize::try_from(txin.previous_output.vout).map_err(|_| Error::InputMismatch { input })?;
+            if prev.compute_txid() != txin.previous_output.txid || prev.output.get(vout) != Some(&utxo.txout) {
+                return Err(Error::InputMismatch { input });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Checks every input of `psbt` is old enough for the delay its sequence
 /// asks for, as of the next block. Inputs without a relative delay pass.
 pub fn check_delays(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
