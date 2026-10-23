@@ -20,7 +20,7 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | --- | --- |
 | [`docs/milestone-1.md`](docs/milestone-1.md) | Builder brief for the current milestone |
 | [`docs/phone-key-backup.md`](docs/phone-key-backup.md) | Phone key backup: the design, which security devices can unlock it, threats and decisions. A prototype is in `twofold-savings`. |
-| [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Twofold: spending Savings with Liana, or Bitcoin Core alone, and why not Sparrow |
+| [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Twofold: both shapes of Savings with Bitcoin Core alone, the P2WSH shape in Sparrow's format, and the Taproot shape with Liana |
 | [`crates/twofold-savings`](crates/twofold-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/twofold-cli`](crates/twofold-cli/README.md) | `twofold`, a developer command-line tool for Savings on test networks |
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |

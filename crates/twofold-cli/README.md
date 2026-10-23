@@ -86,7 +86,7 @@ twofold broadcast --psbt checkin.psbt
 | Command | What it does | Needs a node |
 | --- | --- | --- |
 | `keygen --name NAME` (or `--out FILE.key`) | Makes a fresh test key and saves it. Prints only its public key. | No |
-| `create --phone … --device … --helper … [--heir …]` | Creates the Savings wallet. Without `--heir`: plain 2 of 3, no delayed path, no check-ins. With it: HEIR can also spend alone after `--heir-delay` (default 61,320); `--checkin-interval` and `--checkin-margin` default to 52,560 and 8,760 and need `--heir`. | Yes |
+| `create --phone … --device … --helper … [--heir …]` | Creates the Savings wallet. Without `--heir`: plain 2 of 3 in the standard P2WSH format (`wsh(sortedmulti(2, …))`), no delayed path, no check-ins. With it: HEIR can also spend alone after `--heir-delay` (default 61,320); `--checkin-interval` and `--checkin-margin` default to 52,560 and 8,760 and need `--heir`. | Yes |
 | `add-heir --heir … --new-wallet-dir DIR [--heir-delay …] [--fee-rate 2] --out FILE.psbt` | Adds or changes the beneficiary: creates the new wallet in DIR and prepares the one 2-of-3 payment moving every confirmed coin there | Yes |
 | `address` | Shows a new receive address | No |
 | `balance` | Syncs and shows the total, and each coin's confirmations and, with a beneficiary, when its heir path opens. Marks coins `CHECK-IN DUE` or `OVERDUE`, and says when the next check-in is due. | Yes |

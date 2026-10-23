@@ -1,17 +1,17 @@
 # twofold-savings
 
-The rules for the Twofold **Savings** wallet, as a Taproot descriptor, plus the checks Twofold runs before it builds or finalizes a Savings spend.
+The rules for the Twofold **Savings** wallet, as a descriptor in one of two shapes, plus the checks Twofold runs before it builds or finalizes a Savings spend.
 
 **Test networks only.** The library refuses mainnet, and all tests run on throwaway regtest nodes with keys generated fresh in memory. The delays are placeholders until an outside Bitcoin reviewer signs off.
 
 ## Spending paths
 
-Savings has two shapes. It starts with no beneficiary, as plain 2 of 3; adding a beneficiary moves it to the second shape in one transaction ([below](#adding-a-beneficiary)).
+Savings has two shapes. It starts with no beneficiary, as plain 2 of 3 in the standard P2WSH multisig format; adding a beneficiary moves it to a Taproot wallet with the heir path, in one transaction ([below](#adding-a-beneficiary)).
 
 ```mermaid
 flowchart LR
-    plain(["Savings, no beneficiary yet<br/>Taproot · no key-path spend"])
-    plain -->|"the only leaf · any time"| two1["Any 2 of<br/>PHONE · DEVICE · HELPER"]
+    plain(["Savings, no beneficiary yet<br/>P2WSH multisig"])
+    plain -->|"any time"| two1["Any 2 of<br/>PHONE · DEVICE · HELPER"]
     heir(["Savings with a beneficiary<br/>Taproot · no key-path spend"])
     heir -->|"leaf 1 · any time"| two2["Any 2 of<br/>PHONE · DEVICE · HELPER"]
     heir -->|"leaf 2 · once the coin has 61,320 confirmations (about 14 months)"| alone["HEIR alone"]
@@ -29,19 +29,33 @@ There is no card-only path: brief 3.8 removed DEVICE alone after 9 months. The p
 The descriptors, with placeholder names for the keys:
 
 ```text
-tr(UNSPENDABLE/<0;1>/*, multi_a(2, PHONE/<0;1>/*, DEVICE/<0;1>/*, HELPER/<0;1>/*))
+wsh(sortedmulti(2, PHONE/<0;1>/*, DEVICE/<0;1>/*, HELPER/<0;1>/*))
 
 tr(UNSPENDABLE/<0;1>/*,
    { multi_a(2, PHONE/<0;1>/*, DEVICE/<0;1>/*, HELPER/<0;1>/*),
      and_v(v:pk(HEIR/<0;1>/*), older(61320)) })
 ```
 
+### Why two formats
+
+The deciding question for each shape is how many independent tools can get the bitcoin out if Twofold disappears.
+
+| | No beneficiary: `wsh(sortedmulti(2, …))` | With a beneficiary: Taproot policy |
+| --- | --- | --- |
+| **What it needs to express** | Plain 2 of 3, nothing more | 2 of 3, plus HEIR alone after a relative timelock |
+| **Who can import and spend it** | Bitcoin Core, Sparrow, Electrum, Nunchuk and other standard multisig wallets. The exit drill checks Bitcoin Core end to end, and checks the export against Sparrow's own descriptor parser. | Liana and Bitcoin Core, both checked end to end by the exit drill. Sparrow refuses Taproot descriptors with script paths (in its source). Electrum and Nunchuk weren't checked for this shape. |
+| **Why not the other format** | Liana v15.0 refuses a policy with no timelocked path: "A Liana policy requires at least one recovery path" (`liana/src/descriptors/analysis.rs`, `MissingRecoveryPath`). A Taproot 2-of-3 would only add Bitcoin Core. | Only the heir path needs miniscript and a timelock. Taproot keeps it hidden until it's used: an everyday 2-of-3 spend reveals only the 2-of-3 leaf. |
+| **Privacy and fees** | A 2-of-3 spend reveals the whole multisig script, and is somewhat larger than a Taproot script-path spend. | Only the leaf used is revealed. |
+
+- **`sortedmulti`** orders the three keys by their public key at each address, the way every standard multisig wallet expects, so the same keys give the same addresses everywhere.
+- **Moving between them.** Adding a beneficiary spends every coin from the P2WSH wallet into the Taproot wallet in one 2-of-3 transaction. There's no way back to P2WSH except a new wallet and another move.
+
 ## Using it
 
 ```rust
 let keys = SavingsKeys::new(phone, device, helper, Some(heir))?;       // or None: no beneficiary yet
 let policy = SavingsPolicy::new(keys, Delays::with_heir(DEFAULT_HEIR_DELAY)?, Network::Regtest)?; // or Delays::none()
-let descriptor = policy.export_descriptor();          // for backup, Liana, Bitcoin Core
+let descriptor = policy.export_descriptor();          // wsh(sortedmulti(…)) or tr(…), for backup and other wallets
 let psbt = spend::build_spend(&mut wallet, policy.delays(), spend::Path::Heir, |b| { /* recipients, fee */ })?;
 HolderKey::from_secret_str(&phrase)?.sign(&mut psbt)?; // one holder approves with their recovery phrase (test networks only)
 let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or not enough approvals
@@ -57,6 +71,8 @@ A wallet's script can't change, so adding a beneficiary means a new wallet and o
   - Unconfirmed coins are left out, as in a check-in. They stay spendable by 2 of 3 and can be moved once they confirm.
 - `migrate::check_move(&wallet, &psbt, &from)` rebuilds the new wallet from `from` and the PSBT's own HEIR key and delay, and checks the PSBT is marked, uses the 2-of-3 path, spends every confirmed coin and nothing else, and has exactly one output, to that wallet's first address. The CLI runs it at `sign` and again at `broadcast`.
 - Changing the beneficiary is the same move, from a wallet that already has one.
+  - **The old wallet keeps its heir path.** Anything left in it, such as a coin that was unconfirmed at the move or a later payment to one of its addresses, stays claimable by the former HEIR after its delay, and nothing reminds anyone to check in there any more. Move those coins too.
+- **Whoever prepares a move chooses HEIR and the delay.** `check_move` proves the coins go to the same PHONE, DEVICE and HELPER plus *some* HEIR, not that it's the right person. So `sign` shows HEIR's full key and the delay, `add-heir` prints them with the destination address, and approvers should compare the whole key with the beneficiary's, not just its fingerprint. Nothing sets a minimum heir delay yet.
 
 ## Check-in
 
@@ -148,7 +164,8 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 
 ### Script type and keys
 
-- **Taproot.** Only the leaf actually used is revealed on-chain, so everyday 2-of-3 spends don't reveal the inheritance path. The 2-of-3 leaf sits highest in the tree, so it gets the shortest proof.
+- **P2WSH for Savings with no beneficiary**, as `wsh(sortedmulti(2, …))`, for the widest exit (see [Why two formats](#why-two-formats)). Everything below about Taproot is about Savings with a beneficiary.
+- **Taproot.** Only the leaf actually used is revealed on-chain, so everyday 2-of-3 spends don't reveal the inheritance path. With two leaves, both sit at depth 1.
 - **No key-path spend.** The internal key is an extended key whose public key is BIP 341's NUMS point H (`0250929b…3ac0`). Nobody can know its private key at any index.
   - **Chain code.** SHA256 of the public keys of every key in the tap tree, in **tree order**: PHONE, DEVICE, HELPER (the 2-of-3 leaf), then HEIR if there is one. A key that appears twice counts twice. So adding a beneficiary changes the internal key, and every address.
   - **Why the chain code matters.** Because it differs per wallet, different wallets don't share an internal key, and anyone with the descriptor's public keys can recompute it.
@@ -190,7 +207,7 @@ Assumptions, to settle with the outside reviewer:
 - `export_descriptor()` returns the public descriptor with `<0;1>` and its checksum. `export_receive_and_change()` returns separate receive and change descriptors.
 - Neither contains private keys, but both reveal every Savings address and balance, so treat them as private.
 - Bitcoin Core reads the export and derives exactly the addresses BDK hands out (`tests/export.rs`).
-- **Leaving without Twofold:** Bitcoin Core 31.1 on its own imports both shapes and spends through every path on regtest, refusing the heir spend one block early. Liana v15.0 does the same for Savings with a beneficiary; the exit drill records whether it accepts Savings with no beneficiary. See the [exit drill](../../docs/exit-drill.md). Sparrow can't import Savings with a beneficiary at all.
+- **Leaving without Twofold:** Savings with no beneficiary exports as `wsh(sortedmulti(2, …))`: Bitcoin Core 31.1 alone derives its addresses and spends it with 2 of 3, and the export matches what Sparrow's own descriptor parser accepts. Savings with a beneficiary: Liana v15.0 and Bitcoin Core 31.1 alone each spend through both paths on regtest and refuse the heir spend one block early. See the [exit drill](../../docs/exit-drill.md).
 
 ## Not yet verified
 
