@@ -6,6 +6,7 @@
 
 mod delays;
 mod error;
+mod holder;
 mod keys;
 mod policy;
 pub mod spend;
@@ -13,5 +14,6 @@ pub mod spend;
 pub use bdk_wallet::{bitcoin, miniscript};
 pub use delays::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, Delays};
 pub use error::Error;
+pub use holder::HolderKey;
 pub use keys::{Role, SavingsKeys};
 pub use policy::{NUMS_POINT, SavingsPolicy};
