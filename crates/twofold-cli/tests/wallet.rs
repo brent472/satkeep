@@ -126,3 +126,19 @@ fn refuses_a_policy_the_library_refuses() {
     ]);
     assert!(err.contains("must be longer than the device delay"), "{err}");
 }
+
+#[test]
+fn refuses_a_key_with_the_same_receive_and_change_path() {
+    // Found by fuzzing savings.json: a `<1;1>` key used to crash the policy
+    // builder instead of being refused.
+    let node = Node::start();
+    let cli = Cli::new(&node);
+    let keys = Holders::generate().public_keys();
+    let same_twice = keys[2].replace("/<0;1>/*", "/<1;1>/*");
+    let err = cli.fails(&[
+        "create", "--phone", &keys[0], "--device", &keys[1], "--device-r", &same_twice,
+        "--helper", &keys[3], "--heir", &keys[4],
+    ]);
+    assert!(err.contains("DEVICE_R key must be an extended public key with receive and change paths"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+}

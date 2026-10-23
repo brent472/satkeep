@@ -15,6 +15,8 @@ pub enum Error {
     DuplicateKey(Role, Role),
     #[error("Twofold only runs on test networks for now; mainnet is refused")]
     Mainnet,
+    #[error("couldn't build the unspendable internal key from these keys")]
+    InternalKey,
     #[error("input {input} needs {needed} confirmations before it can be spent this way, and has {has}")]
     TooEarly { input: usize, needed: u16, has: u32 },
     #[error("input {input} uses a time-based delay; Savings only uses block-based delays")]
