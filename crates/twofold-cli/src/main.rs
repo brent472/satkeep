@@ -15,7 +15,7 @@ use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
 use twofold_savings::checkin::{self, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
-use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey, contains_recovery_phrase};
+use twofold_savings::{DEFAULT_HEIR_DELAY, HolderKey, contains_recovery_phrase, migrate};
 use zeroize::Zeroizing;
 
 use twofold_cli::wallet_dir::{self, Config, Opened, TestNetwork};
@@ -56,34 +56,36 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Create a Savings wallet from five public keys.
+    /// Create a Savings wallet: any 2 of PHONE, DEVICE, HELPER. With --heir,
+    /// HEIR can also spend alone after the heir delay; without it, there's
+    /// no delayed path and no check-ins (add a beneficiary later with
+    /// `twofold add-heir`).
     Create {
         /// PHONE's public key, like [fingerprint/87'/1'/0']tpub…/<0;1>/*
         #[arg(long)]
         phone: String,
-        /// DEVICE's key for the 2-of-3 path
         #[arg(long)]
         device: String,
-        /// DEVICE's key for its delayed path (DEVICE_R)
-        #[arg(long = "device-r")]
-        device_r: String,
         #[arg(long)]
         helper: String,
+        #[command(flatten)]
+        heir: HeirArgs,
+    },
+    /// Add a beneficiary, or change it: create a new Savings wallet with the
+    /// same PHONE, DEVICE and HELPER plus HEIR, and prepare one 2-of-3
+    /// payment moving every confirmed coin there. Saved unsigned.
+    AddHeir {
+        /// Folder for the new wallet. Must not already hold one.
         #[arg(long)]
-        heir: String,
-        /// Blocks before DEVICE can spend alone (placeholder default)
-        #[arg(long, default_value_t = DEFAULT_DEVICE_DELAY)]
-        device_delay: u16,
-        /// Blocks before HEIR can spend alone (placeholder default)
-        #[arg(long, default_value_t = DEFAULT_HEIR_DELAY)]
-        heir_delay: u16,
-        /// Blocks between check-ins (placeholder default, about 6 months)
-        #[arg(long, default_value_t = checkin::DEFAULT_CHECKIN_INTERVAL)]
-        checkin_interval: u16,
-        /// Blocks the check-in interval must leave before the device delay
-        /// (placeholder default, about 30 days)
-        #[arg(long, default_value_t = checkin::DEFAULT_CHECKIN_MARGIN)]
-        checkin_margin: u16,
+        new_wallet_dir: PathBuf,
+        #[command(flatten)]
+        heir: HeirArgs,
+        /// Network fee rate in sat/vB
+        #[arg(long, default_value_t = 2)]
+        fee_rate: u64,
+        /// File to save the move to. Must not already exist.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Show a new address to receive into Savings.
     Address,
@@ -117,7 +119,8 @@ enum Command {
         out: PathBuf,
     },
     /// Prepare a check-in: every Savings coin, through the 2-of-3 path, into
-    /// one new Savings address, restarting both delays. Saved unsigned.
+    /// one new Savings address, restarting the heir delay. Saved unsigned.
+    /// Only for Savings with a beneficiary.
     Checkin {
         /// Network fee rate in sat/vB
         #[arg(long, default_value_t = 2)]
@@ -153,13 +156,43 @@ enum Command {
     },
 }
 
+/// The beneficiary, for `create` and `add-heir`.
+#[derive(clap::Args)]
+struct HeirArgs {
+    /// HEIR's public key. Required by add-heir; optional for create.
+    #[arg(long)]
+    heir: Option<String>,
+    /// Blocks before HEIR can spend alone (placeholder default, about 14 months)
+    #[arg(long, requires = "heir")]
+    heir_delay: Option<u16>,
+    /// Blocks between check-ins (placeholder default, about 12 months)
+    #[arg(long, requires = "heir")]
+    checkin_interval: Option<u16>,
+    /// Blocks the check-in interval must leave before the heir delay
+    /// (placeholder default, about 2 months)
+    #[arg(long, requires = "heir")]
+    checkin_margin: Option<u16>,
+}
+
+impl HeirArgs {
+    /// Fills a config's beneficiary fields, with the defaults for anything
+    /// not given. Leaves them empty without --heir.
+    fn apply(&self, config: &mut Config) {
+        config.heir = self.heir.clone();
+        if self.heir.is_some() {
+            config.heir_delay = Some(self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY));
+            config.checkin_interval = Some(self.checkin_interval.unwrap_or(checkin::DEFAULT_CHECKIN_INTERVAL));
+            config.checkin_margin = Some(self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN));
+        }
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum PathArg {
     /// Any 2 of PHONE, DEVICE, HELPER. No wait.
     TwoOfThree,
-    /// DEVICE alone, once every coin used has waited the device delay
-    Device,
-    /// HEIR alone, once every coin used has waited the heir delay
+    /// HEIR alone, once every coin used has waited the heir delay. Only in
+    /// Savings with a beneficiary.
     Heir,
 }
 
@@ -167,7 +200,6 @@ impl PathArg {
     fn path(self) -> SpendPath {
         match self {
             PathArg::TwoOfThree => SpendPath::TwoOfThree,
-            PathArg::Device => SpendPath::Device,
             PathArg::Heir => SpendPath::Heir,
         }
     }
@@ -175,7 +207,6 @@ impl PathArg {
     fn who_approves(self) -> &'static str {
         match self {
             PathArg::TwoOfThree => "any 2 of PHONE, DEVICE, HELPER",
-            PathArg::Device => "DEVICE alone",
             PathArg::Heir => "HEIR alone",
         }
     }
@@ -328,7 +359,9 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Checkin { fee_rate, ref out } => {
             let (mut opened, _client) = open_and_sync(&cli)?;
-            opened.config.checkin_rule()?;
+            if opened.config.checkin_rule()?.is_none() {
+                bail!("this Savings has no beneficiary, so it has no delayed path and needs no check-in");
+            }
             let fee_rate = FeeRate::from_sat_per_vb(fee_rate)
                 .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
                 .context("the fee rate must be at least 1 sat/vB")?;
@@ -345,7 +378,7 @@ fn run(cli: Cli) -> Result<()> {
             );
             println!("Network fee: {}", btc(psbt.fee()?));
             println!("Saved, unsigned, to {}.", out.display());
-            println!("Once confirmed, both delays restart for all of it.");
+            println!("Once confirmed, the heir delay restarts for all of it.");
             let waiting = opened.wallet.list_unspent().filter(|u| !u.chain_position.is_confirmed()).count();
             if waiting > 0 {
                 println!(
@@ -359,56 +392,94 @@ fn run(cli: Cli) -> Result<()> {
         Command::Broadcast { ref psbt } => {
             let (mut opened, client) = open_and_sync(&cli)?;
             let payment = read_psbt(psbt)?;
+            // Synced just now: refuses if a coin arrived since it was built.
             if checkin::is_checkin(&payment) {
-                // Synced just now: refuses if a coin arrived since it was built.
                 checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays())?;
             }
+            let moved_to = if migrate::is_move(&payment) {
+                Some(migrate::check_move(&opened.wallet, &payment, &opened.policy)?)
+            } else {
+                None
+            };
             let tx = spend::finalize(&opened.wallet, &payment)?;
             let txid = node::broadcast(&client, &tx)?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             opened.wallet.apply_unconfirmed_txs([(tx, now)]);
             opened.persist()?;
             println!("Sent. Transaction ID: {txid}");
+            if moved_to.is_some() {
+                println!("Once it confirms, Savings is in the new wallet: use its folder (--wallet-dir) from now on.");
+            }
         }
-        Command::Create {
-            ref phone,
-            ref device,
-            ref device_r,
-            ref helper,
-            ref heir,
-            device_delay,
-            heir_delay,
-            checkin_interval,
-            checkin_margin,
-        } => {
+        Command::Create { ref phone, ref device, ref helper, ref heir } => {
             let network = cli.network_or_default();
             let dir = cli.wallet_dir()?;
             let client = connect(&cli.rpc_url, &cli.rpc_cookie, network)?;
-            let config = Config {
+            let mut config = Config {
                 network,
-                device_delay,
-                heir_delay,
                 phone: phone.clone(),
                 device: device.clone(),
-                device_r: device_r.clone(),
                 helper: helper.clone(),
-                heir: heir.clone(),
+                heir: None,
+                heir_delay: None,
                 birthday: node::height(&client)?,
-                checkin_interval: Some(checkin_interval),
-                checkin_margin: Some(checkin_margin),
+                checkin_interval: None,
+                checkin_margin: None,
+                device_r: None,
             };
+            heir.apply(&mut config);
+            config.policy()?;
             config.checkin_rule()?;
             let mut opened = wallet_dir::create(&dir, config)?;
             opened.persist()?;
             println!("Created a Savings wallet on {} in {}.", network.core_name(), dir.display());
-            println!("Any 2 of PHONE, DEVICE, HELPER can approve at any time.");
-            println!("DEVICE alone can approve once a coin has {device_delay} confirmations.");
-            println!("HEIR alone can approve once a coin has {heir_delay} confirmations.");
-            println!(
-                "Check in every {checkin_interval} blocks: each check-in restarts both delays \
-                 (`twofold checkin`)."
-            );
+            print_rules(&opened.config);
             println!("Settings: {}", wallet_dir::config_path(&dir).display());
+        }
+        Command::AddHeir { ref new_wallet_dir, ref heir, fee_rate, ref out } => {
+            if heir.heir.is_none() {
+                bail!("add-heir needs --heir, the beneficiary's public key");
+            }
+            let (mut opened, client) = open_and_sync(&cli)?;
+            let fee_rate = FeeRate::from_sat_per_vb(fee_rate)
+                .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
+                .context("the fee rate must be at least 1 sat/vB")?;
+            let mut config = Config {
+                network: opened.network(),
+                phone: opened.config.phone.clone(),
+                device: opened.config.device.clone(),
+                helper: opened.config.helper.clone(),
+                heir: None,
+                heir_delay: None,
+                birthday: node::height(&client)?,
+                checkin_interval: None,
+                checkin_margin: None,
+                device_r: None,
+            };
+            heir.apply(&mut config);
+            let to = config.policy()?;
+            config.checkin_rule()?;
+            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, fee_rate)?;
+            let mut new = wallet_dir::create(new_wallet_dir, config)?;
+            new.persist()?;
+            write_new(out, psbt.to_string().as_bytes())?;
+            opened.persist()?;
+            let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
+            println!("Created the new Savings wallet in {}.", new_wallet_dir.display());
+            print_rules(&new.config);
+            println!(
+                "Prepared the move of {} coin{}, {}, into it, in one payment.",
+                psbt.unsigned_tx.input.len(),
+                if psbt.unsigned_tx.input.len() == 1 { "" } else { "s" },
+                btc(total)
+            );
+            println!("Network fee: {}", btc(psbt.fee()?));
+            println!("Saved, unsigned, to {}.", out.display());
+            println!(
+                "Needs approval from any 2 of PHONE, DEVICE, HELPER: run `twofold sign`, then `twofold broadcast`, \
+                 with this wallet. Then use --wallet-dir {}.",
+                new_wallet_dir.display()
+            );
         }
         Command::Address => {
             let mut opened = cli.open()?;
@@ -456,8 +527,6 @@ fn keygen(out: &Path) -> Result<()> {
     println!("Anyone with this file can approve as its holder. Keep it private and never commit it.");
     println!("Public key (for PHONE, DEVICE, HELPER or HEIR):");
     println!("  {}", key.public_key(0));
-    println!("Second public key (DEVICE only, for DEVICE_R):");
-    println!("  {}", key.public_key(1));
     Ok(())
 }
 
@@ -509,7 +578,12 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     if checkin::is_checkin(payment) {
         checkin::check_checkin(wallet, payment, opened.policy.delays())?;
         println!("Check-in to approve: every Savings coin goes into one new Savings address,");
-        println!("restarting both delays.");
+        println!("restarting the heir delay.");
+    } else if migrate::is_move(payment) {
+        let to = migrate::check_move(wallet, payment, &opened.policy)?;
+        let heir_delay = to.delays().heir().expect("a move goes to a wallet with a beneficiary");
+        println!("Move to approve: every Savings coin goes to a new Savings wallet with the same");
+        println!("PHONE, DEVICE and HELPER, where HEIR can also approve alone after {heir_delay} blocks.");
     } else {
         println!("Payment to approve:");
     }
@@ -527,7 +601,6 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     println!("  Network fee: {}", btc(payment.fee()?));
     let who = match path {
         SpendPath::TwoOfThree => PathArg::TwoOfThree,
-        SpendPath::Device => PathArg::Device,
         SpendPath::Heir => PathArg::Heir,
     };
     println!("  Approval path: {}", who.who_approves());
@@ -542,6 +615,23 @@ fn open_and_sync(cli: &Cli) -> Result<(Opened, Client)> {
     Ok((opened, client))
 }
 
+/// Who can approve what, in this wallet's shape.
+fn print_rules(config: &Config) {
+    println!("Any 2 of PHONE, DEVICE, HELPER can approve at any time.");
+    match (config.heir_delay, config.checkin_interval) {
+        (Some(heir_delay), interval) => {
+            println!("HEIR alone can approve once a coin has {heir_delay} confirmations.");
+            if let Some(interval) = interval {
+                println!("Check in every {interval} blocks: each check-in restarts the heir delay (`twofold checkin`).");
+            }
+        }
+        (None, _) => {
+            println!("No beneficiary yet: no key can approve alone, ever, and no check-ins are needed.");
+            println!("Add one with `twofold add-heir`, which moves Savings to a new wallet in one payment.");
+        }
+    }
+}
+
 fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
     let tip = node::height(client)?;
     let balance = opened.wallet.balance();
@@ -552,10 +642,10 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
         println!("Waiting for confirmation: {}", btc(waiting));
     }
     let delays = opened.policy.delays();
-    // Without a rule nothing is "due", but each coin's delays and "overdue"
-    // still show: they don't depend on the rule.
+    // Without a rule nothing is "due", but each coin's heir delay and
+    // "overdue" still show: they don't depend on the rule.
     let rule = match opened.config.checkin_rule() {
-        Ok(rule) => Some(rule),
+        Ok(rule) => rule,
         Err(e) => {
             println!("Check-ins aren't set up for this wallet: {e:#}");
             None
@@ -571,15 +661,19 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
         } else {
             ""
         };
+        let heir = s.heir_opens_in.map(|n| format!("  heir path {}", opens_in(n))).unwrap_or_default();
         println!(
-            "  {}  {}  {} confirmation{}  device path {}  heir path {}{flag}",
+            "  {}  {}  {} confirmation{}{heir}{flag}",
             btc(coin.amount),
             coin.outpoint,
             s.confirmations,
             if s.confirmations == 1 { "" } else { "s" },
-            opens_in(s.device_opens_in),
-            opens_in(s.heir_opens_in),
         );
+    }
+    if !opened.policy.has_heir() {
+        println!();
+        println!("No beneficiary yet, so nothing opens with time and no check-in is needed.");
+        return Ok(());
     }
     let oldest = coins.iter().filter(|c| c.status.confirmations > 0).max_by_key(|c| c.status.confirmations);
     match (checkin::reminder(&coins), oldest, rule) {
@@ -587,7 +681,7 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
             let open = coins.iter().filter(|c| c.status.overdue).count();
             println!();
             println!(
-                "WARNING: check-in overdue. DEVICE alone can already spend {open} coin{}.",
+                "WARNING: check-in overdue. HEIR alone can already spend {open} coin{}.",
                 if open == 1 { "" } else { "s" }
             );
             println!("Run `twofold checkin` now.");
@@ -599,7 +693,8 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
                 oldest.status.confirmations,
                 rule.interval()
             );
-            println!("Its device path {}. Run `twofold checkin`.", opens_in(oldest.status.device_opens_in));
+            let heir = oldest.status.heir_opens_in.expect("a wallet with a beneficiary");
+            println!("Its heir path {}. Run `twofold checkin`.", opens_in(heir));
         }
         (_, Some(oldest), Some(rule)) => {
             let due_in = u32::from(rule.interval()) - oldest.status.confirmations;

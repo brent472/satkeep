@@ -21,8 +21,8 @@ pub const PHRASE_WORDS: usize = 12;
 /// Every key comes from a standard BIP39 recovery phrase: 12 English words,
 /// no passphrase. The phrase gives a BIP32 master key on the test network,
 /// and public keys are derived at `m/87'/1'/account'` and used as
-/// `…/<0;1>/*`. Every holder uses account 0; DEVICE also uses account 1 for
-/// its delayed-path key (DEVICE_R). These paths are test-only placeholders.
+/// `…/<0;1>/*`. Every holder uses account 0. These paths are test-only
+/// placeholders.
 ///
 /// Deliberately not `Debug` or `Display`, so it can't end up in a log or an
 /// error message by accident. [`HolderKey::to_secret_string`] is the only way
@@ -33,8 +33,8 @@ pub struct HolderKey {
     master: Xpriv,
 }
 
-/// Accounts a holder may have a key on: 0 for everyone, 1 for DEVICE_R.
-const ACCOUNTS: [u32; 2] = [0, 1];
+/// Accounts a holder has a key on: account 0, for everyone.
+const ACCOUNTS: [u32; 1] = [0];
 
 impl HolderKey {
     /// A fresh random 12-word phrase from the operating system's random

@@ -11,7 +11,7 @@ use twofold_savings::bitcoin::{Address, Amount, Network};
 fn funded(node: &Node) -> (Cli<'_>, Holders) {
     let cli = Cli::new(node);
     let holders = Holders::generate();
-    cli.create(&holders, 10, 20);
+    cli.create(&holders, 20);
     let address = cli.ok(&["address"]);
     let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
     node.send_to(&address, Amount::from_btc(1.0).unwrap());
@@ -78,14 +78,14 @@ fn a_declined_payment_never_reads_the_key() {
 fn names_the_delayed_path_and_your_own_addresses() {
     let node = Node::start();
     let (cli, holders) = funded(&node);
-    node.mine(9);
+    node.mine(19);
     let own = cli.ok(&["address"]).trim().to_string();
-    let psbt = cli.path("device.psbt");
-    cli.ok(&["send", "--to", &own, "--all", "--path", "device", "--out", &psbt]);
+    let psbt = cli.path("heir.psbt");
+    cli.ok(&["send", "--to", &own, "--all", "--path", "heir", "--out", &psbt]);
     let args = ["sign", "--psbt", &psbt, "--key-stdin"];
-    let out = expect_ok(&args, cli.run_with_stdin(&args, &format!("y\n{}\n", holders.device.to_secret_string())));
+    let out = expect_ok(&args, cli.run_with_stdin(&args, &format!("y\n{}\n", holders.heir.to_secret_string())));
     assert!(out.contains(&format!("to {own} (one of your own Savings addresses)")), "{out}");
-    assert!(out.contains("Approval path: DEVICE alone"), "{out}");
+    assert!(out.contains("Approval path: HEIR alone"), "{out}");
 }
 
 #[test]
