@@ -1,8 +1,8 @@
 # Phone key backup: research and proposed design
 
-**Status: research for review. No code yet.** The prototype described at the end starts only after this is approved.
+**Status:** research approved (decisions D1–D7, section 8), then updated for master brief v3.8. The prototype in section 9 is built in the same PR as this document.
 
-The requirements come from the master brief v3.6 (private repo `brent472/twofold-private`):
+The requirements come from the master brief v3.8 (private repo `brent472/twofold-private`):
 - Section 04, *Phone key backup* and *Threats to address*
 - Section 13, the two open decisions on the backup
 - the Section 19 screens: *Onboarding: back up your phone key*, *Restore a wallet*, *Protection*, *Recover my account* and *Settings*
@@ -31,13 +31,13 @@ From the brief, and from what the screen copy commits us to:
 | --- | --- | --- |
 | R1 | The phone key (its 12-word BIP39 phrase) is encrypted on the phone, and the ciphertext is stored in the person's personal cloud account (iCloud on iPhone, Google Drive on Android). There's nothing to write down in the main flow. | Section 04; backup onboarding screen |
 | R2 | The cloud copy alone reveals nothing. Unlocking it needs the security device (the "second key"). | Section 04; backup onboarding screen |
-| R3 | Twofold's servers (the helper) never hold the backup, and can't restore anyone's phone key. | Section 04; backup onboarding screen |
+| R3 | Twofold's servers (the helper) store neither the backup nor **even a fragment** of what unlocks it. So restoring someone's phone key is impossible for them. | Section 04; backup onboarding screen |
 | R4 | Restore on a new phone needs only the cloud login used before plus the second key, with **no delay**, and it brings back both wallets. | *Restore a wallet*; *Recover my account*, lost phone |
 | R5 | Before unlocking, the restore screen shows the date of the backup it found. | *Restore a wallet* |
 | R6 | The wrong second key gets its own clear error. | *Restore a wallet* |
 | R7 | The old phone is alerted when the phone key is restored somewhere else. | *Restore a wallet* |
-| R8 | When the second key is replaced, the backup is locked to the replacement instead, and the retired device stops opening it. | Section 04; *Settings* |
-| R9 | Lost phone **and** second key: the recovery contact assists in opening the backup but can never read the key themselves. A waiting period applies, with notifications to everyone involved. | Section 04; *Recover my account*, lost both; Section 13 |
+| R8 | When the second key is replaced, the backup is locked to the replacement instead. A lost or stolen old device also means a new phone key, swept in the one transaction that moves Savings. That way, old cloud copies open nothing of value. | Section 04; *Settings* |
+| R9 | Lost phone **and** second key: the recovery contact helps open the backup straight away, but can never read it on their own. Once a new phone has restored, big Savings payments from it wait a few days in a helper hold, with alerts to all the owner's devices and contacts. | Section 04; *Recover my account*, lost both; Section 13 |
 | R10 | No second key yet: no backup, so the app asks for a second key first. | Backup onboarding screen; Section 13 |
 | R11 | The backup is under 1 MB. | Backup onboarding screen, the "no space" error |
 | R12 | An advanced, opt-in export shows the 12 words, from Settings only. | Section 04; *Settings*, Recovery kit |
@@ -48,11 +48,11 @@ R11 is easy: the backup is a few hundred bytes.
 
 R1, R4, R5, R6 and R12 are covered by the design in section 2.
 
-Four requirements need decisions from you:
-- **R3 with R9:** a waiting period that's enforced, not just promised, needs something other than the contact to hold part of the unlock. See section 5.
-- **R7:** a thief who has the cloud account and the second key can unlock without contacting us. So the alert is only reliable if unlocking needs a step that goes through the helper. See sections 5 and 7.
-- **R8:** a retired device that stops opening the backup can't be guaranteed by deleting files. Old copies of the encrypted backup survive in cloud version history, trash and provider backups, or in an attacker's hands, and the old device still opens them. See section 7.3.
-- **R2/R9 vs the copy:** the backup onboarding screen promises that only the second key can unlock the cloud copy. Any contact-assisted unlock (R9) is a second way in, so either the copy or R9 has to give. See section 8.
+The first version of this document raised four questions. v3.8 of the brief settles them:
+- **R3 with R9:** the contact unlocks right away, with no wait on the unlock, and the helper holds no part of any key. The protection moves to Savings: a few days' hold on large payments after a restore. See section 5.
+- **R7:** a thief with the cloud account and the second key can still unlock without contacting us, so the alert stays best-effort (section 7.1). The Savings hold after a restore doesn't depend on it.
+- **R8:** deleting files can't stop an old device opening old copies of the backup. Replacing the phone key when a device is lost or stolen makes those copies worthless. See section 7.3.
+- **R2/R9 vs the copy:** the backup screen's copy now says the recovery contact can help if both are lost (v3.7–3.8).
 
 ## 2. Proposed design
 
@@ -66,7 +66,7 @@ header (plain, but authenticated):
   wallet id                 random 16 bytes, made when the wallet is created
   created                   date (shown on the restore screen, R5)
   lock entries, one per unlock path:
-    kind                    "device" (later: "contact-split")
+    kind                    "device" (reserved, not yet built: "contact")
     device id               hash of the device's public identity at the unlock path (R6)
     unlock method           e.g. slip11-cipherkeyvalue, ecdh, msg-signature, hmac-secret
     method parameters       path, label or salt; ephemeral public key for ECDH
@@ -169,7 +169,7 @@ Verdicts are from vendor docs, specs and firmware source. **No hardware was test
 - The device can still be a Savings key. It just can't lock the backup.
 - At setup, the app says so and offers the options that can lock it: an old phone or tablet, or the Twofold card.
 - If the person has neither, the backup isn't made, as with no second key (R10).
-- ⚠️ **Section 19 has no copy for "your second key can't lock a backup."** It needs a line in the brief before the app can say it; I haven't invented one.
+- Section 19 has the copy for this case since v3.8.
 
 ### 3.3 The Twofold card
 
@@ -197,34 +197,26 @@ All three would be new dependencies, so the prototype PR will ask for them with 
 
 ## 5. The recovery contact: helping unlock without reading
 
-**The problem.** If the phone and the second key are both lost, the brief wants the recovery contact to help unlock the backup:
-- without ever being able to read it,
-- after a wait, and
-- with everyone notified.
+**What v3.8 decided.** If the phone and the second key are both lost:
+- The recovery contact helps unlock the backup on the new phone **right away**. They can't read it on their own: they never get the backup file.
+- **Once a new phone has restored, big Savings payments from it wait a few days in a helper hold, with alerts to all the owner's devices and contacts.** The hold length is pending review.
+- The helper holds **no part** of any unlock key (R3).
 
-The hard part is the wait. Bitkey's version doesn't carry over:
-- **Bitkey:** any one trusted contact can decrypt the backup **immediately** ([recovery design](https://bitkey.world/blog/sharing-our-recovery-design); [`RelationshipsCrypto.kt`](https://raw.githubusercontent.com/proto-at-block/bitkey/main/app/domain/relationships/public/src/commonMain/kotlin/build/wallet/relationships/RelationshipsCrypto.kt)). Its delay applies only to replacing the hardware key. That's safe for Bitkey, because its app key alone can't spend.
-- **Twofold:** our phone key alone *is* the Spending wallet. So the delay has to come **before** the backup opens.
+This is Bitkey's model ([recovery design](https://bitkey.world/blog/sharing-our-recovery-design); [`RelationshipsCrypto.kt`](https://raw.githubusercontent.com/proto-at-block/bitkey/main/app/domain/relationships/public/src/commonMain/kotlin/build/wallet/relationships/RelationshipsCrypto.kt)):
+- The contact's own app makes a keypair.
+- The owner's app wraps the backup's data key to the contact's public key, and stores that wrap **in the owner's backup file**, as one more lock entry.
+- To recover, the owner and the contact run a short-code exchange (Bitkey uses SPAKE2). The contact's app unwraps the data key and passes it to the new phone over that channel.
 
-**The options:**
+**What changed from the first version.** This document first recommended an Apple-style split, with the helper releasing its half after a wait (option A). v3.8 chose the immediate model instead. That means:
+- **Spending is exposed at once** if the contact is fooled or pressured and someone has the owner's cloud account. Bitkey can afford immediate unlocking because its app key alone can't spend; our phone key alone is the Spending wallet. The brief accepts this, and says Spending should hold everyday amounts only. See section 7.5.
+- **Savings is protected by the hold**, not by the unlock. The helper can do that without any key material: it already co-signs Savings, and it sees a new phone register.
 
-| | A. Contact share + helper share released after the wait (Apple-style) | B. Shamir 2-of-3 {device, contact, password} | C. No backup unlock; recover through Savings |
-| --- | --- | --- | --- |
-| **How** | The data key is wrapped under a key split in two. The contact's app holds one half. The helper holds the other and releases it only after the wait, the notifications, and a code exchanged between the contact and the owner. This is how [Apple's Account Recovery Contact](https://support.apple.com/guide/security/secafa525057/web) works. | The data key is split 2-of-3 between the device, the contact, and a password only the owner knows. Contact + password unlocks. | Lost both recovers Savings through a policy path that includes the recovery contact. Spending is lost unless it was emptied into Savings earlier. |
-| **Contact alone** | Nothing | Nothing | Nothing |
-| **Contact + cloud thief** | Nothing until the wait ends, and the owner is alerted and can stop it | Nothing without the password | n/a |
-| **Helper alone** | Nothing: never has the backup or the contact's half | n/a | n/a |
-| **Is the wait enforced?** | **Yes:** the helper holds back its half | **No:** only the contact's app delays, which is a promise, not a guarantee | Yes, on-chain (timelock) |
-| **Replacing the contact** | New split; the helper deletes its old half, which kills the old contact's half even if old files survive | Re-split and re-encrypt; old copies still open with old shares | New Savings wallet |
-| **Fits R3 (no unlock key on our servers)?** | Only if that means "never enough to unlock". The helper holds half a key, alone useless. | Yes | Yes |
-| **Fits the lost-both screen?** | Yes | Partly: the password is new to the owner, and nothing enforces the wait | Partly: Savings only |
-| **Complexity** | Highest: an invite ceremony and a short-code channel. Bitkey's [August 2026 enrolment bug](https://bitkey.world/blog/relationship-enrollment-bug-in-bitkey) shows the code must come from a secure random source and be single-use. | Medium. No audited Rust Shamir crate found: [`sharks`](https://rustsec.org/advisories/RUSTSEC-2024-0398) has an unfixed advisory, and [`vsss-rs`](https://github.com/mikelodder7/vsss-rs) publishes no report. | Policy work, not backup work |
-
-**Recommendation: A.** It's the only one where the wait is enforced, and where the contact plus someone who took over the owner's cloud account still can't open the backup early. It needs your call on the "servers never hold the unlock key" rule (decision D2).
-
-Two points either way:
-- **It doesn't block the prototype.** Section 9 builds the device path only, and leaves a lock entry kind for this.
-- **The contact isn't in the Savings policy yet.** The brief's role table says the recovery contact must be in the policy from the start. Milestone 1's Savings policy has no contact key, so that's separate policy work for the inheritance design.
+**For when the contact path is built** (not in this prototype, which keeps the `contact` lock entry reserved):
+- **The short code must be single-use and come from a secure random source.** Bitkey's [August 2026 enrolment bug](https://bitkey.world/blog/relationship-enrollment-bug-in-bitkey) used a non-cryptographic random generator, which let the relaying server predict the code and swap in its own key.
+- **Bind the contact's key at enrolment** to the owner's keys (Bitkey uses a key certificate), so our relay can't substitute its own.
+- **The contact's app sends its own alerts** (to the owner's devices and other contacts) when it's used to unlock, so a compromised helper can't hide a restore by staying quiet.
+- **Replacing the contact** means writing a new backup under a new data key without the old contact's wrap. Old cloud copies still hold the old wrap, so the old contact plus an old copy still opens it, the same limit as section 7.3.
+- **The contact isn't in the Savings policy.** Here the contact helps unlock the *backup*; they don't sign anything. The brief's role table also lists the contact as approving recovery in the policy; that's separate policy work for the inheritance design.
 
 ## 6. Where the backup lives
 
@@ -254,7 +246,7 @@ Two rules for the phone's own storage:
 | Defence | What it does |
 | --- | --- |
 | **The device's own PIN or fingerprint (R13)** | **Required.** Section 3 marks devices without one as "can't" (SATSCARD). TAPSIGNER's code is typed on the phone and never wipes, which is why it's marked weak. |
-| **An alert to the old phone (R7)** | Only fires if the attacker uses our app. A thief who reads the cloud file with their own code and unlocks the device directly sends no alert. Making the alert unskippable means putting a helper-gated step in the unlock itself, the same mechanism as option A, applied to every restore. That would add a wait to restores, which the copy rules out ("no waiting"). |
+| **An alert to the old phone (R7)** | Only fires if the attacker uses our app. A thief who reads the cloud file with their own code and unlocks the device directly sends no alert. Making it unskippable would need a helper step inside the unlock, which R3 rules out. |
 | **Savings is still protected by the helper** | After the attacker has 2 of 3, the helper co-signs according to its limits and holds. But phone + device don't need the helper at all. |
 
 **Conclusion:** for this threat, the device PIN is the real defence, and the alert is best-effort. I recommend we say so plainly in the threat model rather than claim more.
@@ -290,11 +282,7 @@ Two rules for the phone's own storage:
 - Rotating the phone key means a new Spending wallet and a new PHONE key in that new Savings wallet.
 - Both sweeps can go in **the same transaction**: Spending's coins (phone key) and Savings' coins (phone + helper) as inputs, the new wallets as outputs. So it's still one network fee.
 
-**Alternatives:**
-- **A helper-held revocable share** (like option A) would make revocation real without rotating. But it adds a helper step, and a wait, to every restore.
-- **Accept the gap and say so.**
-
-Decision D3.
+This is decision D3, and v3.8 adopts it. A helper-held revocable share would have been the alternative, but R3 rules it out.
 
 ### 7.4 Malware on the phone during restore
 
@@ -314,12 +302,27 @@ Decision D3.
 
 **What this can't do:** none of it stops malware that already controls the new phone. The written backup in Settings is the same risk: the copy already warns against typing or photographing the words.
 
-## 8. Decisions for you
+### 7.5 Collusion and coercion around the recovery contact
 
-| # | Decision | Options | My recommendation |
+**A fooled or pressured contact + a cloud account takeover.** Together they open the backup straight away (v3.8 accepts this, section 5):
+- **Spending:** exposed in full. The phone key alone spends it, and there's no wait. The brief's answer is that Spending holds everyday amounts only.
+- **Savings:** the attacker has the phone key, but the second key is still with the owner (or lost). Big payments from the new phone need the helper, which makes them wait a few days and alerts all the owner's devices and contacts. In that time the owner can use the second key and the helper to move Savings to safety.
+
+**A compromised helper + the contact.** They still need the owner's cloud backup file: the contact's wrap is stored only in that file, and the helper never has it. So it takes all three: the cloud account, the contact and the helper. A compromised helper on its own:
+- can't unlock anything (it holds no part of any key, R3);
+- can skip the Savings hold, which is its job, and so lose that protection;
+- can't hide the restore, because the contact's app sends its own alerts.
+
+**What this asks of the contact path when it's built:** the contact's app shows who is asking and why, alerts the owner's other devices and contacts itself, and never unwraps without the owner's short code (section 5).
+
+## 8. Decisions
+
+All seven were approved as recommended, except **D2, which brief v3.8 superseded** (section 5). D4 and D5 are copy changes, made in the brief's Section 19 (v3.7–3.8).
+
+| # | Decision | Options | Recommendation (approved unless noted) |
 | --- | --- | --- | --- |
 | **D1** | Which devices to support at launch for locking the backup | Old phone/tablet and the Twofold card (works); Trezor and Ledger (works with caveats); Coldcard, Jade, BitBox02 (works with caveats, mechanism (c)); TAPSIGNER (weak) | Start with **old phone/tablet** and **Trezor (CipherKeyValue)**, the cleanest mechanisms. Then add message-signing devices with the setup and check-in tests in 3.2. Leave TAPSIGNER out of backup locking, and let the card be designed for it. |
-| **D2** | The rule that our servers hold neither the backup nor its unlock key (R3): may the helper hold **half** of a key, alone useless, for the lost-both path? | Yes, option A / no, option B or C | **Yes, option A.** It's the only enforced wait. The helper still never holds the backup or anything that unlocks it alone. |
+| **D2** | The rule that our servers hold neither the backup nor its unlock key (R3): may the helper hold **half** of a key, alone useless, for the lost-both path? | Yes, option A / no, option B or C | **Superseded by v3.8:** the contact unlocks right away, the helper holds no key part, and large Savings payments wait after a restore. *(Originally recommended: yes, option A.)* It's the only enforced wait. The helper still never holds the backup or anything that unlocks it alone. |
 | **D3** | What replacing a lost or stolen second key does | Re-encrypt only / re-encrypt + rotate the phone key in the same Savings move / helper-held revocable share | **Re-encrypt + rotate**, one transaction, one fee. Re-encrypt only for an upgrade with the old device in hand. |
 | **D4** | Copy: the backup onboarding screen says only the second key unlocks the cloud copy | Keep R9 (contact-assisted unlock) and adjust the copy / keep the copy and drop R9 for the backup (option C) | Keep R9 and adjust the copy. That's your edit in Section 19; I won't change product wording. |
 | **D5** | Copy for a second key that can't lock a backup (3.2) | New line in Section 19 | Needed before the app ships that case |
