@@ -17,4 +17,4 @@ pub use delays::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, Delays};
 pub use error::Error;
 pub use holder::HolderKey;
 pub use keys::{Role, SavingsKeys};
-pub use policy::{NUMS_POINT, SavingsPolicy};
+pub use policy::{NUMS_POINT, SavingsPolicy, unspendable_internal_key};

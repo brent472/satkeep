@@ -110,7 +110,13 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 ### Script type and keys
 
 - **Taproot.** Only the leaf actually used is revealed on-chain, so everyday 2-of-3 spends don't reveal the inheritance path. The 2-of-3 leaf sits highest in the tree, so it gets the shortest proof.
-- **No key-path spend.** The internal key is an extended key whose public key is BIP 341's NUMS point H (`0250929b…3ac0`). Its chain code is SHA256 of the five Savings public keys, in order. Nobody can know its private key at any index. Because the chain code differs per wallet, different wallets don't share an internal key, and anyone with the five public keys can recompute it. This follows the approach Liana uses. Byte-for-byte compatibility with Liana's import is **not yet verified**; that's part of the exit drill.
+- **No key-path spend.** The internal key is an extended key whose public key is BIP 341's NUMS point H (`0250929b…3ac0`). Nobody can know its private key at any index.
+  - **Chain code.** SHA256 of the public keys of every key in the tap tree, in **tree order**: PHONE, DEVICE, HELPER (the 2-of-3 leaf), then DEVICE_R, then HEIR. A key that appears twice counts twice.
+  - **Why the chain code matters.** Because it differs per wallet, different wallets don't share an internal key, and anyone with the descriptor's public keys can recompute it.
+  - **Liana compatibility.** This is Liana's convention exactly (`unspendable_internal_key`), so Liana recognises the key as unspendable and imports the wallet. Tests pin it to Liana's published test vectors and to a value from Liana's own code for the Savings tree.
+- **⚠️ Every Savings address changed when this was fixed.** Earlier versions hashed the keys in role order (PHONE, DEVICE, DEVICE_R, HELPER, HEIR). Liana v15.0 read that internal key as a real, spendable key and refused the descriptor: "Descriptor is not compatible with a Liana spending policy."
+  - Switching to tree order changed the internal key, and with it every Savings address.
+  - **Wallets made by older versions must be recreated.** That includes any `~/.twofold` test wallet and the demo wallet. Their coins stay spendable by those old descriptors, and they're only on test networks.
 - The test keys use derivation paths `m/87'/1'/0'` (and `m/87'/1'/1'` for DEVICE_R), with `/<0;1>/*` for receive and change. These paths are **test-only**; the real ones get decided with the reviewer.
 - Keys must be test-network extended public keys (`tpub`). Mainnet keys and a mainnet `Network` are both refused.
 
@@ -125,15 +131,16 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - `export_descriptor()` returns the public descriptor with `<0;1>` and its checksum. `export_receive_and_change()` returns separate receive and change descriptors.
 - Neither contains private keys, but both reveal every Savings address and balance, so treat them as private.
 - Bitcoin Core reads the export and derives exactly the addresses BDK hands out (`tests/export.rs`).
-- Import into Liana or Sparrow is **not yet tested**. Sparrow may not support custom timelocked Taproot policies.
+- **Liana import:** Liana v15.0 (`lianad`, regtest) accepts the export. Spending through Liana is the exit drill's job.
 
 ## Not yet verified
 
-To check during the exit drill (importing the export into Liana or Sparrow and spending without Twofold):
+To check during the exit drill (importing the export into Liana and spending without Twofold):
 
-- **Liana's internal key.** Our unspendable internal key follows Liana's approach. Whether Liana derives a byte-identical one is unverified.
-- **How Liana writes a key used in two paths.** Liana may express DEVICE and DEVICE_R as the *same* xpub with different multipath steps: `xpub/<0;1>/*` for one path and `xpub/<2;3>/*` for the other. `SavingsKeys::new` currently refuses that, because it compares only the extended key. If Liana does this, relax the check to allow the same xpub when the derivation paths differ, while still refusing any overlap that would make two roles derive the same key.
-- **Import at all.** Whether Liana and Sparrow import this descriptor, and whether Sparrow supports custom timelocked Taproot policies.
+- **Spending through Liana.** The 2-of-3, DEVICE-alone and HEIR-alone paths, and a refused early spend.
+- **One signer on two paths.** Liana's own wallets write one signer used on two paths as the *same* xpub with different multipath steps (`<0;1>` and `<2;3>`); its published test vectors do this.
+  - Liana counts a key as the xpub *plus* its paths, so it also accepts our separate-account keys for DEVICE and DEVICE_R. Exporting to Liana needs no change.
+  - `SavingsKeys::new` refuses the same xpub on two paths, so Twofold couldn't import a wallet made *in* Liana. If we ever need that, allow the same xpub when the paths differ, while still refusing any overlap that would make two roles derive the same key.
 
 ## Tests
 
@@ -163,7 +170,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 
 | File | What it proves |
 | --- | --- |
-| `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. |
+| `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. The internal key matches Liana v15.0's published test vectors and a value from Liana's own code for the Savings tree, and isn't the old role-order key. |
 | `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
 | `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
