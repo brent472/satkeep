@@ -82,18 +82,31 @@ BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe" cargo test -- --incl
 $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- --include-ignored
 ```
 
-Last run, on Windows with Bitcoin Core v31.1.0: **73 passed, 0 failed**, plus the full-length test.
-- CLI: 5 approve, 6 keys, 7 payments, 7 wallet
-- Library: 28 unit, 5 allowed, 12 forbidden, 1 export, 2 harness
+Last run, on Windows with Bitcoin Core v31.1.0: **75 passed, 0 failed**, plus the full-length test.
+- CLI: 6 approve, 6 keys, 7 payments, 7 wallet
+- Library: 29 unit, 5 allowed, 12 forbidden, 1 export, 2 harness
 - The full-length 61,320-block test passed in about 11.5 minutes on its own, before the approval prompt was added. The prompt doesn't touch anything that test uses.
 
 Without the full-length test, the suite runs in about 30 s.
 
 **One harness fix along the way:** the throwaway node now mines in batches of 100 blocks instead of 500. On the first full-length run, other tests were building alongside it, and one 500-block batch took longer than the RPC client's 15-second timeout. Run alone, with 100-block batches, it passes.
 
+## Demo on a long-running regtest node
+
+Run with your go-ahead on your own regtest node (Bitcoin Core v31.1.0), with demo keys in `%USERPROFILE%\.twofold\regtest\keys`. The wallet used short demo delays (10 and 20 blocks), and Savings was funded by mining one block straight to it, so no node wallet was created. The node went from height 0 to 132.
+
+| Step | Result |
+| --- | --- |
+| 2-of-3, 1 BTC | PHONE answered n: nothing signed. PHONE y, then broadcast: refused, one approval isn't enough. HELPER y, then broadcast: sent (`27f98cc4…`) |
+| DEVICE alone | Refused at 1 and 9 confirmations, sent at 10 (`28ca45ef…`) |
+| HEIR alone | Refused at 1 and 19 confirmations. HELPER's signature alone: refused. HEIR: sent at 20 (`959b0e16…`), leaving Savings at 0 BTC |
+
+The steps are in the CLI README under "Demo on your own regtest node", so it can be repeated. I checked them by running that README block verbatim on a throwaway node (only the node arguments changed, and the answers were piped in). It gave the same results.
+
+**Bug found by the demo, fixed here:** Windows PowerShell 5.1 puts a byte-order mark in front of anything it pipes, so `"y" | twofold sign …` arrived as `EF BB BF 'y' CR LF`. That read as "no", so nothing was signed; the bug failed safe. `sign` now drops a leading BOM from the answer and from PSBT files, and `HolderKey` drops one from keys (Notepad can save one too). Tests send exactly those bytes.
+
 ## Not in this PR
 
-- A demo on a long-running node. It needs blocks mined on that node and demo keys saved between runs, so it waits for your go-ahead.
 - The check-in (next PR)
 - The signet demo
 - The Liana/Sparrow exit drill

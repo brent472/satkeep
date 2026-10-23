@@ -63,20 +63,94 @@ Global options:
 
 If you pass both `--wallet-dir` and `--network`, they must agree.
 
-## Example on regtest (PowerShell)
+## Demo on your own regtest node (PowerShell)
 
-These commands mine blocks on the node you point them at and save test keys under `%USERPROFILE%\.twofold\regtest\keys`, so only run them against a regtest node you're happy to use for that.
+This walks through every Savings path on a regtest node you run yourself:
+- a 2-of-3 payment, including a declined approval and a refused single approval
+- DEVICE alone, refused one block early, then sent
+- HEIR alone, refused one block early and refused with HELPER's key, then sent
+
+These are the exact steps that were run against Bitcoin Core v31.1.0 when the CLI was added.
+
+**What it changes:**
+- It **mines about 131 blocks** on the node.
+- It **saves four test keys** in `%USERPROFILE%\.twofold\regtest\keys`, and the wallet in `%USERPROFILE%\.twofold\regtest`.
+- Nothing else on the node changes: it creates no node wallet, and funds Savings by mining a block straight to it.
+- Payments go to an address derived from the NUMS point, which nobody can spend from.
+
+The demo wallet uses **short delays (10 and 20 blocks)**, so the delayed paths open in minutes rather than the placeholder 39,420 and 61,320 blocks.
+
+Run it from the repo root with the node already running on regtest. `bitcoin-cli` and `twofold` find the node and its cookie in their default places. Paste one step at a time; each `sign` shows the payment and asks `Approve? (y/N)`. Answer as noted.
 
 ```powershell
-cargo run -p twofold-cli -- keygen --name phone     # and the same for device, helper, heir
-cargo run -p twofold-cli -- create --phone "<PHONE key>" --device "<DEVICE key>" --device-r "<DEVICE second key>" --helper "<HELPER key>" --heir "<HEIR key>"
-cargo run -p twofold-cli -- address
-# fund that address and mine a block, then:
-cargo run -p twofold-cli -- send --to <address> --amount 0.1 --out pay.psbt
-cargo run -p twofold-cli -- sign --psbt pay.psbt --key-file $env:USERPROFILE\.twofold\regtest\keys\phone.key
-cargo run -p twofold-cli -- sign --psbt pay.psbt --key-file $env:USERPROFILE\.twofold\regtest\keys\helper.key
-cargo run -p twofold-cli -- broadcast --psbt pay.psbt
+# 0. Setup
+cargo build -p twofold-cli
+$tf    = ".\target\debug\twofold.exe"
+$bcli  = "C:\Program Files\Bitcoin\daemon\bitcoin-cli.exe"
+$node  = @("-regtest")                       # arguments for bitcoin-cli
+$base  = if ($env:TWOFOLD_HOME) { $env:TWOFOLD_HOME } else { "$env:USERPROFILE\.twofold" }
+$demo  = "$base\regtest"                     # where twofold keeps the wallet
+$keys  = "$demo\keys"                        # where keygen saves the keys
+
+# 1. Four demo keys. keygen prints the public keys on lines starting with two spaces.
+$pub = @{}
+foreach ($n in "phone", "device", "helper", "heir") {
+    $pub[$n] = @(& $tf keygen --name $n | Where-Object { $_ -like "  *" } | ForEach-Object { $_.Trim() })
+}
+
+# 2. The Savings wallet. DEVICE's second key is its delayed-path key (DEVICE_R).
+& $tf create --device-delay 10 --heir-delay 20 --phone $pub.phone[0] --device $pub.device[0] --device-r $pub.device[1] --helper $pub.helper[0] --heir $pub.heir[0]
+
+# 3. An address nobody can spend from, to pay to and mine to.
+$nums = (& $bcli @node getdescriptorinfo "rawtr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0)" | ConvertFrom-Json).descriptor
+$burn = (& $bcli @node deriveaddresses $nums | ConvertFrom-Json)[0]
+
+# 4. Fund Savings: one block's reward straight to it, then 100 more blocks so that reward can be spent.
+$null = & $bcli @node generatetoaddress 1 (& $tf address).Trim()
+$null = & $bcli @node generatetoaddress 100 $burn
+& $tf balance                                # 50 BTC, 101 confirmations, both paths open
+
+# 5. Everyday payment: any 2 of PHONE, DEVICE, HELPER.
+& $tf send --to $burn --amount 1 --out $demo\pay1.psbt
+& $tf sign --psbt $demo\pay1.psbt --key-file $keys\phone.key     # answer n: nothing is signed
+& $tf sign --psbt $demo\pay1.psbt --key-file $keys\phone.key     # answer y
+& $tf broadcast --psbt $demo\pay1.psbt                           # refused: one approval isn't enough
+& $tf sign --psbt $demo\pay1.psbt --key-file $keys\helper.key    # answer y
+& $tf broadcast --psbt $demo\pay1.psbt                           # sent
+$null = & $bcli @node generatetoaddress 1 $burn
+& $tf balance                                # 49 BTC of change, a new coin with 1 confirmation
+
+# 6. DEVICE alone: refused until the coin has 10 confirmations.
+& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # refused: has 1
+$null = & $bcli @node generatetoaddress 8 $burn
+& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # refused: has 9
+$null = & $bcli @node generatetoaddress 1 $burn
+& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # prepared
+& $tf sign --psbt $demo\pay2.psbt --key-file $keys\device.key          # answer y (adds 2: DEVICE and DEVICE_R)
+& $tf broadcast --psbt $demo\pay2.psbt                                 # sent
+$null = & $bcli @node generatetoaddress 1 $burn
+
+# 7. HEIR alone: refused until the coin has 20 confirmations.
+& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # refused: has 1
+$null = & $bcli @node generatetoaddress 18 $burn
+& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # refused: has 19
+$null = & $bcli @node generatetoaddress 1 $burn
+& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # prepared
+& $tf sign --psbt $demo\pay3.psbt --key-file $keys\helper.key          # answer y: adds a signature...
+& $tf broadcast --psbt $demo\pay3.psbt                                 # ...but HELPER alone is refused
+& $tf sign --psbt $demo\pay3.psbt --key-file $keys\heir.key            # answer y
+& $tf broadcast --psbt $demo\pay3.psbt                                 # sent
+$null = & $bcli @node generatetoaddress 1 $burn
+& $tf balance                                # 0 BTC
+
+# 8. The descriptor, for backup or another wallet.
+& $tf export
 ```
+
+**To run it again:**
+- `keygen` won't overwrite the keys, and `create` won't overwrite the wallet. So first move or delete `%USERPROFILE%\.twofold\regtest` (it's test data only), or run in another folder by setting `$env:TWOFOLD_HOME` first.
+- To use a different node, set `$node` (for example `@("-regtest", "-rpcport=18543", "-datadir=D:\other")`). Also set `$env:TWOFOLD_RPC_URL` and `$env:TWOFOLD_RPC_COOKIE`.
+- Regtest's block reward halves every 150 blocks and reaches zero after about 4,950 blocks. On a long-lived node, step 4 stops funding Savings after roughly 35 runs.
 
 ## Assumptions
 
