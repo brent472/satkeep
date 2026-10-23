@@ -24,6 +24,12 @@ Phone key backup: the research document, approved with D1–D7 and updated for m
   - **A compromised helper alone** can't unlock anything, and can't hide a restore.
 - **D4 and D5 are copy changes**, made in the brief's Section 19. No product wording is written here.
 
+**Added after review: the exit kit (section 6.2, requirement R15).**
+- **The problem:** CloudKit's private database and Drive's `appDataFolder` can be read only by the Twofold app, so if Twofold disappeared no outside tool could fetch the backup.
+- **The fix:** like Bitkey's Emergency Exit Kit, a normal file in the owner's visible iCloud Drive / Google Drive holds a copy of the locked backup itself, with the same bytes and locks. The restore tool then needs only that file and the second key.
+- **Section 6.2 covers** security (the same ciphertext, just easier to find), keeping the kit current, the owner deleting it, and old copies. The kit's file name and instructions are product copy for Section 19.
+- **The prototype is unchanged:** the kit carries the bytes `make_backup` produces.
+
 ## 2. Prototype (`56843da`, `c186a04`)
 
 `twofold_savings::backup`:

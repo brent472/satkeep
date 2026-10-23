@@ -43,6 +43,7 @@ From the brief, and from what the screen copy commits us to:
 | R12 | An advanced, opt-in export shows the 12 words, from Settings only. | Section 04; *Settings*, Recovery kit |
 | R13 | Unlocking the backup or signing must require the security device's own PIN or fingerprint, since a taken-over cloud account plus a stolen device would otherwise add up to 2 of 3. | Section 04, *Threats* |
 | R14 | It must cover the four threats asked for: cloud account takeover, a stolen device, malware on the phone during restore, and a stale backup after the device is replaced. | Work queue |
+| R15 | If Twofold disappears, the owner can still restore from a file they can reach without our app (an exit kit holding the locked backup) plus the second key, with an open-source tool. | Owner's instruction for this PR; see section 6.2 |
 
 R11 is easy: the backup is a few hundred bytes.
 
@@ -227,6 +228,12 @@ This is Bitkey's model ([recovery design](https://bitkey.world/blog/sharing-our-
 
 ## 6. Where the backup lives
 
+The backup is kept in **two places**, holding the same locked bytes:
+- **the app's own copy**, which the app reads for everyday restores;
+- **an exit kit**, a normal file in the owner's visible cloud drive, which works even if Twofold is gone.
+
+### 6.1 The app's own copy
+
 | | iPhone | Android |
 | --- | --- | --- |
 | **Proposed** | CloudKit private database, the backup in an `encryptedValues` field ([Apple](https://developer.apple.com/documentation/cloudkit/ckrecord/encryptedvalues)). It survives deleting the app, and isn't a visible file. | Google Drive's [`appDataFolder`](https://developers.google.com/workspace/drive/api/guides/appdata): hidden, can't be trashed or shared, and needs only the `drive.appdata` permission. |
@@ -234,9 +241,34 @@ This is Bitkey's model ([recovery design](https://bitkey.world/blog/sharing-our-
 | **Encryption by the provider** | End-to-end only with Advanced Data Protection on ([Apple](https://support.apple.com/en-us/102651)). We don't rely on it: our own encryption is the barrier. | Drive files aren't end-to-end encrypted. Same: we don't rely on it. |
 | **Not used** | The iCloud key-value store ("don't store … sensitive information", [Apple](https://developer.apple.com/documentation/foundation/nsubiquitouskeyvaluestore)). iCloud Keychain sync: end-to-end, but it ties the backup to the device's own sync, with no published size limit (**unconfirmed**). | Block Store: 4 KB per entry ([Android](https://developer.android.com/identity/block-store)), which is enough for a wrapped key but not a clean fit. Auto Backup: device-wide, and keeps only the latest copy ([Android](https://developer.android.com/identity/data/autobackup)). |
 
-Two rules for the phone's own storage:
+### 6.2 The exit kit: a copy any tool can reach
+
+**Why the app's copy isn't enough.**
+- **iPhone:** a CloudKit private database is read through the app's own CloudKit container, so only apps with that container's entitlement can read it ([Apple](https://developer.apple.com/documentation/cloudkit/ckcontainer)).
+- **Android:** Drive's `appDataFolder` is readable only by the app that created it ([Google](https://developers.google.com/workspace/drive/api/guides/appdata)).
+- **So if Twofold disappeared** (the app pulled from the stores, our developer accounts closed), no outside tool could fetch that copy, and the owner couldn't recover Spending. They'd also lose PHONE, one of their three Savings keys.
+
+**The exit kit**, following Bitkey's Emergency Exit Kit (a PDF saved to the person's personal iCloud or Google Drive, holding the app key encrypted by the hardware, plus a standalone way to use it; [Bitkey](https://support.bitkey.world/hc/en-us/articles/24395170222868)):
+- **A normal file in the owner's visible cloud drive.** On iPhone, iCloud Drive's Twofold folder, shown in the Files app (the app's iCloud container with its Documents folder made public, `NSUbiquitousContainerIsDocumentScopePublic`; [Apple](https://developer.apple.com/documentation/bundleresources/information-property-list/nsubiquitouscontainers)). On Android, a regular file in Google Drive, made through the `drive.file` permission, so the app can still update it. The owner can open, download or copy it with any device or browser.
+- **It holds a copy of the locked backup itself**: the exact bytes of section 2.1, the same lock entries, the same encryption. It also has plain instructions, and the public wallet setup the restore tool needs to rebuild the wallets.
+- **The restore tool needs only this file and the second key.** No Twofold app, account, server or helper, and no access to the app's private storage. That tool is the next research item, `research/restore-tool`.
+
+**What that means for security and upkeep:**
+
+| Topic | What it means |
+| --- | --- |
+| **Security** | No weaker than the app's copy: it's the same ciphertext under the same locks. It's easier to find, though: anyone who takes over the cloud account sees it at once. That changes nothing in section 7.1, where the threat is the account plus the second key. |
+| **Keeping it current** | Every backup write updates both copies: a new backup, a new second key, a new phone key. When the second key is replaced, the old kit is also overwritten, and its earlier versions are subject to the same limit as section 7.3. |
+| **The owner can delete or move it** | It's a visible file. The app checks it's still there (at the check-in and on opening Protection), rewrites it if it's missing, and says so. |
+| **Wording** | The kit's file name, its instructions and anything the app says about it are product copy, so they belong in the brief's Section 19. Nothing here proposes that wording. |
+| **Old copies** | The kit has the same revision and trash history as any Drive or iCloud Drive file (section 7.3). Replacing the phone key after a lost or stolen device (D3) is what makes old kits worthless. |
+
+**For the prototype:** the format already fits. The kit carries the same bytes `make_backup` produces, and `restore` opens them. Writing the visible file, and the tool that reads it, come with the real cloud code and the restore tool.
+
+### 6.3 The phone's own storage
+
 - **The phrase stays out of device backups.** On Android, exclude it with `dataExtractionRules` ([Android](https://developer.android.com/identity/data/autobackup)). On iOS, keep it in the keychain with a "this device only" setting.
-- **The cloud backup is the only copy that leaves the phone.**
+- **Only the locked backup leaves the phone**, in its two copies: the app's own and the exit kit.
 
 ## 7. Threats
 
