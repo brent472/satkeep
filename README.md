@@ -19,6 +19,7 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | Path | What it is |
 | --- | --- |
 | [`docs/milestone-1.md`](docs/milestone-1.md) | Builder brief for the current milestone |
+| [`crates/twofold-savings`](crates/twofold-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`docs/master-brief.md`](docs/master-brief.md) | Full product, UX and security brief (Markdown copy) |
 | [`docs/TWOFOLD_Master_Brief_v3.4.docx`](docs/TWOFOLD_Master_Brief_v3.4.docx) | Master brief, source file |
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |
