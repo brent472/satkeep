@@ -11,7 +11,7 @@ Both refuse a delayed spend one block early. Sparrow can't import a Savings wall
 
 ## Result
 
-From [run 40000729825](https://github.com/brent472/twofold/actions/runs/40000729825) of the `Exit drill` workflow on 2026-10-23, Ubuntu 24.04, with keys made from 12-word recovery phrases. The demo wallet uses a device delay of 10 blocks and a heir delay of 20. (The first run, 39960059017 in the private archive, used the older raw `tprv` keys and had Bitcoin Core sign for Liana.)
+From [run 40004699830](https://github.com/brent472/twofold/actions/runs/40004699830) of the `Exit drill` workflow on 2026-10-23, Ubuntu 24.04, with keys made from 12-word recovery phrases. The demo wallet uses a device delay of 10 blocks and a heir delay of 20. (The first run, 39960059017 in the private archive, used the older raw `tprv` keys and had Bitcoin Core sign for Liana.)
 
 | Check | Liana v15.0 | Bitcoin Core 31.1 alone |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ From [run 40000729825](https://github.com/brent472/twofold/actions/runs/40000729
 
 **Liana and the network agree to the block.** Liana refuses at 9 confirmations and spends at 10, the same as the node's own rule. It's neither stricter nor looser.
 
-**No key material reached the log.** The full log has no `tprv` or `xprv`, and no more than 5 BIP39 words in a row anywhere (a phrase is 12). Its only two `***` masks are GitHub's own checkout token.
+**No key material reached the log, and nothing was masked.** Both scans passed: the drill's output held nothing from any of the run's four phrases (at most 3 BIP39 words in a row), and the whole job log had no extended private key and at most 5 BIP39 words in a row (a phrase is 12). The run printed no `::add-mask::` at all; the only `***` in its log are GitHub's own tokens (the checkout token, and the scan job's API token).
 
 ## What "without Twofold" means here
 

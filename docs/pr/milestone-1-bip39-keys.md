@@ -56,9 +56,30 @@ Every Twofold key now comes from a standard 12-word BIP39 recovery phrase, and t
   - It's checked against BIP86's published vector.
   - Core then has to show the same key fingerprint as Twofold's public key.
 - **Keeping secrets out of the log:**
-  - Phrases and `tprv`s are both masked in the log.
+  - Nothing secret is printed, masked or not. There's no `::add-mask::` (see *Fix after review* below).
   - Phrases never leave the key files.
   - `tprv`s reach `bitcoin-cli` only on stdin.
+  - Any command that receives a key or phrase fails without repeating its output.
+  - Two scans fail the run if anything key-like gets out (`contrib/exit-drill/scan_log.py`).
+
+## Fix after review: CodeQL "Clear-text logging of sensitive information" (`py/clear-text-logging-sensitive-data`, high)
+
+CodeQL alert #1 flagged the `::add-mask::` lines in `drill.py`. Masking still writes the secret into the log stream; GitHub just hides it on display. The alert has two instances: this PR (line 233), and **`main` (line 181), where the original exit drill already masked its `tprv`s.** The one on `main` closes when this merges.
+
+- **Removed** both `::add-mask::` lines. Nothing secret is printed, masked or not.
+- **No error path echoes a secret.** Every command that receives a key or phrase fails without its stdout or stderr:
+  - key imports into Bitcoin Core (`bitcoin-cli -stdin`)
+  - Liana's signer
+  - `twofold keygen`
+  - `twofold_sign`'s own errors, which are now all fixed text
+- **Log scanning that fails the run.** Correction: before this, there was no automated scan; the "log is clean" result in this PR came from my own scan of the downloaded log. Now [`scan_log.py`](../../contrib/exit-drill/scan_log.py) runs twice, and never prints what it matched:
+  - **In the drill job:** the drill's own output is checked against that run's real phrases. It fails on an extended private key prefix, on 12 BIP39 words in a row, or on 3 words in a row from any holder's phrase.
+  - **A new `scan-log` job:** it fetches the drill job's **whole** log through the API once that job has finished (with read-only `actions` permission), and checks it for an extended private key prefix or 12 BIP39 words in a row.
+  - **Tested locally** on the last real log (passes) and on planted logs: a full phrase, 3 words from a known phrase, and a `tprv` prefix each fail it, while 2 words from a phrase pass.
+- **The first `scan-log` run failed, though nothing had leaked.** There were two reasons, both fixed:
+  - `gh api` won't write a log containing colour codes unless it's given `--allow-escape-sequences`.
+  - The scanner's own pass message said "no tprv/xprv", which tripped the full-log scan.
+- **CLAUDE.md:** published BIP test vectors (such as BIP39's "abandon … about") are allowed in tests.
 
 ## Checks
 
@@ -73,10 +94,12 @@ Every Twofold key now comes from a standard 12-word BIP39 recovery phrase, and t
   - `cargo clippy -D warnings` passes for the workspace and the fuzz crate.
   - The `holder_key` fuzz target now also edits phrases word by word, swapping, dropping or repeating words.
   - `cargo deny check` passes.
-- **Exit drill, [run 40000729825](https://github.com/brent472/twofold/actions/runs/40000729825) on this branch: 15 of 15 checks pass.**
+- **Exit drill, [run 40004699830](https://github.com/brent472/twofold/actions/runs/40004699830) on this branch, after the CodeQL fix: 15 of 15 checks pass, and both key-material scans pass.** (The first run, [40000729825](https://github.com/brent472/twofold/actions/runs/40000729825), also passed 15 of 15.)
   - Liana and Core each spend 2-of-3, and DEVICE and HEIR alone at exactly their delays, and each refuses those one block early. Liana's spends are signed by HotSigner.
   - Core's keys made from the phrases match Twofold's.
-  - **The log is clean:** no `tprv` or `xprv`, no more than 5 BIP39 words in a row anywhere, and the only `***` masks are GitHub's checkout token.
+  - **The log is clean, and nothing is masked:**
+    - The drill's output has nothing from the run's four phrases, and the full job log has no extended private key and at most 5 BIP39 words in a row.
+    - No `::add-mask::` was printed. The only `***` are GitHub's own tokens (checkout, and the scan job's API token).
 - `docs/exit-drill.md` is updated with this run.
 
 ## Security review
@@ -88,6 +111,7 @@ Every Twofold key now comes from a standard 12-word BIP39 recovery phrase, and t
   - randomness and derivation, including the stdlib conversion against the BIPs
   - subprocess injection
   - the workflow's tag check: a keyring holding only the pinned key, an anchored `VALIDSIG` match, the pinned commit, `--locked`, and dispatch-only with read-only permissions
+- **What it missed:** it judged the `::add-mask::` lines acceptable, because the values were masked. CodeQL flagged them, and they're now gone (see *Fix after review*). The fix commits were reviewed by hand: they only remove output and error detail, and add the log scans.
 - **Notes below the bar** (both already written down): the `String` from `to_secret_string` and the derived `Xpriv` aren't wiped from memory, and a revoked or expired pinned Liana key would still verify, though the pinned commit limits that.
 - **Also caught before committing:** my first version of the derivation test had BIP86's published root `xprv` as a literal. It's a public test vector, but CLAUDE.md says never commit xprvs, so the test now compares against BIP86's published account **xpub** instead.
 
