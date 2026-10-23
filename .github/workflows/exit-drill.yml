@@ -102,7 +102,52 @@ jobs:
           echo "TWOFOLD=$GITHUB_WORKSPACE/target/release/twofold" >> "$GITHUB_ENV"
 
       - name: Run the drill
+        id: drill
         run: |
+          set -euo pipefail
           export WORK="$RUNNER_TEMP/drill"
           mkdir -p "$WORK"
-          python3 contrib/exit-drill/drill.py
+          python3 -I contrib/exit-drill/drill.py 2>&1 | tee "$RUNNER_TEMP/drill-output.log"
+
+      # Nothing secret is ever printed, so there's nothing to mask. These two
+      # scans check that: this one against the drill's own output, knowing the
+      # run's phrases; the scan-log job below against the whole job log.
+      - name: Check the drill's output for key material
+        if: always() && steps.drill.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
+          python3 -I contrib/exit-drill/scan_log.py "$RUNNER_TEMP/drill-output.log" \
+            --words "$words" --keys "$RUNNER_TEMP/drill/twofold/regtest/keys"
+
+  scan-log:
+    # Reads the drill job's full log once it has finished, and fails the run
+    # if any step printed anything key-like.
+    needs: drill
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the BIP39 word list (the bip39 crate in Cargo.lock)
+        run: cargo fetch --locked
+
+      - name: Check the drill job's full log for key material
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.name == "drill") | .id')
+          log="$RUNNER_TEMP/drill-job.log"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
+            sleep 15
+          done
+          [ -s "$log" ] || { echo "::error::Couldn't fetch the drill job's log"; exit 1; }
+          echo "Fetched the drill job's log: $(wc -l < "$log") lines"
+          words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
+          python3 -I contrib/exit-drill/scan_log.py "$log" --words "$words"

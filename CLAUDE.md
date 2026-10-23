@@ -6,6 +6,7 @@ Twofold is a phone-first bitcoin self-custody wallet. Spending is a single phone
 
 - **Test networks only.** Use regtest and signet. Never mainnet, never real bitcoin, not even "just to check".
 - **No real keys.** Generate fresh keys inside each test run. Never commit keys, seeds, xprvs, WIFs, wallet databases or `.env` files. If one ever lands in a commit, stop and tell the human.
+  - Published BIP test vectors (such as BIP39's "abandon … about") are allowed in tests, because they're public and never hold funds.
 - **No key telemetry.** Nothing that could reveal key material is logged, printed in CI, or sent anywhere.
 - **Write assumptions down.** Every assumption about policy, timelocks, fees or signing goes in the README of the crate or in `docs/`.
 - **The helper can never spend alone.** Any design or code where one key — including the helper — can move Savings without a delay is a bug.

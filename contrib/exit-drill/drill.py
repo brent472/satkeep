@@ -17,10 +17,12 @@ Bitcoin Core (bitcoind + bitcoin-cli) on a fresh regtest node:
      standard library: BIP39 seed, then BIP32 master key. That's written
      from the BIPs, separately from Twofold's code and Liana's.
 
-Secrets never reach the log: the phrases stay in Twofold's key files and go
-to Liana's signer as a file path; the master keys go to bitcoin-cli on stdin
-(never as arguments). Both are registered with GitHub Actions' log masking.
-Run on a throwaway machine only.
+Secrets are never printed, not even masked: the phrases stay in Twofold's
+key files and go to Liana's signer as a file path; the master keys go to
+bitcoin-cli on stdin (never as arguments). Any command that reads a key
+fails without repeating its output. The workflow then scans this script's
+output and the whole job log, and fails if either has anything key-like
+(scan_log.py). Run on a throwaway machine only.
 
 Environment: BITCOIN_BIN (folder with bitcoind and bitcoin-cli), LIANAD,
 LIANA_CLI, LIANA_SIGN (twofold_sign built from Liana's source), TWOFOLD
@@ -72,7 +74,8 @@ def run(args, stdin=None):
 
 def cli(*args, wallet=None, stdin_args=None):
     """bitcoin-cli. `stdin_args` go on stdin (-stdin), one per line, so
-    secrets never appear in the process list."""
+    secrets never appear in the process list. Only key imports use them, so
+    a failure then reports no detail: Core's message could echo the key."""
     cmd = [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}"]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
@@ -80,6 +83,8 @@ def cli(*args, wallet=None, stdin_args=None):
         cmd.append("-stdin")
     code, out, err = run(cmd + list(args), "\n".join(stdin_args) + "\n" if stdin_args is not None else None)
     if code != 0:
+        if stdin_args is not None:
+            raise RuntimeError(f"bitcoin-cli {args[0]} failed (no detail: its input holds a key)")
         raise RuntimeError(f"bitcoin-cli {args[0] if args else ''} failed: {err}")
     return out
 
@@ -106,6 +111,8 @@ class LianaError(Exception):
 def twofold(*args):
     code, out, err = run([TWOFOLD] + list(args))
     if code != 0:
+        if args[0] == "keygen":
+            raise RuntimeError("twofold keygen failed (no detail: it handles a new key)")
         raise RuntimeError(f"twofold {args[0]} failed: {err}")
     return out
 
@@ -187,9 +194,9 @@ def liana_sign(psbt, holder):
     """Liana's HotSigner signs with one holder's recovery phrase. The phrase
     stays in the key file; only its path is passed."""
     before = signature_count(psbt)
-    code, out, err = run([LIANA_SIGN, key_file(holder)], psbt)
+    code, out, _ = run([LIANA_SIGN, key_file(holder)], psbt)
     if code != 0:
-        raise RuntimeError(f"Liana's signer failed for {holder}: {err}")
+        raise RuntimeError(f"Liana's signer failed for {holder} (no detail: it reads the key)")
     if signature_count(out) <= before:
         raise RuntimeError(f"{holder} added no signature with Liana's signer")
     return out
@@ -226,11 +233,9 @@ def main():
         public = [line.strip() for line in out.splitlines() if line.startswith("  ")]
         with open(key_file(name)) as f:
             phrase = f.read().strip()
-        print(f"::add-mask::{phrase}", flush=True)
         if len(phrase.split()) != 12:
             raise RuntimeError(f"{name}'s key file doesn't hold a 12-word recovery phrase")
         secret = phrase_to_tprv(phrase)
-        print(f"::add-mask::{secret}", flush=True)
         holders[name] = {"public": public, "secret": secret, "fp": public[0][1:9]}
     check("`twofold keygen` saves a 12-word recovery phrase for each holder", True)
     twofold(

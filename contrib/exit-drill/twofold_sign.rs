@@ -38,7 +38,7 @@ fn run() -> Result<(), String> {
     std::io::stdin().read_to_string(&mut text).map_err(|_| "can't read the PSBT")?;
     let psbt = Psbt::from_str(text.trim()).map_err(|_| "that isn't a valid base64 PSBT")?;
     let secp = secp256k1::Secp256k1::new();
-    let signed = signer.sign_psbt(psbt, &secp).map_err(|e| format!("Liana's signer refused the PSBT: {e}"))?;
+    let signed = signer.sign_psbt(psbt, &secp).map_err(|_| "Liana's signer refused the PSBT")?;
     println!("{signed}");
     Ok(())
 }

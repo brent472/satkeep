@@ -67,9 +67,13 @@ It runs on a GitHub-hosted Ubuntu machine with a fresh regtest node. Keys are ge
 | Bitcoin Core 31.1, `bitcoin-31.1-x86_64-linux-gnu.tar.gz` | bitcoincore.org | `SHA256SUMS`, which must carry at least 3 good signatures from the builder keys in `bitcoin-core/guix.sigs` (the run had 11) |
 
 **Keeping keys out of the log.**
-- Each recovery phrase, and the `tprv` made from it, is registered with GitHub's log masking as soon as it's read.
+- **Nothing secret is ever printed, masked or not.** There's no `::add-mask::`: masking still writes the secret into the log stream, and GitHub's code scanning (CodeQL) rightly flags that as clear-text logging.
 - Phrases never leave the key files: Liana's signer is given the file's path. The `tprv`s reach Bitcoin Core only on stdin (`bitcoin-cli -stdin`), never as command-line arguments.
-- The signer's errors and a failed key import report no detail, and Liana's own log is never printed.
+- Any command that receives a key or phrase (key imports, Liana's signer, `twofold keygen`) fails without repeating its output. Liana's own log is never printed.
+- **Two scans fail the run if anything key-like gets out** ([`scan_log.py`](../contrib/exit-drill/scan_log.py)):
+  - The drill's own output is checked against the run's actual phrases: no `tprv` or `xprv`, no 12 BIP39 words in a row, and no 3 words in a row from any holder's phrase.
+  - A second job (`scan-log`) fetches the drill job's whole log once it has finished and checks it for `tprv`, `xprv` and 12 BIP39 words in a row.
+  - Neither scan prints what it matched, only which check failed.
 
 ## The drill by hand (Linux or macOS)
 
