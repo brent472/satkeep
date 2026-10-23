@@ -13,16 +13,18 @@ use crate::{Delays, Error, Role, SavingsKeys};
 /// spend; every spend must use one of the script leaves.
 pub const NUMS_POINT: &str = "0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
-/// The Savings wallet rules as a Taproot descriptor, in one of two shapes.
+/// The Savings wallet rules as a descriptor, in one of two shapes.
 ///
-/// With no beneficiary yet, plain 2 of 3, with no delayed path:
+/// With no beneficiary yet, plain 2 of 3 in the standard P2WSH multisig
+/// format, with no delayed path. Bitcoin Core, Sparrow, Electrum and Nunchuk
+/// all read it, which Liana, which requires a delayed path, can't:
 ///
 /// ```text
-/// tr(UNSPENDABLE, multi_a(2, PHONE, DEVICE, HELPER))
+/// wsh(sortedmulti(2, PHONE, DEVICE, HELPER))
 /// ```
 ///
-/// With a beneficiary, HEIR alone can also spend once a coin has waited the
-/// heir delay:
+/// With a beneficiary, a Taproot policy where HEIR alone can also spend once
+/// a coin has waited the heir delay. Liana and Bitcoin Core read it:
 ///
 /// ```text
 /// tr(UNSPENDABLE, { multi_a(2, PHONE, DEVICE, HELPER),
@@ -47,25 +49,26 @@ impl SavingsPolicy {
             return Err(Error::Mainnet);
         }
         let k = |role| keys.get(role).expect("PHONE, DEVICE and HELPER are always there").to_string();
-        let two_of_three = format!(
-            "multi_a(2,{phone},{device},{helper})",
-            phone = k(Role::Phone),
-            device = k(Role::Device),
-            helper = k(Role::Helper)
-        );
-        // Build the tree with H itself as a stand-in internal key, then swap in
-        // the internal key computed from that tree.
-        let draft = match (keys.get(Role::Heir), delays.heir()) {
-            (None, None) => format!("tr({NUMS_POINT},{two_of_three})"),
-            (Some(heir), Some(hd)) => format!("tr({NUMS_POINT},{{{two_of_three},and_v(v:pk({heir}),older({hd}))}})"),
+        let (phone, device, helper) = (k(Role::Phone), k(Role::Device), k(Role::Helper));
+        let descriptor = match (keys.get(Role::Heir), delays.heir()) {
+            (None, None) => Descriptor::<DescriptorPublicKey>::from_str(&format!(
+                "wsh(sortedmulti(2,{phone},{device},{helper}))"
+            ))?,
+            (Some(heir), Some(hd)) => {
+                // Build the tree with H itself as a stand-in internal key, then
+                // swap in the internal key computed from that tree.
+                let draft = format!(
+                    "tr({NUMS_POINT},{{multi_a(2,{phone},{device},{helper}),and_v(v:pk({heir}),older({hd}))}})"
+                );
+                let Descriptor::Tr(draft) = Descriptor::<DescriptorPublicKey>::from_str(&draft)? else {
+                    unreachable!("built as tr()")
+                };
+                let tree = draft.tap_tree().clone().expect("built with a tree");
+                let internal = unspendable_internal_key(&tree).ok_or(Error::InternalKey)?;
+                Descriptor::new_tr(internal, Some(tree))?
+            }
             _ => return Err(Error::HeirAndDelayMismatch),
         };
-        let Descriptor::Tr(draft) = Descriptor::<DescriptorPublicKey>::from_str(&draft)? else {
-            unreachable!("built as tr()")
-        };
-        let tree = draft.tap_tree().clone().expect("built with a tree");
-        let internal = unspendable_internal_key(&tree).ok_or(Error::InternalKey)?;
-        let descriptor = Descriptor::new_tr(internal, Some(tree))?;
         descriptor.sanity_check()?;
         Ok(Self { keys, delays, network, descriptor })
     }
@@ -191,7 +194,6 @@ pub fn unspendable_internal_key(tree: &TapTree<DescriptorPublicKey>) -> Option<D
 mod tests {
     use super::*;
     use crate::keys::test_keys::fresh;
-    use crate::miniscript::descriptor::TapTree;
 
     use Role::{Device as D, Helper as H, Heir, Phone as P};
 
@@ -296,7 +298,7 @@ mod tests {
 
     #[test]
     fn internal_key_is_derived_from_the_nums_point() {
-        for policy in both_shapes() {
+        for policy in both_shapes().into_iter().filter(SavingsPolicy::has_heir) {
             let Descriptor::Tr(tr) = policy.descriptor() else { panic!("not Taproot") };
             let DescriptorPublicKey::MultiXPub(internal) = tr.internal_key() else { panic!("not an xpub") };
             assert_eq!(internal.xkey.public_key, PublicKey::from_str(NUMS_POINT).unwrap());
@@ -306,17 +308,14 @@ mod tests {
     }
 
     #[test]
-    fn adding_an_heir_changes_the_internal_key_and_every_address() {
+    fn adding_an_heir_moves_to_taproot_and_changes_every_address() {
         let [p, d, h, heir] = std::array::from_fn(|_| fresh(Network::Regtest));
         let plain_keys = SavingsKeys::new(p, d, h, None).unwrap();
         let heir_keys = plain_keys.with_heir(heir).unwrap();
         let a = SavingsPolicy::new(plain_keys, Delays::none(), Network::Regtest).unwrap();
         let b = SavingsPolicy::new(heir_keys, Delays::with_heir(TEST_HEIR_DELAY).unwrap(), Network::Regtest).unwrap();
-        let internal = |p: &SavingsPolicy| match p.descriptor() {
-            Descriptor::Tr(tr) => tr.internal_key().clone(),
-            _ => unreachable!(),
-        };
-        assert_ne!(internal(&a), internal(&b));
+        assert!(matches!(a.descriptor(), Descriptor::Wsh(_)), "no beneficiary: P2WSH");
+        assert!(matches!(b.descriptor(), Descriptor::Tr(_)), "with one: Taproot");
         assert_ne!(a.receive_and_change().0, b.receive_and_change().0);
     }
 
@@ -344,13 +343,9 @@ mod tests {
 
     #[test]
     fn the_two_shapes_have_the_expected_leaves() {
-        let plain = plain();
-        let Descriptor::Tr(tr) = plain.descriptor() else { panic!("not Taproot") };
-        let leaves: Vec<(u8, String)> = tr.iter_scripts().map(|(depth, ms)| (depth, ms.to_string())).collect();
-        assert_eq!(leaves.len(), 1);
-        assert_eq!(leaves[0].0, 0);
-        assert!(leaves[0].1.starts_with("multi_a(2,"));
-        assert!(matches!(tr.tap_tree(), Some(TapTree::Leaf(_))));
+        let plain = plain().export_descriptor();
+        assert!(plain.starts_with("wsh(sortedmulti(2,") && plain.matches("/<0;1>/*").count() == 3, "{plain}");
+        assert!(!plain.contains("older("), "no delayed path: {plain}");
 
         let policy = with_heir(crate::DEFAULT_HEIR_DELAY);
         let Descriptor::Tr(tr) = policy.descriptor() else { panic!("not Taproot") };
@@ -387,7 +382,7 @@ mod tests {
             assert!(!exported.contains("prv"), "no private keys");
             let (body, checksum) = exported.split_once('#').expect("has a checksum");
             assert_eq!(checksum.len(), 8);
-            assert!(body.starts_with("tr(") && body.contains("/<0;1>/*"));
+            assert!((body.starts_with("tr(") || body.starts_with("wsh(sortedmulti(2,")) && body.contains("/<0;1>/*"));
             assert_eq!(&Descriptor::<DescriptorPublicKey>::from_str(&exported).unwrap(), policy.descriptor());
 
             let (receive, change) = policy.export_receive_and_change();

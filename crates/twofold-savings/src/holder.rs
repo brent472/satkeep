@@ -87,11 +87,19 @@ impl HolderKey {
             .expect("a well-formed descriptor key")
     }
 
-    /// Adds this holder's signatures to every script leaf of `psbt` it has a
-    /// key in. Returns how many signatures were added.
+    /// Adds this holder's signatures to `psbt` wherever it has a key: every
+    /// script leaf of a Taproot Savings coin, or the multisig script of a
+    /// P2WSH one (Savings with no beneficiary). Returns how many signatures
+    /// were added.
     pub fn sign(&self, psbt: &mut Psbt) -> Result<usize, Error> {
         let before = signature_count(psbt);
         let secp = Secp256k1::new();
+        // A Savings PSBT is one shape: P2WSH inputs carry their witness script.
+        let context = if psbt.inputs.iter().any(|i| i.witness_script.is_some()) {
+            SignerContext::Segwitv0
+        } else {
+            SignerContext::Tap { is_internal_key: false }
+        };
         let fp = self.master.fingerprint(&secp);
         for account in ACCOUNTS {
             let origin = account_path(account);
@@ -105,7 +113,7 @@ impl HolderKey {
                     derivation_path: DerivationPath::from_str(branch).expect("valid path"),
                     wildcard: Wildcard::Unhardened,
                 };
-                let signer = SignerWrapper::new(key, SignerContext::Tap { is_internal_key: false });
+                let signer = SignerWrapper::new(key, context);
                 signer.sign_transaction(psbt, &SignOptions::default(), &secp)?;
             }
         }
@@ -137,7 +145,7 @@ fn account_path(account: u32) -> DerivationPath {
 }
 
 fn signature_count(psbt: &Psbt) -> usize {
-    psbt.inputs.iter().map(|i| i.tap_script_sigs.len()).sum()
+    psbt.inputs.iter().map(|i| i.tap_script_sigs.len() + i.partial_sigs.len()).sum()
 }
 
 #[cfg(test)]

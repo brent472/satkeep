@@ -40,9 +40,26 @@ Approve? (y/N)
 - **Standard input order:** with `--key-stdin`, standard input carries the answer first and the key on the next line. `--yes` skips the question, for scripts and tests; then standard input is just the key.
 - **Wrong wallet:** `sign` refuses a payment that doesn't spend this wallet's coins, which is why it reads the wallet folder. It never contacts the node, so run `twofold balance` first if the wallet hasn't synced since the payment was prepared.
 
+## Adding a beneficiary
+
+Savings starts with no beneficiary: plain 2 of 3, with no delayed path and no check-ins. Adding one makes a new wallet and moves Savings there in one payment:
+
+```text
+twofold add-heir --heir <HEIR's public key> --new-wallet-dir <folder> --out move.psbt
+twofold sign --psbt move.psbt --key-file phone.key      # shows "Move to approve", asks y/N
+twofold sign --psbt move.psbt --key-file helper.key
+twofold broadcast --psbt move.psbt
+twofold --wallet-dir <folder> balance                   # from now on, use the new folder
+```
+
+- **The new wallet** has the same PHONE, DEVICE and HELPER plus HEIR. `--heir-delay`, `--checkin-interval` and `--checkin-margin` default as for `create`.
+- **One payment, one network fee.** It moves every confirmed coin through the 2-of-3 path. Unconfirmed coins are left out; they stay spendable by 2 of 3 and can be moved once they confirm.
+- **Checked twice.** `sign` and `broadcast` check that it goes to the wallet it names, and nowhere else, and that no confirmed coin is missing (the library README explains how).
+- **Changing the beneficiary** is the same command, run from the wallet that has one.
+
 ## Check-ins
 
-Each coin's delays count from when that coin confirmed. A check-in sends every coin back into Savings through the 2-of-3 path, so the device and heir delays start again from zero.
+Only Savings with a beneficiary needs check-ins: without one, nothing opens with time, and `checkin` refuses. Each coin's heir delay counts from when that coin confirmed. A check-in sends every coin back into Savings through the 2-of-3 path, so the heir delay starts again from zero.
 
 ```text
 twofold checkin --out checkin.psbt
@@ -51,29 +68,31 @@ twofold sign --psbt checkin.psbt --key-file helper.key
 twofold broadcast --psbt checkin.psbt
 ```
 
-- **The interval.** Check-ins are due every `--checkin-interval` blocks (default 26,280, about 6 months). `create` refuses an interval that doesn't leave at least `--checkin-margin` blocks (default 4,320, about 30 days) before the device delay. So an interval at or past the device delay is always refused.
+- **The interval.** Check-ins are due every `--checkin-interval` blocks (default 52,560, about 12 months). `create` refuses an interval that doesn't leave at least `--checkin-margin` blocks (default 8,760, about 2 months) before the heir delay. So an interval at or past the heir delay is always refused.
 - **What `balance` says:**
-  - Each coin's line shows its confirmations and when its device and heir paths open.
+  - Each coin's line shows its confirmations and when its heir path opens.
   - Before the interval it ends with `Next check-in due in N blocks`.
-  - Once the oldest coin reaches the interval, the coin is marked `CHECK-IN DUE` and a warning says how many blocks are left before its device path opens.
-  - Once any coin's device path is open, the coin is marked `OVERDUE` and the warning says DEVICE alone can already spend it.
+  - Once the oldest coin reaches the interval, the coin is marked `CHECK-IN DUE` and a warning says how many blocks are left before its heir path opens.
+  - Once any coin's heir path is open, the coin is marked `OVERDUE` and the warning says HEIR alone can already spend it.
 - **Every confirmed coin.** `checkin` includes every confirmed coin.
   - Unconfirmed incoming coins are left out, and `checkin` says so: their delays haven't started, and including them would let whoever sent them stall the check-in. The library README explains this.
   - `sign` and `broadcast` check again. `broadcast` syncs first, so if a coin confirmed after the check-in was prepared, it refuses and asks you to run `twofold checkin` again.
-- **Always 2-of-3.** A check-in carries no delay, so DEVICE or HEIR alone can't approve it, even once their paths are open.
-- **Older wallets.** Wallets created before check-ins existed have no interval in `savings.json`. They use the defaults if those fit their device delay. Otherwise `balance` says check-ins aren't set up, and never says "due". It still shows each coin's delays and still warns when a coin is overdue, whatever the device delay.
+- **Always 2-of-3.** A check-in carries no delay, so HEIR alone can't approve it, even once its path is open.
+- **Older wallets.** Wallets created before check-ins existed have no interval in `savings.json`. They use the defaults if those fit their heir delay. Otherwise `balance` says check-ins aren't set up, and never says "due". It still shows each coin's heir delay and still warns when a coin is overdue.
+- **Wallets made with the card-only path** (DEVICE_R, removed in brief 3.8) can't be opened; `twofold` says so. Make a new wallet.
 
 ## Commands
 
 | Command | What it does | Needs a node |
 | --- | --- | --- |
-| `keygen --name NAME` (or `--out FILE.key`) | Makes a fresh test key and saves it. Prints only the public keys. | No |
-| `create --phone … --device … --device-r … --helper … --heir …` | Creates the Savings wallet from five public keys. `--device-delay` and `--heir-delay` default to 39,420 and 61,320. `--checkin-interval` and `--checkin-margin` default to 26,280 and 4,320. | Yes |
+| `keygen --name NAME` (or `--out FILE.key`) | Makes a fresh test key and saves it. Prints only its public key. | No |
+| `create --phone … --device … --helper … [--heir …]` | Creates the Savings wallet. Without `--heir`: plain 2 of 3, no delayed path, no check-ins. With it: HEIR can also spend alone after `--heir-delay` (default 61,320); `--checkin-interval` and `--checkin-margin` default to 52,560 and 8,760 and need `--heir`. | Yes |
+| `add-heir --heir … --new-wallet-dir DIR [--heir-delay …] [--fee-rate 2] --out FILE.psbt` | Adds or changes the beneficiary: creates the new wallet in DIR and prepares the one 2-of-3 payment moving every confirmed coin there | Yes |
 | `address` | Shows a new receive address | No |
-| `balance` | Syncs and shows the total, and each coin's confirmations and when its delayed paths open. Marks coins `CHECK-IN DUE` or `OVERDUE`, and says when the next check-in is due. | Yes |
-| `checkin [--fee-rate 2] --out FILE.psbt` | Prepares a check-in: every coin, through the 2-of-3 path, into one new Savings address. Approve and send it with `sign` and `broadcast`. | Yes |
+| `balance` | Syncs and shows the total, and each coin's confirmations and, with a beneficiary, when its heir path opens. Marks coins `CHECK-IN DUE` or `OVERDUE`, and says when the next check-in is due. | Yes |
+| `checkin [--fee-rate 2] --out FILE.psbt` | Prepares a check-in: every coin, through the 2-of-3 path, into one new Savings address. Approve and send it with `sign` and `broadcast`. Only with a beneficiary. | Yes |
 | `export [--split]` | Prints the public descriptor, for backup or for importing into other software | No |
-| `send --to ADDR (--amount BTC \| --all) [--path two-of-three\|device\|heir] [--fee-rate 2] --out FILE.psbt` | Prepares an unsigned payment. A delayed path is refused until every coin used has waited long enough. | Yes |
+| `send --to ADDR (--amount BTC \| --all) [--path two-of-three\|heir] [--fee-rate 2] --out FILE.psbt` | Prepares an unsigned payment. The heir path is refused without a beneficiary, and until every coin used has waited long enough. | Yes |
 | `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin) [--yes]` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place | No (reads the wallet folder) |
 | `broadcast --psbt FILE.psbt` | Checks the payment has enough approvals and is old enough, then sends it | Yes |
 
@@ -91,20 +110,18 @@ If you pass both `--wallet-dir` and `--network`, they must agree.
 ## Demo on your own regtest node (PowerShell)
 
 This walks through every Savings path on a regtest node you run yourself:
-- a check-in that clears an overdue warning and restarts both delays
-- a 2-of-3 payment, including a declined approval and a refused single approval
-- DEVICE alone, refused one block early, then sent
+- Savings with no beneficiary: a 2-of-3 payment, including a declined approval and a refused single approval, and no check-in to do
+- adding a beneficiary, which moves Savings to a new wallet in one payment
+- a check-in that clears an overdue warning and restarts the heir delay
 - HEIR alone, refused one block early and refused with HELPER's key, then sent
 
-These are the exact steps that were run against Bitcoin Core v31.1.0; the check-in step was added with the check-in.
-
 **What it changes:**
-- It **mines about 133 blocks** on the node.
-- It **saves four test keys** in `%USERPROFILE%\.twofold\regtest\keys`, and the wallet in `%USERPROFILE%\.twofold\regtest`.
+- It **mines about 145 blocks** on the node.
+- It **saves four test keys** in `%USERPROFILE%\.twofold\regtest\keys`, and two wallets in `%USERPROFILE%\.twofold\regtest` and `%USERPROFILE%\.twofold\regtest-heir`.
 - Nothing else on the node changes: it creates no node wallet, and funds Savings by mining a block straight to it.
 - Payments go to an address derived from the NUMS point, which nobody can spend from.
 
-The demo wallet uses **short delays (10 and 20 blocks) and a 5-block check-in interval** (with a 2-block margin), so the delayed paths open in minutes rather than the placeholder 39,420 and 61,320 blocks.
+The demo uses a **short heir delay (20 blocks) and a 10-block check-in interval** (with a 5-block margin), so the heir path opens in minutes rather than the placeholder 61,320 blocks.
 
 Run it from the repo root with the node already running on regtest. `bitcoin-cli` and `twofold` find the node and its cookie in their default places. Paste one step at a time; each `sign` shows the payment and asks `Approve? (y/N)`. Answer as noted.
 
@@ -115,17 +132,18 @@ $tf    = ".\target\debug\twofold.exe"
 $bcli  = "C:\Program Files\Bitcoin\daemon\bitcoin-cli.exe"
 $node  = @("-regtest")                       # arguments for bitcoin-cli
 $base  = if ($env:TWOFOLD_HOME) { $env:TWOFOLD_HOME } else { "$env:USERPROFILE\.twofold" }
-$demo  = "$base\regtest"                     # where twofold keeps the wallet
+$demo  = "$base\regtest"                     # where twofold keeps the first wallet
+$heirs = "$base\regtest-heir"                # the wallet with a beneficiary
 $keys  = "$demo\keys"                        # where keygen saves the keys
 
-# 1. Four demo keys. keygen prints the public keys on lines starting with two spaces.
+# 1. Four demo keys. keygen prints the public key on a line starting with two spaces.
 $pub = @{}
 foreach ($n in "phone", "device", "helper", "heir") {
-    $pub[$n] = @(& $tf keygen --name $n | Where-Object { $_ -like "  *" } | ForEach-Object { $_.Trim() })
+    $pub[$n] = (& $tf keygen --name $n | Where-Object { $_ -like "  *" }).Trim()
 }
 
-# 2. The Savings wallet. DEVICE's second key is its delayed-path key (DEVICE_R).
-& $tf create --device-delay 10 --heir-delay 20 --checkin-interval 5 --checkin-margin 2 --phone $pub.phone[0] --device $pub.device[0] --device-r $pub.device[1] --helper $pub.helper[0] --heir $pub.heir[0]
+# 2. Savings with no beneficiary yet: plain 2 of 3.
+& $tf create --phone $pub.phone --device $pub.device --helper $pub.helper
 
 # 3. An address nobody can spend from, to pay to and mine to.
 $nums = (& $bcli @node getdescriptorinfo "rawtr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0)" | ConvertFrom-Json).descriptor
@@ -134,17 +152,10 @@ $burn = (& $bcli @node deriveaddresses $nums | ConvertFrom-Json)[0]
 # 4. Fund Savings: one block's reward straight to it, then 100 more blocks so that reward can be spent.
 $null = & $bcli @node generatetoaddress 1 (& $tf address).Trim()
 $null = & $bcli @node generatetoaddress 100 $burn
-& $tf balance                                # 50 BTC, 101 confirmations: OVERDUE, both paths open
+& $tf balance                                # 50 BTC, 101 confirmations; nothing opens with time
+& $tf checkin --out $demo\checkin.psbt       # refused: no beneficiary, no check-in needed
 
-# 5. Check-in: every coin back into one new Savings address, restarting both delays.
-& $tf checkin --out $demo\checkin.psbt
-& $tf sign --psbt $demo\checkin.psbt --key-file $keys\phone.key    # answer y
-& $tf sign --psbt $demo\checkin.psbt --key-file $keys\helper.key   # answer y
-& $tf broadcast --psbt $demo\checkin.psbt                          # sent
-$null = & $bcli @node generatetoaddress 1 $burn
-& $tf balance                                # 1 confirmation, device path opens in 9 blocks, next check-in due in 4
-
-# 6. Everyday payment: any 2 of PHONE, DEVICE, HELPER.
+# 5. Everyday payment: any 2 of PHONE, DEVICE, HELPER.
 & $tf send --to $burn --amount 1 --out $demo\pay1.psbt
 & $tf sign --psbt $demo\pay1.psbt --key-file $keys\phone.key     # answer n: nothing is signed
 & $tf sign --psbt $demo\pay1.psbt --key-file $keys\phone.key     # answer y
@@ -152,49 +163,58 @@ $null = & $bcli @node generatetoaddress 1 $burn
 & $tf sign --psbt $demo\pay1.psbt --key-file $keys\helper.key    # answer y
 & $tf broadcast --psbt $demo\pay1.psbt                           # sent
 $null = & $bcli @node generatetoaddress 1 $burn
-& $tf balance                                # 49 BTC of change, a new coin with 1 confirmation
 
-# 7. DEVICE alone: refused until the coin has 10 confirmations.
-& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # refused: has 1
-$null = & $bcli @node generatetoaddress 8 $burn
-& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # refused: has 9
+# 6. Add a beneficiary: a new wallet with HEIR, and one payment moving everything there.
+& $tf add-heir --heir $pub.heir --heir-delay 20 --checkin-interval 10 --checkin-margin 5 --new-wallet-dir $heirs --out $demo\move.psbt
+& $tf sign --psbt $demo\move.psbt --key-file $keys\phone.key    # answer y: shows "Move to approve"
+& $tf sign --psbt $demo\move.psbt --key-file $keys\device.key   # answer y
+& $tf broadcast --psbt $demo\move.psbt                          # sent
 $null = & $bcli @node generatetoaddress 1 $burn
-& $tf send --to $burn --amount 1 --path device --out $demo\pay2.psbt   # prepared
-& $tf sign --psbt $demo\pay2.psbt --key-file $keys\device.key          # answer y (adds 2: DEVICE and DEVICE_R)
-& $tf broadcast --psbt $demo\pay2.psbt                                 # sent
+& $tf --wallet-dir $heirs balance                               # 1 confirmation, heir path opens in 19 blocks
+
+# 7. Let the coin reach the heir delay, then check in: the warning clears and the delay restarts.
+$null = & $bcli @node generatetoaddress 19 $burn
+& $tf --wallet-dir $heirs balance                               # 20 confirmations: OVERDUE
+& $tf --wallet-dir $heirs checkin --out $heirs\checkin.psbt
+& $tf --wallet-dir $heirs sign --psbt $heirs\checkin.psbt --key-file $keys\phone.key    # answer y
+& $tf --wallet-dir $heirs sign --psbt $heirs\checkin.psbt --key-file $keys\helper.key   # answer y
+& $tf --wallet-dir $heirs broadcast --psbt $heirs\checkin.psbt                          # sent
 $null = & $bcli @node generatetoaddress 1 $burn
+& $tf --wallet-dir $heirs balance                               # 1 confirmation, next check-in due in 9
 
 # 8. HEIR alone: refused until the coin has 20 confirmations.
-& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # refused: has 1
+& $tf --wallet-dir $heirs send --to $burn --all --path heir --out $heirs\pay2.psbt      # refused: has 1
 $null = & $bcli @node generatetoaddress 18 $burn
-& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # refused: has 19
+& $tf --wallet-dir $heirs send --to $burn --all --path heir --out $heirs\pay2.psbt      # refused: has 19
 $null = & $bcli @node generatetoaddress 1 $burn
-& $tf send --to $burn --all --path heir --out $demo\pay3.psbt          # prepared
-& $tf sign --psbt $demo\pay3.psbt --key-file $keys\helper.key          # answer y: adds a signature...
-& $tf broadcast --psbt $demo\pay3.psbt                                 # ...but HELPER alone is refused
-& $tf sign --psbt $demo\pay3.psbt --key-file $keys\heir.key            # answer y
-& $tf broadcast --psbt $demo\pay3.psbt                                 # sent
+& $tf --wallet-dir $heirs send --to $burn --all --path heir --out $heirs\pay2.psbt      # prepared
+& $tf --wallet-dir $heirs sign --psbt $heirs\pay2.psbt --key-file $keys\helper.key     # answer y: adds a signature...
+& $tf --wallet-dir $heirs broadcast --psbt $heirs\pay2.psbt                            # ...but HELPER alone is refused
+& $tf --wallet-dir $heirs sign --psbt $heirs\pay2.psbt --key-file $keys\heir.key       # answer y
+& $tf --wallet-dir $heirs broadcast --psbt $heirs\pay2.psbt                            # sent
 $null = & $bcli @node generatetoaddress 1 $burn
-& $tf balance                                # 0 BTC
+& $tf --wallet-dir $heirs balance                               # 0 BTC
 
-# 9. The descriptor, for backup or another wallet.
+# 9. The descriptors, for backup or another wallet.
 & $tf export
+& $tf --wallet-dir $heirs export
 ```
 
 **To run it again:**
-- `keygen` won't overwrite the keys, and `create` won't overwrite the wallet. So first move or delete `%USERPROFILE%\.twofold\regtest` (it's test data only), or run in another folder by setting `$env:TWOFOLD_HOME` first.
+- `keygen` won't overwrite the keys, and `create` or `add-heir` won't overwrite a wallet. So first move or delete `%USERPROFILE%\.twofold\regtest` and `regtest-heir` (test data only), or run in another folder by setting `$env:TWOFOLD_HOME` first.
 - To use a different node, set `$node` (for example `@("-regtest", "-rpcport=18543", "-datadir=D:\other")`). Also set `$env:TWOFOLD_RPC_URL` and `$env:TWOFOLD_RPC_COOKIE`.
-- Regtest's block reward halves every 150 blocks and reaches zero after about 4,950 blocks. On a long-lived node, step 4 stops funding Savings after roughly 35 runs.
+- Regtest's block reward halves every 150 blocks and reaches zero after about 4,950 blocks. On a long-lived node, step 4 stops funding Savings after roughly 30 runs.
+- **This version of the demo hasn't been run against a node yet.** The CLI tests cover every step it uses.
 
 ## Assumptions
 
 - **What the wallet files hold.**
-  - `savings.json` holds the five public keys, the delays, the network and the block height the wallet was created at. `wallet.sqlite` is BDK's database.
+  - `savings.json` holds the public keys (three, or four with a beneficiary), the heir delay and check-in settings when there's a beneficiary, the network and the block height the wallet was created at. `wallet.sqlite` is BDK's database.
   - Neither contains a private key, but together they reveal every Savings address and balance.
   - Sync starts at the creation height.
 - **Key files.**
   - Each holds one holder's test master key as plain text, with no encryption and no OS permissions set. Fine for regtest and signet only.
-  - DEVICE's file covers both DEVICE (account 0) and DEVICE_R (account 1), so `keygen` prints both public keys. The derivation is described in the library README.
+  - Each key file gives one public key, on account 0. The derivation is described in the library README.
 - **Approving.**
   - A PSBT carries every leaf of each coin, so a holder may add a signature the chosen path doesn't need (for example HELPER on an heir payment). That's harmless: `broadcast` only sends a payment whose signatures actually satisfy a path.
   - `sign` refuses a key that adds nothing.
@@ -216,12 +236,12 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 | File | What it proves |
 | --- | --- |
 | `tests/approve.rs` | `sign` shows each output (marking change and your own addresses), the fee and the path before asking. It signs on `y` only: `n`, `no`, an empty line, other text or no input leave the PSBT unchanged. A declined payment never reads the key. A payment from another wallet is refused. |
-| `tests/checkin.rs` | An interval at or past the device delay, or leaving less than the margin, is refused. Warnings change at exactly the interval (due) and the device delay (overdue). A check-in restarts both delays and clears the warning. One that leaves out a coin that confirmed later is refused at `broadcast` and at `sign`. An unconfirmed incoming coin is left out and doesn't stop the check-in being sent. DEVICE, HEIR or HELPER alone can't send one, even with the delayed paths open. `balance` still works, and still warns when overdue, for a wallet with no check-in rule. |
+| `tests/checkin.rs` | An interval at or past the heir delay, or leaving less than the margin, is refused; the yearly defaults fit the placeholder heir delay. Savings with no beneficiary refuses a check-in. Warnings change at exactly the interval (due) and the heir delay (overdue). A check-in restarts the heir delay and clears the warning. One that leaves out a coin that confirmed later is refused at `broadcast` and at `sign`. An unconfirmed incoming coin is left out and doesn't stop the check-in being sent. DEVICE, HEIR or HELPER alone can't send one, even with the heir path open. `balance` still works, and still warns when overdue, for a wallet with no check-in rule. |
+| `tests/beneficiary.rs` | `add-heir` creates the new wallet and moves both coins in one payment; `sign` shows it as a move; one approval isn't enough; afterwards HEIR spends from the new wallet at its delay. It refuses a missing or duplicate HEIR key, check-in settings that don't fit, an existing folder, and (at `broadcast`) a move that leaves out a coin that confirmed later. |
 | `tests/keys.rs` | A recovery phrase (quoted, unquoted or inside another argument) or an old `tprv` key anywhere on the command line is refused and never repeated, and there's no `--key` flag. `keygen` defaults to `~/.twofold/<network>/keys`, writes a 12-word phrase, never overwrites, and refuses mainnet, odd names and non-`.key` files. Wallet files default to `~/.twofold/<network>` and must match `--network`. |
-| `tests/wallet.rs` | create, address, balance (including when each delayed path opens) and export work. The tool refuses: a node on another network, a mainnet `--network`, creating over an existing wallet, and any policy the library refuses. |
-| `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. DEVICE and HEIR alone are refused one block early and work on time. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
+| `tests/wallet.rs` | create, address, balance and export work in both shapes; with no beneficiary, nothing opens with time and `savings.json` holds no heir fields. The tool refuses: check-in settings without `--heir`, the old `--device-r` and `--device-delay`, a node on another network, a mainnet `--network`, creating over an existing wallet, any policy the library refuses, and an old wallet with DEVICE_R (with a clear error). |
+| `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. HEIR alone is refused one block early and works on time. DEVICE alone can never send: there's no such path, and its signature alone never satisfies 2 of 3. Without a beneficiary there's no heir path. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
 
 ## Not here yet
 
 - The signet demo
-- The Liana/Sparrow exit drill

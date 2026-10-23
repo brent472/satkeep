@@ -122,9 +122,17 @@ pub fn finalize(wallet: &Wallet, psbt: &Psbt) -> Result<Transaction, Error> {
     let mut psbt = psbt.clone();
     let secp = crate::bitcoin::key::Secp256k1::verification_only();
     if let Err(errors) = psbt.finalize_mut(&secp) {
-        let unsatisfied = errors
-            .iter()
-            .all(|e| matches!(e, crate::miniscript::psbt::Error::InputError(InputError::CouldNotSatisfyTr, _)));
+        // Taproot and P2WSH inputs report "not enough signatures" differently.
+        let unsatisfied = errors.iter().all(|e| {
+            matches!(
+                e,
+                crate::miniscript::psbt::Error::InputError(InputError::CouldNotSatisfyTr, _)
+                    | crate::miniscript::psbt::Error::InputError(
+                        InputError::MiniscriptError(crate::miniscript::Error::CouldNotSatisfy),
+                        _
+                    )
+            )
+        });
         if unsatisfied {
             return Err(Error::NotEnoughApprovals);
         }

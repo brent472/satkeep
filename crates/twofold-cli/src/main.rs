@@ -474,6 +474,9 @@ fn run(cli: Cli) -> Result<()> {
                 btc(total)
             );
             println!("Network fee: {}", btc(psbt.fee()?));
+            let destination = Address::from_script(&migrate::destination(&to), opened.network().network())?;
+            println!("It goes to {destination}, the new wallet's first address.");
+            println!("HEIR's key: {}", to.keys().get(twofold_savings::Role::Heir).expect("checked above"));
             println!("Saved, unsigned, to {}.", out.display());
             println!(
                 "Needs approval from any 2 of PHONE, DEVICE, HELPER: run `twofold sign`, then `twofold broadcast`, \
@@ -582,8 +585,13 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
     } else if migrate::is_move(payment) {
         let to = migrate::check_move(wallet, payment, &opened.policy)?;
         let heir_delay = to.delays().heir().expect("a move goes to a wallet with a beneficiary");
+        let heir = to.keys().get(twofold_savings::Role::Heir).expect("a move goes to a wallet with a beneficiary");
         println!("Move to approve: every Savings coin goes to a new Savings wallet with the same");
         println!("PHONE, DEVICE and HELPER, where HEIR can also approve alone after {heir_delay} blocks.");
+        // Whoever prepared the move chose HEIR: show exactly which key, so it
+        // can be checked against the beneficiary's own before approving.
+        println!("  HEIR's key: {heir}");
+        println!("  Check this is your beneficiary's key and the delay is the one you chose.");
     } else {
         println!("Payment to approve:");
     }

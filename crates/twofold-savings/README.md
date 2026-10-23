@@ -6,60 +6,76 @@ The rules for the Twofold **Savings** wallet, as a Taproot descriptor, plus the 
 
 ## Spending paths
 
+Savings has two shapes. It starts with no beneficiary, as plain 2 of 3; adding a beneficiary moves it to the second shape in one transaction ([below](#adding-a-beneficiary)).
+
 ```mermaid
 flowchart LR
-    coin(["Savings coin<br/>Taproot · no key-path spend"])
-    coin -->|"leaf 1 · any time"| two["Any 2 of<br/>PHONE · DEVICE · HELPER"]
-    coin -->|"leaf 2 · once the coin has 39,420 confirmations (about 9 months)"| dev["DEVICE alone<br/>(signs with its DEVICE_R key)"]
-    coin -->|"leaf 3 · once the coin has 61,320 confirmations (about 14 months)"| heir["HEIR alone"]
+    plain(["Savings, no beneficiary yet<br/>Taproot · no key-path spend"])
+    plain -->|"the only leaf · any time"| two1["Any 2 of<br/>PHONE · DEVICE · HELPER"]
+    heir(["Savings with a beneficiary<br/>Taproot · no key-path spend"])
+    heir -->|"leaf 1 · any time"| two2["Any 2 of<br/>PHONE · DEVICE · HELPER"]
+    heir -->|"leaf 2 · once the coin has 61,320 confirmations (about 14 months)"| alone["HEIR alone"]
 ```
 
-| Who approves | Allowed? |
-| --- | --- |
-| Any 2 of PHONE, DEVICE, HELPER | Yes, any time |
-| DEVICE alone | Only once the coin has waited the device delay |
-| HEIR alone | Only once the coin has waited the heir delay |
-| PHONE alone, HELPER alone | Never, however long the coin waits |
-| HEIR + HELPER, HEIR + PHONE | Not before the heir delay (then HEIR could act alone anyway) |
-| HEIR + DEVICE | Not before the device delay (then DEVICE could act alone anyway) |
-| DEVICE with both its keys | Not before the device delay |
+| Who approves | No beneficiary | With a beneficiary |
+| --- | --- | --- |
+| Any 2 of PHONE, DEVICE, HELPER | Yes, any time | Yes, any time |
+| PHONE, DEVICE or HELPER alone | Never, however long the coin waits | Never, however long the coin waits |
+| HEIR alone | n/a (no HEIR key) | Only once the coin has waited the heir delay |
+| HEIR + PHONE, HELPER or DEVICE | n/a | Not before the heir delay (then HEIR could act alone anyway) |
 
-The descriptor, with placeholder names for the keys:
+There is no card-only path: brief 3.8 removed DEVICE alone after 9 months. The phone key backup covers a lost phone, and removing it takes away a stolen card's slow route to Savings.
+
+The descriptors, with placeholder names for the keys:
 
 ```text
+tr(UNSPENDABLE/<0;1>/*, multi_a(2, PHONE/<0;1>/*, DEVICE/<0;1>/*, HELPER/<0;1>/*))
+
 tr(UNSPENDABLE/<0;1>/*,
    { multi_a(2, PHONE/<0;1>/*, DEVICE/<0;1>/*, HELPER/<0;1>/*),
-     { and_v(v:pk(DEVICE_R/<0;1>/*), older(39420)),
-       and_v(v:pk(HEIR/<0;1>/*),     older(61320)) } })
+     and_v(v:pk(HEIR/<0;1>/*), older(61320)) })
 ```
 
 ## Using it
 
 ```rust
-let keys = SavingsKeys::new(phone, device, device_r, helper, heir)?; // tpub…/<0;1>/* keys
-let policy = SavingsPolicy::new(keys, Delays::default(), Network::Regtest)?;
+let keys = SavingsKeys::new(phone, device, helper, Some(heir))?;       // or None: no beneficiary yet
+let policy = SavingsPolicy::new(keys, Delays::with_heir(DEFAULT_HEIR_DELAY)?, Network::Regtest)?; // or Delays::none()
 let descriptor = policy.export_descriptor();          // for backup, Liana, Bitcoin Core
-let psbt = spend::build_spend(&mut wallet, policy.delays(), spend::Path::Device, |b| { /* recipients, fee */ })?;
+let psbt = spend::build_spend(&mut wallet, policy.delays(), spend::Path::Heir, |b| { /* recipients, fee */ })?;
 HolderKey::from_secret_str(&phrase)?.sign(&mut psbt)?; // one holder approves with their recovery phrase (test networks only)
 let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or not enough approvals
 ```
 
+## Adding a beneficiary
+
+A wallet's script can't change, so adding a beneficiary means a new wallet and one transaction moving Savings there (`migrate`):
+
+- `migrate::wallet_with_heir(&from, heir, Delays::with_heir(n)?)` makes the new wallet: the same PHONE, DEVICE and HELPER plus HEIR.
+- `migrate::build_move(&mut wallet, &from, &to, fee_rate)` drains every confirmed coin, through the 2-of-3 path, to the new wallet's first receive address: one network fee.
+  - The PSBT carries the HEIR key and heir delay in a proprietary field (`twofold`/`move`) that other software ignores.
+  - Unconfirmed coins are left out, as in a check-in. They stay spendable by 2 of 3 and can be moved once they confirm.
+- `migrate::check_move(&wallet, &psbt, &from)` rebuilds the new wallet from `from` and the PSBT's own HEIR key and delay, and checks the PSBT is marked, uses the 2-of-3 path, spends every confirmed coin and nothing else, and has exactly one output, to that wallet's first address. The CLI runs it at `sign` and again at `broadcast`.
+- Changing the beneficiary is the same move, from a wallet that already has one.
+
 ## Check-in
 
-Each coin's delay clock starts when that coin confirms. A **check-in** spends every confirmed Savings coin, through the 2-of-3 path, into one new Savings address, so the device and heir delays start again from zero. It must happen before the oldest coin reaches the device delay; after that, DEVICE alone could spend it.
+Only Savings with a beneficiary has a check-in: without one, nothing opens with time, so there's nothing to restart, and the library refuses one (`Error::NoCheckinWithoutHeir`).
 
-- **Interval rule.** `checkin::CheckinRule::new(interval, margin, delays)` requires `interval + margin <= device delay`, with both at least 1 block. So an interval at or past the device delay is always refused. Defaults: interval 26,280 blocks (about 6 months), margin 4,320 blocks (about 30 days). Against the 39,420-block device delay, that leaves 13,140 blocks. All three are placeholders.
+Each coin's delay clock starts when that coin confirms. A **check-in** spends every confirmed Savings coin, through the 2-of-3 path, into one new Savings address, so the heir delay starts again from zero. It must happen before the oldest coin reaches the heir delay; after that, HEIR alone could spend it.
+
+- **Interval rule.** `checkin::CheckinRule::new(interval, margin, delays)` requires `interval + margin <= heir delay`, with both at least 1 block. So an interval at or past the heir delay is always refused. Defaults: interval 52,560 blocks (about 12 months), margin 8,760 blocks (about 2 months). Against the 61,320-block heir delay, they use it exactly. All three are placeholders.
 - **Coin status.** For each coin, `checkin::coins` gives:
-  - blocks until its device path and its heir path open
+  - blocks until its heir path opens (none without a beneficiary)
   - **due:** the coin has reached the interval
-  - **overdue:** its device path is already open
+  - **overdue:** its heir path is already open
 
   `checkin::reminder` sums these up for the whole wallet.
 - **Building and checking.**
   - `checkin::build_checkin` drains every confirmed coin to one new change address through the 2-of-3 path, and marks the PSBT with a proprietary field (`twofold`/`checkin`) that other software ignores. Unconfirmed coins are left out.
-  - `checkin::check_checkin` refuses a check-in that leaves out any confirmed coin, spends an unconfirmed one, pays anywhere but one Savings address, or uses a delayed path.
+  - `checkin::check_checkin` refuses a check-in that leaves out any confirmed coin, spends an unconfirmed one, pays anywhere but one Savings address, or uses the heir path.
   - The CLI runs the check again at `sign` and at `broadcast`, so a coin that confirmed after the check-in was built gets it refused.
-- **Why it can't be a delayed path.** The check-in's sequence carries no delay, so its delayed leaves can't be satisfied. DEVICE or HEIR alone can't approve it even when their paths are open, and the network agrees (CSV fails). The tests check both.
+- **Why it can't be the heir path.** The check-in's sequence carries no delay, so the heir leaf can't be satisfied. HEIR alone can't approve it even when its path is open, and the network agrees (CSV fails). The tests check both.
 
 ## Phone key backup (prototype)
 
@@ -86,8 +102,8 @@ backup::replace_device(&mut cloud, &phone, &setup, wallet_id, created, &mut new_
 
 **What we found.** When BDK 3.2.0 finalizes a PSBT, it gives miniscript 12.3.7 three satisfiers: the PSBT itself, a height check and an age check. miniscript combines them with **OR** (`impl_tuple_satisfier` in `miniscript/src/miniscript/satisfy.rs`), which goes wrong in two directions.
 
-1. **Sequence without age** (found in part 1). If the input's sequence matches a leaf's delay, the PSBT satisfier says yes, however young the coin. BDK finalizes a DEVICE-alone or HEIR-alone spend too early, and the network rejects it with `non-BIP68-final`.
-2. **Age without sequence** (found while testing the check-in). Once the coin is old enough, BDK's age check says yes even when the input's sequence carries no delay. BDK then finalizes through a delayed leaf, for example DEVICE alone signing a check-in, and the network rejects it because `OP_CHECKSEQUENCEVERIFY` fails.
+1. **Sequence without age** (found in part 1). If the input's sequence matches a leaf's delay, the PSBT satisfier says yes, however young the coin. BDK finalizes a HEIR-alone spend too early (and did the same for the card-only path while it existed), and the network rejects it with `non-BIP68-final`.
+2. **Age without sequence** (found while testing the check-in). Once the coin is old enough, BDK's age check says yes even when the input's sequence carries no delay. BDK then finalizes through a delayed leaf, for example HEIR alone signing a check-in, and the network rejects it because `OP_CHECKSEQUENCEVERIFY` fails.
 
 BDK's own code has a `// TODO: test >= / >` beside its age check.
 
@@ -100,9 +116,9 @@ BDK's own code has a `// TODO: test >= / >` beside its age check.
 Together, these match the network's rule. Tests check the boundary exactly: refused at N − 1 confirmations, accepted at N.
 
 **How it's tested.**
-- `library_refuses_to_build_a_device_spend_one_block_early` and `…_heir_spend_one_block_early`: the library refuses one block early and builds one block later.
-- Every forbidden-path test requires both a library refusal and a node rejection. With `check_delays` switched off, 8 of them fail.
-- `a_check_in_can_only_use_the_two_of_three_path`: with both delayed paths open, DEVICE or HEIR alone can't finalize a check-in, and the node rejects a hand-built attempt. With BDK's finalizer, this test failed.
+- `library_refuses_to_build_an_heir_spend_one_block_early`: the library refuses one block early and builds one block later.
+- Every forbidden-path test requires both a library refusal and a node rejection.
+- `a_check_in_can_only_use_the_two_of_three_path`: with the heir path open, HEIR alone can't finalize a check-in, and the node rejects a hand-built attempt. With BDK's finalizer, this test failed.
 - Two tests pin BDK's behaviour, so we notice if it ever changes: `bdk_alone_would_finalize_an_early_delayed_spend` and `bdk_alone_would_finalize_a_delayed_leaf_whose_sequence_has_no_delay`.
 
 ## Assumptions
@@ -111,18 +127,20 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 
 ### Policy
 
-- The policy is exactly the one in `docs/milestone-1.md`. The **recovery contact** path (for example contact + helper after a wait) is left out on purpose, and has to be decided before Milestone 2.
-- **DEVICE holds two keys:** DEVICE for the 2-of-3 path and DEVICE_R for its delayed path. In the tests they come from the same device seed on different accounts. Liana expects one key per spending path, and SegWit v0 miniscript forbids repeated keys. It doesn't change who can spend.
-- All five keys must be different extended keys. `SavingsKeys::new` refuses a repeat.
-- **After 61,320 confirmations, DEVICE alone and HEIR alone can both spend**, so whichever acts first wins. For the reviewer to judge.
-- **A stolen DEVICE plus a missed check-in is enough to spend once the device delay has passed.** The check-in (a later PR) is what keeps the device delay from opening.
+- The policy is exactly the one in `docs/milestone-1.md`, in its two shapes.
+- **The recovery contact is not a Savings key** (brief 3.9–3.10). They help unlock the phone key backup instead; see [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md).
+- **There is no card-only path** (brief 3.8). DEVICE alone never spends, at any age. DEVICE has one key, on account 0, like everyone else.
+- All keys must be different extended keys. `SavingsKeys::new` refuses a repeat, including HEIR reusing another holder's key.
+- **A HEIR key and an heir delay come together.** `SavingsPolicy::new` refuses one without the other.
+- **After 61,320 confirmations, HEIR alone can spend** any coin that hasn't been checked in. The check-in is what keeps that from happening while the owner is still around.
+- **Savings with no beneficiary has no delayed path at all.** Its exit is 2 of 3 or nothing, and it needs no check-in.
 
 ### Delays
 
-- Defaults: device 39,420 blocks (about 9 months), heir 61,320 blocks (about 14 months). Placeholders, and configurable through `Delays::new`.
-- They are **relative** delays (`older`, BIP 68/112), counted in **blocks only**. Delays are stored as `u16`, which caps them at the 65,535-block consensus limit and rules out time-based values. The heir delay must be longer than the device delay, and the device delay at least 1 block.
+- One delay: the heir delay, default 61,320 blocks (about 14 months). A placeholder, configurable through `Delays::with_heir`. `Delays::none()` is Savings with no beneficiary.
+- It's a **relative** delay (`older`, BIP 68/112), counted in **blocks only**, stored as `u16`, which caps it at the 65,535-block consensus limit and rules out time-based values. It must be at least 1 block.
 - Each coin's clock starts when **that coin** confirms. New deposits start their own clock. Change from any Savings spend goes to a new Savings address, so it gets a fresh clock too. A check-in must therefore include every coin.
-- **Check-in timing.** The interval (default 26,280 blocks) plus a margin (default 4,320 blocks) must fit inside the device delay. The margin is room for fees, confirmations and a late check-in. Coins are "due" from the interval and "overdue" once their device path is open. These are placeholders, like the delays.
+- **Check-in timing.** The interval (default 52,560 blocks, about 12 months) plus a margin (default 8,760 blocks, about 2 months) must fit inside the heir delay. The margin is room for fees, confirmations and a late check-in. Coins are "due" from the interval and "overdue" once their heir path is open. These are placeholders, like the delay. The brief plans the check-in as once a year, one tap, never automatic.
 - **A check-in spends only confirmed coins.** Unconfirmed coins are left out, and they don't count as missing, because their delays haven't started, so there's nothing to restart. Including them would be a risk. Anyone can send to a Savings address, and a check-in can't confirm before the coins it spends. So a stranger could stall the check-in with a coin paying a very low fee, or break it by replacing their coin (RBF). A check-in that does spend an unconfirmed coin is refused (`Error::CheckinSpendsUnconfirmed`). Once a coin confirms, its clock starts, and the next check-in must include it.
 - **Immature coinbase coins.** A coinbase coin that hasn't matured is confirmed but can't be spent, so the check-in is refused until it matures. That only happens on regtest and signet, where Savings can be funded by mining.
 - The 61,320-block heir delay sits 4,215 blocks (about 1 month) below the cap, which leaves little room to lengthen it.
@@ -132,12 +150,13 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 
 - **Taproot.** Only the leaf actually used is revealed on-chain, so everyday 2-of-3 spends don't reveal the inheritance path. The 2-of-3 leaf sits highest in the tree, so it gets the shortest proof.
 - **No key-path spend.** The internal key is an extended key whose public key is BIP 341's NUMS point H (`0250929b…3ac0`). Nobody can know its private key at any index.
-  - **Chain code.** SHA256 of the public keys of every key in the tap tree, in **tree order**: PHONE, DEVICE, HELPER (the 2-of-3 leaf), then DEVICE_R, then HEIR. A key that appears twice counts twice.
+  - **Chain code.** SHA256 of the public keys of every key in the tap tree, in **tree order**: PHONE, DEVICE, HELPER (the 2-of-3 leaf), then HEIR if there is one. A key that appears twice counts twice. So adding a beneficiary changes the internal key, and every address.
   - **Why the chain code matters.** Because it differs per wallet, different wallets don't share an internal key, and anyone with the descriptor's public keys can recompute it.
-  - **Liana compatibility.** This is Liana's convention exactly (`unspendable_internal_key`), so Liana recognises the key as unspendable and imports the wallet. Tests pin it to Liana's published test vectors and to a value from Liana's own code for the Savings tree.
+  - **Liana compatibility.** This is Liana's convention exactly (`unspendable_internal_key`), so Liana recognises the key as unspendable and imports the wallet with a beneficiary. Tests pin the algorithm to Liana's published test vectors, and the exit drill checks Liana accepts the descriptor itself. Whether Liana accepts Savings with no beneficiary is recorded by the exit drill.
 - **⚠️ Every Savings address changed when this was fixed.** Earlier versions hashed the keys in role order (PHONE, DEVICE, DEVICE_R, HELPER, HEIR). Liana v15.0 read that internal key as a real, spendable key and refused the descriptor: "Descriptor is not compatible with a Liana spending policy."
   - Switching to tree order changed the internal key, and with it every Savings address.
   - **Wallets made by older versions must be recreated.** That includes any `~/.twofold` test wallet and the demo wallet. Their coins stay spendable by those old descriptors, and they're only on test networks.
+- **⚠️ Removing the card-only path changed every Savings address again.** Wallets made with DEVICE_R can't be opened by this version; the CLI says so. Test networks only.
 - Keys must be test-network extended public keys (`tpub`). Mainnet keys and a mainnet `Network` are both refused.
 
 ### Recovery phrases and derivation
@@ -147,7 +166,7 @@ Every Twofold key comes from a standard BIP39 recovery phrase. `HolderKey` goes 
 1. **Phrase.** 12 English words from 128 bits of the operating system's random source (through `secp256k1`'s `thread_rng`), with BIP39's checksum. Made and read by the [`bip39`](https://crates.io/crates/bip39) crate (rust-bitcoin project), which also normalizes the text (NFKD).
 2. **Seed.** BIP39: PBKDF2-HMAC-SHA512 of the phrase, salt `"mnemonic"` with an **empty passphrase**, 2,048 rounds, giving 64 bytes.
 3. **Master key.** BIP32: HMAC-SHA512 of the seed under `"Bitcoin seed"`, as a test-network key (`tprv`). Its fingerprint is the `[xxxxxxxx/…]` in each public key.
-4. **Account keys.** `m/87'/1'/0'` for every holder, and `m/87'/1'/1'` for DEVICE_R. The descriptor uses `/<0;1>/*` below them for receive and change.
+4. **Account keys.** `m/87'/1'/0'` for every holder. The descriptor uses `/<0;1>/*` below them for receive and change.
 
 This is exactly what Liana's hot signer does (`HotSigner`: BIP39, empty passphrase, 12 words), so a phrase from `twofold keygen` signs in Liana, and the exit drill checks that. A unit test pins steps 1–3 to BIP86's published test vector.
 
@@ -171,13 +190,12 @@ Assumptions, to settle with the outside reviewer:
 - `export_descriptor()` returns the public descriptor with `<0;1>` and its checksum. `export_receive_and_change()` returns separate receive and change descriptors.
 - Neither contains private keys, but both reveal every Savings address and balance, so treat them as private.
 - Bitcoin Core reads the export and derives exactly the addresses BDK hands out (`tests/export.rs`).
-- **Leaving without Twofold:** Liana v15.0 imports the export, and so does Bitcoin Core 31.1 on its own. Each one spends through every path on regtest and refuses a delayed spend one block early. See the [exit drill](../../docs/exit-drill.md). Sparrow can't import Savings at all.
+- **Leaving without Twofold:** Bitcoin Core 31.1 on its own imports both shapes and spends through every path on regtest, refusing the heir spend one block early. Liana v15.0 does the same for Savings with a beneficiary; the exit drill records whether it accepts Savings with no beneficiary. See the [exit drill](../../docs/exit-drill.md). Sparrow can't import Savings with a beneficiary at all.
 
 ## Not yet verified
 
 - **The exit through Liana's desktop app**, the route Windows users have, and the exit on signet. Both are listed in the [exit drill](../../docs/exit-drill.md).
-- **One signer on two paths.** Liana's own wallets write one signer used on two paths as the *same* xpub with different multipath steps (`<0;1>` and `<2;3>`); its published test vectors do this.
-  - Liana counts a key as the xpub *plus* its paths, so it also accepts our separate-account keys for DEVICE and DEVICE_R. Exporting to Liana needs no change.
+- **One signer on two paths.** Liana's own wallets write one signer used on two paths as the *same* xpub with different multipath steps (`<0;1>` and `<2;3>`); its published test vectors do this. Savings no longer has a key on two paths, so exporting to Liana is unaffected.
   - `SavingsKeys::new` refuses the same xpub on two paths, so Twofold couldn't import a wallet made *in* Liana. If we ever need that, allow the same xpub when the paths differ, while still refusing any overlap that would make two roles derive the same key.
 
 ## Tests
@@ -208,15 +226,16 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 
 | File | What it proves |
 | --- | --- |
-| `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. The internal key matches Liana v15.0's published test vectors and a value from Liana's own code for the Savings tree, and isn't the old role-order key. |
+| `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently, in both shapes. Checked for all 16 combinations of the four keys, at ages around the heir delay and at the 65,535-block cap. No single key but HEIR ever spends; without a beneficiary nothing opens with time. A HEIR key needs a delay and the other way round. The internal key matches Liana v15.0's published test vectors, and adding an heir changes it. |
 | `src/holder.rs` (unit) | A phrase round-trips, and BIP39's public test phrase gives the account key BIP86 publishes for it. A bad checksum, 11 or 24 words, an old `tprv` key and garbage are all refused without repeating their input. A phrase is spotted in text however it's split up. |
 | `src/backup/tests.rs` (unit) | The backup alone shows only its date and device ids: no phrase word or setup text is in it. The right device with its PIN restores the same 12 words, keys and setup. A wrong device is refused before it's asked anything; a device without its PIN unlocks nothing; wrong PINs block it for good. Replacing the device locks the backup to the new one only, and the old device still opens an old copy (the limit, pinned). Changing any single byte, the date included, stops it opening; cut-short, padded and garbage files are refused; a contact entry is never opened by a device. No error repeats the phrase. |
 | `tests/backup.rs` | A phone key restored from its backup approves a regtest 2-of-3 spend with the helper. A key restored from another wallet's backup adds no signature, and the spend can't be finalized. |
-| `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
-| `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
-| `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
-| `tests/default_delays.rs` | The real 39,420 / 61,320 delays open at exactly those confirmations (ignored by default) |
-| `tests/export.rs` | Bitcoin Core derives the same addresses from the export |
+| `tests/allowed_paths.rs` | Any 2 of 3 spends on regtest in both shapes, and HEIR alone at exactly its delay, each through the expected leaf |
+| `tests/forbidden_paths.rs` | Each forbidden case, tried through every leaf the wallet has, is refused by Twofold **and** rejected by the node: PHONE, DEVICE or HELPER alone even after the heir delay; HEIR alone or with any one other key before it; signing a shorter sequence to skip the delay. Without a beneficiary: any single key at any age, an heir path refused, and a long sequence buying nothing. |
+| `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. A move that pays elsewhere, names a different HEIR, isn't marked, has an extra output, goes to a wallet with different keys, or leaves out a confirmed coin is refused. Changing the beneficiary works the same way. |
+| `tests/checkin.rs` | A check-in restarts the heir delay for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses the heir path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. HEIR or DEVICE alone can't approve a check-in even with the heir path open. Savings with no beneficiary has no check-in. |
+| `tests/default_delays.rs` | The real 61,320-block heir delay opens at exactly that many confirmations (ignored by default) |
+| `tests/export.rs` | Bitcoin Core derives the same addresses from the export, in both shapes |
 | `tests/harness.rs` | The harness's hand-built spends are valid when they have enough signatures, so a rejection elsewhere is the policy's doing |
 
 Keys are generated in memory for each test and never printed, logged or written to disk. While mining, the harness moves each throwaway node's clock forward 10 minutes per block (`setmocktime`). Without that, a node refuses blocks mined thousands per second once their timestamps run 2 hours ahead.
@@ -226,5 +245,5 @@ The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
 ## Not here yet
 
 - The signet demo
-- The recovery contact path, for the policy and for the backup
+- The recovery contact's lock entry in the phone key backup
 - Real security devices and real cloud storage for the backup

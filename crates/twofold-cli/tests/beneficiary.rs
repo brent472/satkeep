@@ -47,12 +47,16 @@ fn adding_a_beneficiary_moves_savings_in_one_payment_and_the_heir_path_then_work
     assert!(out.contains("HEIR alone can approve once a coin has 20 confirmations."), "{out}");
     assert!(out.contains("Prepared the move of 2 coins, 1.50000000 BTC, into it, in one payment."), "{out}");
     assert!(out.contains("Needs approval from any 2 of PHONE, DEVICE, HELPER"), "{out}");
+    assert!(out.contains(&format!("HEIR's key: {heir}")), "{out}");
+    let first = new.ok(&["address"]).trim().to_string();
+    assert!(out.contains(&format!("It goes to {first}, the new wallet's first address.")), "{out}");
 
     // The approval prompt says what this is.
     let args = ["sign", "--psbt", &file, "--key-stdin"];
     let shown = common::expect_ok(&args, old.run_with_stdin(&args, &format!("y\n{}\n", holders.phone.to_secret_string())));
     assert!(shown.contains("Move to approve: every Savings coin goes to a new Savings wallet with the same"), "{shown}");
     assert!(shown.contains("HEIR can also approve alone after 20 blocks"), "{shown}");
+    assert!(shown.contains(&format!("HEIR's key: {heir}")), "the approver sees exactly which HEIR: {shown}");
     let err = old.fails(&["broadcast", "--psbt", &file]);
     assert!(err.contains("not enough keys have approved"), "one approval isn't enough: {err}");
     old.sign(&file, &holders.helper);

@@ -17,9 +17,11 @@ A. Savings with a beneficiary: 2 of 3, plus HEIR alone after the heir delay.
   3. Bitcoin Core alone does the same spends, the node refuses the heir
      spend one block early, and DEVICE alone is refused at any age (there
      is no card-only path).
-B. Savings with no beneficiary yet: plain 2 of 3, no delayed path.
-  4. Whether Liana accepts this shape is recorded either way (Liana may
-     require a delayed path); if it does, Liana spends with 2 of 3 keys.
+B. Savings with no beneficiary yet: plain 2 of 3 in the standard P2WSH
+   format, wsh(sortedmulti(2, PHONE, DEVICE, HELPER)). (Liana can't take it:
+   "A Liana policy requires at least one recovery path.")
+  4. The export is in the form Sparrow's descriptor parser accepts, checked
+     against the patterns in Sparrow's own source (Sparrow isn't run).
   5. Bitcoin Core alone derives the same addresses, spends with 2 of 3
      keys, and refuses any single key.
 
@@ -163,8 +165,35 @@ def describe_spend(txid):
 
 
 def signature_count(psbt):
+    """Taproot script-path signatures, plus P2WSH ones."""
     decoded = cli_json("decodepsbt", psbt)
-    return sum(len(i.get("taproot_script_path_sigs", [])) for i in decoded["inputs"])
+    return sum(len(i.get("taproot_script_path_sigs", [])) + len(i.get("partial_signatures", {})) for i in decoded["inputs"])
+
+
+# Sparrow 2.5.5's descriptor parser (drongo, OutputDescriptor.java at commit
+# e1c26413e4973752c9d7d43e37e39b411f21b48c), ported as-is.
+SPARROW_XPUB = re.compile(r"(\[[^\]]+\])?(.(?:pub|prv)[^/\,)]{100,112})(/[/\d*'hH<>;]+)?")
+SPARROW_KEY_ORIGIN = re.compile(r"\[([A-Fa-f0-9]{8})([/\d'hH]+)?\]")
+SPARROW_MULTI = re.compile(r"multi\(\s*(\d+)", re.IGNORECASE)
+SPARROW_MULTIPATH = re.compile(r"<([\d*'hH;]+)>")
+SPARROW_CHECKSUM = re.compile(r"#([qpzry9x8gf2tvdw0s3jn54khce6mua7l]{8})$")
+
+
+def sparrow_reads(descriptor):
+    """Whether `descriptor` has the shape Sparrow imports as a P2WSH multisig
+    wallet: wsh(sortedmulti(k, …)) with every key an xpub with a key origin
+    and a <0;1> receive/change step, and a checksum. A format check only."""
+    body = descriptor.split("#")[0]
+    keys = SPARROW_XPUB.findall(body)
+    multi = SPARROW_MULTI.search(body)
+    return (
+        body.startswith("wsh(sortedmulti(")
+        and bool(SPARROW_CHECKSUM.search(descriptor))
+        and multi is not None and 1 <= int(multi.group(1)) <= len(keys)
+        and len(keys) == 3
+        and all(SPARROW_KEY_ORIGIN.fullmatch(origin) for origin, _, _ in keys)
+        and all(path.endswith("/<0;1>/*") and SPARROW_MULTIPATH.search(path) for _, _, path in keys)
+    )
 
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -454,69 +483,32 @@ def main():
         stop(lianad)
 
     # =========================== B. No beneficiary yet ==========================
+    check("B. Savings with no beneficiary exports as wsh(sortedmulti(2, …)), the standard P2WSH multisig format",
+          plain_descriptor.startswith("wsh(sortedmulti(2,") and "older(" not in plain_descriptor)
+    check("B. The export has the form Sparrow's own descriptor parser imports (checked against its source, not run)",
+          sparrow_reads(plain_descriptor))
     core_plain = cli_json("deriveaddresses", plain_receive_desc, "[0,4]")
-    check("B. Bitcoin Core derives the same first 5 addresses as `twofold address` for Savings with no beneficiary",
-          core_plain == plain_receive)
+    check("B. Bitcoin Core derives the same first 5 addresses as `twofold address`", core_plain == plain_receive)
 
-    lianad, LIANA_CONF = start_liana("liana-plain", plain_descriptor)
     try:
-        accepted = False
-        for _ in range(40):
-            if lianad.poll() is not None:
-                break
-            try:
-                liana("getinfo")
-                accepted = True
-                break
-            except (RuntimeError, LianaError, ValueError):
-                time.sleep(0.5)
-        if accepted:
-            wait_for_liana_sync()
-            check("B. Liana v15.0 accepts Savings with no beneficiary", True, "recorded; Bitcoin Core is checked either way")
-        else:
-            with open(os.path.join(WORK, "liana-plain.log")) as f:
-                lines = [line.strip() for line in f if "rror" in line or "escriptor" in line]
-            # Shorten the descriptor Liana quotes, so its reason fits.
-            reason = re.sub(r"tr\([^']*\)(#[0-9a-z]+)?", "tr(…)", lines[-1] if lines else "lianad exited")[:300]
-            check("B. Liana v15.0 doesn't accept Savings with no beneficiary (recorded, not a failure)", True, f'"{reason}"')
-
         plain_coin = next(u for u in cli_json("listunspent", "1", "9999999", "[]", "true", wallet="plain-watch"))
         plain_outpoint = f"{plain_coin['txid']}:{plain_coin['vout']}"
         for holder in ("phone", "device", "helper"):
             alone = sign(core_psbt("plain-watch", plain_outpoint, sequence=HEIR_DELAY), plain_signers[holder])
             if core_complete(alone):
-                check(f"B. {holder.upper()} alone is refused in Savings with no beneficiary", False, "Core completed it")
-        check(f"B. Bitcoin Core alone: no single key spends Savings with no beneficiary, after {HEIR_DELAY}+ blocks", True)
+                check(f"B. {holder.upper()} alone is refused", False, "Bitcoin Core completed it")
+        check(f"B. Bitcoin Core alone: no single key spends it, even with a {HEIR_DELAY}-block sequence on a coin over 100 blocks old", True)
 
-        if accepted:
-            # A fresh coin Liana watches from the start, matured.
-            mine(1, liana("getnewaddress")["address"])
-            mine(100, burn)
-            wait_for_liana_sync()
-            created = liana("createspend", {burn: SAT}, [], 2)
-            if "psbt" not in created:
-                raise RuntimeError(f"Liana couldn't create the spend: {created}")
-            psbt = created["psbt"]
-            for holder in ("phone", "helper"):
-                psbt = liana_sign(psbt, holder)
-            liana("updatespend", psbt)
-            txid = txid_of(psbt)
-            liana("broadcastspend", txid)
-            mine(1, burn)
-            sequence, witness = describe_spend(txid)
-            check("B. Liana spends Savings with no beneficiary with 2 of 3 keys (PHONE + HELPER)",
-                  mined_in_tip(txid) and witness == 5, f"txid {txid}")
-        else:
-            psbt = core_psbt("plain-watch", plain_outpoint)
-            for holder in ("phone", "device"):
-                psbt = sign(psbt, plain_signers[holder])
-            txid = cli("sendrawtransaction", core_finalize(psbt))
-            mine(1, burn)
-            sequence, witness = describe_spend(txid)
-            check("B. Bitcoin Core alone spends Savings with no beneficiary with 2 of 3 keys (PHONE + DEVICE)",
-                  mined_in_tip(txid) and witness == 5 and sequence >= 0xFFFFFFFD, f"txid {txid}")
+        psbt = core_psbt("plain-watch", plain_outpoint)
+        for holder in ("phone", "device"):
+            psbt = sign(psbt, plain_signers[holder])
+        txid = cli("sendrawtransaction", core_finalize(psbt))
+        mine(1, burn)
+        sequence, witness = describe_spend(txid)
+        # P2WSH 2-of-3: CHECKMULTISIG's empty item, two signatures, the script.
+        check("B. Bitcoin Core alone spends it with 2 of 3 keys (PHONE + DEVICE)",
+              mined_in_tip(txid) and witness == 4 and sequence >= 0xFFFFFFFD, f"txid {txid}")
     finally:
-        stop(lianad)
         run([os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "stop"])
 
 
