@@ -476,7 +476,8 @@ def main():
         else:
             with open(os.path.join(WORK, "liana-plain.log")) as f:
                 lines = [line.strip() for line in f if "rror" in line or "escriptor" in line]
-            reason = (lines[-1] if lines else "lianad exited")[:200]
+            # Shorten the descriptor Liana quotes, so its reason fits.
+            reason = re.sub(r"tr\([^']*\)(#[0-9a-z]+)?", "tr(…)", lines[-1] if lines else "lianad exited")[:300]
             check("B. Liana v15.0 doesn't accept Savings with no beneficiary (recorded, not a failure)", True, f'"{reason}"')
 
         plain_coin = next(u for u in cli_json("listunspent", "1", "9999999", "[]", "true", wallet="plain-watch"))
