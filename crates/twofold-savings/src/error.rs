@@ -39,8 +39,10 @@ pub enum Error {
     CheckinMarginZero,
     #[error("the check-in interval ({interval} blocks) must be shorter than the device delay ({device} blocks) by at least the margin ({margin} blocks)")]
     CheckinTooLate { interval: u16, margin: u16, device: u16 },
-    #[error("there are no Savings coins to check in")]
+    #[error("there are no confirmed Savings coins to check in")]
     CheckinNoCoins,
+    #[error("a check-in must not spend unconfirmed coin {coin}; its delays haven't started yet")]
+    CheckinSpendsUnconfirmed { coin: crate::bitcoin::OutPoint },
     #[error("this payment isn't a check-in")]
     NotACheckin,
     #[error("a check-in must use the 2-of-3 path, not a delayed path")]
