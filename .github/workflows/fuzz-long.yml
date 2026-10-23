@@ -1,0 +1,43 @@
+# Longer fuzz runs, started by hand (Actions → Fuzz (long) → Run workflow).
+# CI fuzzes each target for 60 seconds on every PR; this runs them longer.
+name: Fuzz (long)
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to fuzz each target
+        default: "600"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: "0.13.2"
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [psbt, config, holder_key]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+      - name: Fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_TO_RUN: ${{ inputs.seconds || '600' }}
+        run: |
+          case "$SECONDS_TO_RUN" in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
+          cargo +nightly fuzz run "$TARGET" -- -max_total_time="$SECONDS_TO_RUN" -print_final_stats=1
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/

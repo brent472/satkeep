@@ -37,6 +37,19 @@ Twofold holds keys, so every dependency is a risk worth weighing.
   - licences that aren't permissive
 - `Cargo.lock` is committed, so every build uses the same, reviewed versions.
 
+## Checks
+
+Every pull request runs [CI](.github/workflows/ci.yml):
+- the build, `cargo clippy -D warnings` and the tests, including the regtest tests on throwaway nodes
+- `cargo deny check`
+- a 60-second run of each fuzz target in [`fuzz/`](fuzz/)
+
+Two checks run by hand:
+- [Fuzz (long)](.github/workflows/fuzz-long.yml) fuzzes each target for longer.
+- The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core.
+
+The full-length 61,320-block test runs locally: `cargo test -- --include-ignored`.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
