@@ -3,10 +3,12 @@ use crate::Role;
 /// Everything that can go wrong when setting up a Savings wallet.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("the device delay must be at least 1 block")]
-    DeviceDelayZero,
-    #[error("the heir delay ({heir} blocks) must be longer than the device delay ({device} blocks)")]
-    HeirDelayNotLonger { device: u16, heir: u16 },
+    #[error("the heir delay must be at least 1 block")]
+    HeirDelayZero,
+    #[error("a HEIR key needs an heir delay, and an heir delay needs a HEIR key")]
+    HeirAndDelayMismatch,
+    #[error("this Savings has no beneficiary, so there is no heir path")]
+    NoHeirPath,
     #[error("the {0} key must be an extended public key with receive and change paths (…/<0;1>/*)")]
     KeyShape(Role),
     #[error("the {0} key is a mainnet key; Twofold only runs on test networks for now")]
@@ -41,8 +43,10 @@ pub enum Error {
     CheckinIntervalZero,
     #[error("the check-in margin must be at least 1 block")]
     CheckinMarginZero,
-    #[error("the check-in interval ({interval} blocks) must be shorter than the device delay ({device} blocks) by at least the margin ({margin} blocks)")]
-    CheckinTooLate { interval: u16, margin: u16, device: u16 },
+    #[error("the check-in interval ({interval} blocks) must be shorter than the heir delay ({heir} blocks) by at least the margin ({margin} blocks)")]
+    CheckinTooLate { interval: u16, margin: u16, heir: u16 },
+    #[error("this Savings has no beneficiary, so it needs no check-in")]
+    NoCheckinWithoutHeir,
     #[error("there are no confirmed Savings coins to check in")]
     CheckinNoCoins,
     #[error("a check-in must not spend unconfirmed coin {coin}; its delays haven't started yet")]
@@ -55,6 +59,18 @@ pub enum Error {
     CheckinPaysOut,
     #[error("this check-in leaves out coin {coin}; every coin must be included (run `twofold checkin` again)")]
     CheckinMissesCoin { coin: crate::bitcoin::OutPoint },
+    #[error("this payment isn't a move to a new Savings wallet")]
+    NotAMove,
+    #[error("a move must go to a Savings wallet with a beneficiary and the same PHONE, DEVICE and HELPER keys")]
+    MoveToWrongWallet,
+    #[error("there are no confirmed Savings coins to move")]
+    MoveNoCoins,
+    #[error("a move must not spend unconfirmed coin {coin}")]
+    MoveSpendsUnconfirmed { coin: crate::bitcoin::OutPoint },
+    #[error("this move leaves out coin {coin}; every confirmed coin must be included (prepare it again)")]
+    MoveMissesCoin { coin: crate::bitcoin::OutPoint },
+    #[error("a move must use the 2-of-3 path and send everything to the new wallet's first address")]
+    MoveShape,
     #[error("miniscript rejected the Savings descriptor: {0}")]
     Miniscript(#[source] Box<crate::miniscript::Error>),
 }

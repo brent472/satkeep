@@ -1,10 +1,11 @@
 //! The check-in: a send-to-self of every Savings coin through the 2-of-3
-//! path, which restarts every coin's delay clock.
+//! path, which restarts every coin's heir delay.
 //!
 //! Delays are relative: each coin's clock starts when that coin confirms.
-//! A check-in spends every coin into one new Savings coin, so the device
-//! and heir delays start again from zero. It must happen before the oldest
-//! coin reaches the device delay, or DEVICE alone could spend it.
+//! A check-in spends every coin into one new Savings coin, so the heir delay
+//! starts again from zero. It must happen before the oldest coin reaches the
+//! heir delay, or HEIR alone could spend it. Savings with no beneficiary has
+//! no delayed path, so it needs no check-in, and this module refuses one.
 
 use bdk_wallet::{KeychainKind, Wallet};
 
@@ -13,16 +14,16 @@ use crate::bitcoin::{Amount, FeeRate, OutPoint};
 use crate::spend::{self, Path};
 use crate::{Delays, Error};
 
-/// Placeholder check-in interval: about 6 months of blocks. Not final until
+/// Placeholder check-in interval: about 12 months of blocks. Not final until
 /// an outside Bitcoin reviewer signs off.
-pub const DEFAULT_CHECKIN_INTERVAL: u16 = 26_280;
+pub const DEFAULT_CHECKIN_INTERVAL: u16 = 52_560;
 
-/// Placeholder margin the interval must leave before the device delay:
-/// about 30 days of blocks, for fees, confirmations and a late check-in.
-pub const DEFAULT_CHECKIN_MARGIN: u16 = 4_320;
+/// Placeholder margin the interval must leave before the heir delay: about
+/// 2 months of blocks, for fees, confirmations and a late check-in.
+pub const DEFAULT_CHECKIN_MARGIN: u16 = 8_760;
 
 /// How often check-ins are due, and how much room that leaves before the
-/// device delay.
+/// heir delay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckinRule {
     interval: u16,
@@ -30,18 +31,19 @@ pub struct CheckinRule {
 }
 
 impl CheckinRule {
-    /// Refuses unless `interval + margin <= device delay`, with both at least
-    /// one block. So an interval equal to or longer than the device delay is
-    /// always refused.
+    /// Refuses unless `interval + margin <= heir delay`, with both at least
+    /// one block. So an interval equal to or longer than the heir delay is
+    /// always refused. Refuses outright for Savings with no beneficiary.
     pub fn new(interval: u16, margin: u16, delays: Delays) -> Result<Self, Error> {
+        let heir = delays.heir().ok_or(Error::NoCheckinWithoutHeir)?;
         if interval == 0 {
             return Err(Error::CheckinIntervalZero);
         }
         if margin == 0 {
             return Err(Error::CheckinMarginZero);
         }
-        if u32::from(interval) + u32::from(margin) > u32::from(delays.device()) {
-            return Err(Error::CheckinTooLate { interval, margin, device: delays.device() });
+        if u32::from(interval) + u32::from(margin) > u32::from(heir) {
+            return Err(Error::CheckinTooLate { interval, margin, heir });
         }
         Ok(Self { interval, margin })
     }
@@ -51,7 +53,7 @@ impl CheckinRule {
         self.interval
     }
 
-    /// Blocks the interval leaves before the device delay, at least.
+    /// Blocks the interval leaves before the heir delay, at least.
     pub fn margin(&self) -> u16 {
         self.margin
     }
@@ -64,31 +66,30 @@ impl CheckinRule {
 }
 
 /// Where a coin with `confirmations` stands. Without a check-in rule (a
-/// wallet made before check-ins existed), nothing is ever "due", but the
-/// delays and "overdue" don't depend on the rule and are still reported.
+/// wallet made before check-ins existed, or one with no beneficiary),
+/// nothing is ever "due", but the heir delay and "overdue" don't depend on
+/// the rule and are still reported.
 pub fn status(delays: Delays, rule: Option<CheckinRule>, confirmations: u32) -> CoinStatus {
-    let left = |blocks: u16| u32::from(blocks).saturating_sub(confirmations);
+    let heir_opens_in = delays.heir().map(|blocks| u32::from(blocks).saturating_sub(confirmations));
     CoinStatus {
         confirmations,
-        device_opens_in: left(delays.device()),
-        heir_opens_in: left(delays.heir()),
+        heir_opens_in,
         checkin_due: rule.is_some_and(|r| confirmations > 0 && confirmations >= u32::from(r.interval)),
-        overdue: confirmations > 0 && confirmations >= u32::from(delays.device()),
+        overdue: confirmations > 0 && delays.heir().is_some_and(|blocks| confirmations >= u32::from(blocks)),
     }
 }
 
-/// One coin's position against the delays and the check-in interval.
+/// One coin's position against the heir delay and the check-in interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoinStatus {
     /// 0 while unconfirmed.
     pub confirmations: u32,
-    /// Blocks until DEVICE alone could spend it; 0 means it already can.
-    pub device_opens_in: u32,
     /// Blocks until HEIR alone could spend it; 0 means it already can.
-    pub heir_opens_in: u32,
+    /// `None` with no beneficiary.
+    pub heir_opens_in: Option<u32>,
     /// The coin has reached the check-in interval.
     pub checkin_due: bool,
-    /// The coin's device path is already open.
+    /// The coin's heir path is already open.
     pub overdue: bool,
 }
 
@@ -121,7 +122,7 @@ pub enum Reminder {
     NotDue,
     /// The oldest coin has reached the interval: check in now.
     Due,
-    /// Some coin's device path is already open: DEVICE alone could spend it.
+    /// Some coin's heir path is already open: HEIR alone could spend it.
     Overdue,
 }
 
@@ -154,6 +155,9 @@ pub fn is_checkin(psbt: &Psbt) -> bool {
 /// break the check-in by never confirming it (a low fee) or replacing it
 /// (RBF), since a transaction can't confirm before the coins it spends.
 pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate) -> Result<Psbt, Error> {
+    if delays.heir().is_none() {
+        return Err(Error::NoCheckinWithoutHeir);
+    }
     if !wallet.list_unspent().any(|u| u.chain_position.is_confirmed()) {
         return Err(Error::CheckinNoCoins);
     }
@@ -173,6 +177,9 @@ pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate) -> 
 /// signing and broadcasting, since a coin may have confirmed since it was
 /// built.
 pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(), Error> {
+    if delays.heir().is_none() {
+        return Err(Error::NoCheckinWithoutHeir);
+    }
     if !is_checkin(psbt) {
         return Err(Error::NotACheckin);
     }
@@ -205,33 +212,45 @@ mod tests {
     use super::*;
 
     fn delays() -> Delays {
-        Delays::new(10, 20).unwrap()
+        Delays::with_heir(20).unwrap()
     }
 
     #[test]
-    fn default_interval_fits_the_default_device_delay() {
-        let rule = CheckinRule::new(DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, Delays::default()).unwrap();
-        assert_eq!((rule.interval(), rule.margin()), (26_280, 4_320));
+    fn default_interval_fits_the_default_heir_delay() {
+        let d = Delays::with_heir(crate::DEFAULT_HEIR_DELAY).unwrap();
+        let rule = CheckinRule::new(DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, d).unwrap();
+        assert_eq!((rule.interval(), rule.margin()), (52_560, 8_760));
+        assert_eq!(52_560 + 8_760, crate::DEFAULT_HEIR_DELAY, "the defaults use the whole heir delay");
     }
 
     #[test]
-    fn refuses_an_interval_at_or_past_the_device_delay() {
-        for interval in [10, 11, u16::MAX] {
+    fn savings_with_no_beneficiary_has_no_check_in() {
+        assert!(matches!(CheckinRule::new(5, 2, Delays::none()), Err(Error::NoCheckinWithoutHeir)));
+        let s = status(Delays::none(), None, 70_000);
+        assert_eq!(s.heir_opens_in, None);
+        assert!(!s.overdue && !s.checkin_due, "nothing ever opens with time");
+    }
+
+    #[test]
+    fn refuses_an_interval_at_or_past_the_heir_delay() {
+        for interval in [20, 21, u16::MAX] {
             assert!(
                 matches!(CheckinRule::new(interval, 1, delays()), Err(Error::CheckinTooLate { .. })),
                 "interval {interval}"
             );
         }
-        assert!(CheckinRule::new(9, 1, delays()).is_ok());
+        assert!(CheckinRule::new(19, 1, delays()).is_ok());
     }
 
     #[test]
     fn refuses_an_interval_that_leaves_less_than_the_margin() {
-        assert!(matches!(CheckinRule::new(8, 3, delays()), Err(Error::CheckinTooLate { .. })));
-        assert!(CheckinRule::new(7, 3, delays()).is_ok());
-        let d = Delays::default();
-        assert!(matches!(CheckinRule::new(35_101, DEFAULT_CHECKIN_MARGIN, d), Err(Error::CheckinTooLate { .. })));
-        assert!(CheckinRule::new(35_100, DEFAULT_CHECKIN_MARGIN, d).is_ok());
+        assert!(matches!(CheckinRule::new(18, 3, delays()), Err(Error::CheckinTooLate { .. })));
+        assert!(CheckinRule::new(17, 3, delays()).is_ok());
+        let d = Delays::with_heir(crate::DEFAULT_HEIR_DELAY).unwrap();
+        assert!(matches!(
+            CheckinRule::new(DEFAULT_CHECKIN_INTERVAL + 1, DEFAULT_CHECKIN_MARGIN, d),
+            Err(Error::CheckinTooLate { .. })
+        ));
     }
 
     #[test]
@@ -242,24 +261,23 @@ mod tests {
 
     #[test]
     fn without_a_rule_nothing_is_due_but_overdue_still_shows() {
-        // Even with a 1-block device delay, where no rule could fit.
-        let d = Delays::new(1, 2).unwrap();
+        // Even with a 1-block heir delay, where no rule could fit.
+        let d = Delays::with_heir(1).unwrap();
         assert!(!status(d, None, 0).overdue);
         let s = status(d, None, 1);
         assert!(s.overdue && !s.checkin_due);
-        assert_eq!((s.device_opens_in, s.heir_opens_in), (0, 1));
+        assert_eq!(s.heir_opens_in, Some(0));
     }
 
     #[test]
-    fn due_at_the_interval_and_overdue_at_the_device_delay() {
-        let rule = CheckinRule::new(5, 2, delays()).unwrap();
+    fn due_at_the_interval_and_overdue_at_the_heir_delay() {
+        let rule = CheckinRule::new(15, 5, delays()).unwrap();
         let s = |c| rule.status(delays(), c);
         assert!(!s(0).checkin_due, "unconfirmed coins aren't due");
-        assert!(!s(4).checkin_due);
-        assert!(s(5).checkin_due && !s(5).overdue);
-        assert!(s(9).checkin_due && !s(9).overdue);
-        assert!(s(10).overdue);
-        assert_eq!((s(4).device_opens_in, s(4).heir_opens_in), (6, 16));
-        assert_eq!((s(10).device_opens_in, s(25).heir_opens_in), (0, 0));
+        assert!(!s(14).checkin_due);
+        assert!(s(15).checkin_due && !s(15).overdue);
+        assert!(s(19).checkin_due && !s(19).overdue);
+        assert!(s(20).overdue);
+        assert_eq!((s(4).heir_opens_in, s(25).heir_opens_in), (Some(16), Some(0)));
     }
 }

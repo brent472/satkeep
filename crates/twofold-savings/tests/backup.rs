@@ -27,7 +27,7 @@ fn back_up_and_restore(phone: &HolderKey, setup: &str) -> HolderKey {
 }
 
 fn funded(node: &Node) -> Savings {
-    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(node, Amount::from_btc(1.0).unwrap());
     savings
 }
@@ -53,7 +53,7 @@ fn a_restored_phone_key_approves_a_2_of_3_spend_with_the_helper() {
 fn a_key_restored_from_another_wallets_backup_cannot_approve() {
     let node = Node::start();
     let mut savings = funded(&node);
-    let other = Savings::new(Delays::new(10, 20).unwrap());
+    let other = Savings::new(Delays::with_heir(20).unwrap());
     let stranger = back_up_and_restore(other.phone_key(), &other.policy.export_descriptor());
 
     let mut psbt = savings.build(Path::TwoOfThree, &node.new_address()).unwrap();
