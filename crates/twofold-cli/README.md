@@ -56,9 +56,11 @@ twofold broadcast --psbt checkin.psbt
   - Before the interval it ends with `Next check-in due in N blocks`.
   - Once the oldest coin reaches the interval, the coin is marked `CHECK-IN DUE` and a warning says how many blocks are left before its device path opens.
   - Once any coin's device path is open, the coin is marked `OVERDUE` and the warning says DEVICE alone can already spend it.
-- **Every coin, or nothing.** `checkin` includes every coin. `sign` and `broadcast` check again: `broadcast` syncs first, so if a coin arrived after the check-in was prepared, it refuses and asks you to run `twofold checkin` again.
+- **Every confirmed coin.** `checkin` includes every confirmed coin.
+  - Unconfirmed incoming coins are left out, and `checkin` says so: their delays haven't started, and including them would let whoever sent them stall the check-in. The library README explains this.
+  - `sign` and `broadcast` check again. `broadcast` syncs first, so if a coin confirmed after the check-in was prepared, it refuses and asks you to run `twofold checkin` again.
 - **Always 2-of-3.** A check-in carries no delay, so DEVICE or HEIR alone can't approve it, even once their paths are open.
-- **Older wallets.** Wallets created before check-ins existed have no interval in `savings.json`. They use the defaults if those fit their device delay; otherwise `balance` says check-ins aren't set up.
+- **Older wallets.** Wallets created before check-ins existed have no interval in `savings.json`. They use the defaults if those fit their device delay. Otherwise `balance` says check-ins aren't set up, and never says "due". It still shows each coin's delays and still warns when a coin is overdue, whatever the device delay.
 
 ## Commands
 
@@ -213,7 +215,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 | File | What it proves |
 | --- | --- |
 | `tests/approve.rs` | `sign` shows each output (marking change and your own addresses), the fee and the path before asking. It signs on `y` only: `n`, `no`, an empty line, other text or no input leave the PSBT unchanged. A declined payment never reads the key. A payment from another wallet is refused. |
-| `tests/checkin.rs` | An interval at or past the device delay, or leaving less than the margin, is refused. Warnings change at exactly the interval (due) and the device delay (overdue). A check-in restarts both delays and clears the warning. One that leaves out a coin that arrived later is refused at `broadcast` and at `sign`. DEVICE, HEIR or HELPER alone can't send one, even with the delayed paths open. |
+| `tests/checkin.rs` | An interval at or past the device delay, or leaving less than the margin, is refused. Warnings change at exactly the interval (due) and the device delay (overdue). A check-in restarts both delays and clears the warning. One that leaves out a coin that confirmed later is refused at `broadcast` and at `sign`. An unconfirmed incoming coin is left out and doesn't stop the check-in being sent. DEVICE, HEIR or HELPER alone can't send one, even with the delayed paths open. `balance` still works, and still warns when overdue, for a wallet with no check-in rule. |
 | `tests/keys.rs` | A private key anywhere on the command line is refused and never repeated, and there's no `--key` flag. `keygen` defaults to `~/.twofold/<network>/keys`, writes only `tprv` keys, never overwrites, and refuses mainnet, odd names and non-`.key` files. Wallet files default to `~/.twofold/<network>` and must match `--network`. |
 | `tests/wallet.rs` | create, address, balance (including when each delayed path opens) and export work. The tool refuses: a node on another network, a mainnet `--network`, creating over an existing wallet, and any policy the library refuses. |
 | `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. DEVICE and HEIR alone are refused one block early and work on time. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |

@@ -59,14 +59,21 @@ impl CheckinRule {
     /// Where a coin with `confirmations` stands. Confirmations are counted
     /// as of the next block, the same way delays are checked.
     pub fn status(&self, delays: Delays, confirmations: u32) -> CoinStatus {
-        let left = |blocks: u16| u32::from(blocks).saturating_sub(confirmations);
-        CoinStatus {
-            confirmations,
-            device_opens_in: left(delays.device()),
-            heir_opens_in: left(delays.heir()),
-            checkin_due: confirmations > 0 && confirmations >= u32::from(self.interval),
-            overdue: confirmations > 0 && confirmations >= u32::from(delays.device()),
-        }
+        status(delays, Some(*self), confirmations)
+    }
+}
+
+/// Where a coin with `confirmations` stands. Without a check-in rule (a
+/// wallet made before check-ins existed), nothing is ever "due", but the
+/// delays and "overdue" don't depend on the rule and are still reported.
+pub fn status(delays: Delays, rule: Option<CheckinRule>, confirmations: u32) -> CoinStatus {
+    let left = |blocks: u16| u32::from(blocks).saturating_sub(confirmations);
+    CoinStatus {
+        confirmations,
+        device_opens_in: left(delays.device()),
+        heir_opens_in: left(delays.heir()),
+        checkin_due: rule.is_some_and(|r| confirmations > 0 && confirmations >= u32::from(r.interval)),
+        overdue: confirmations > 0 && confirmations >= u32::from(delays.device()),
     }
 }
 
@@ -94,14 +101,15 @@ pub struct Coin {
 }
 
 /// Every unspent Savings coin and its status, as of the wallet's last sync.
-pub fn coins(wallet: &Wallet, delays: Delays, rule: CheckinRule) -> Vec<Coin> {
+/// `rule` is `None` for a wallet without a check-in rule; see [`status`].
+pub fn coins(wallet: &Wallet, delays: Delays, rule: Option<CheckinRule>) -> Vec<Coin> {
     let next_block = wallet.latest_checkpoint().height() + 1;
     wallet
         .list_unspent()
         .map(|utxo| {
             let confirmations =
                 utxo.chain_position.confirmation_height_upper_bound().map_or(0, |c| next_block.saturating_sub(c));
-            Coin { outpoint: utxo.outpoint, amount: utxo.txout.value, status: rule.status(delays, confirmations) }
+            Coin { outpoint: utxo.outpoint, amount: utxo.txout.value, status: status(delays, rule, confirmations) }
         })
         .collect()
 }
@@ -138,25 +146,32 @@ pub fn is_checkin(psbt: &Psbt) -> bool {
     psbt.proprietary.contains_key(&checkin_marker())
 }
 
-/// Builds a check-in: every unspent Savings coin, through the 2-of-3 path,
+/// Builds a check-in: every confirmed Savings coin, through the 2-of-3 path,
 /// into one new Savings change address.
+///
+/// Unconfirmed coins are left out. Their delays haven't started, so there's
+/// nothing to restart, and including one would let whoever sent it stall or
+/// break the check-in by never confirming it (a low fee) or replacing it
+/// (RBF), since a transaction can't confirm before the coins it spends.
 pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate) -> Result<Psbt, Error> {
-    if wallet.list_unspent().next().is_none() {
+    if !wallet.list_unspent().any(|u| u.chain_position.is_confirmed()) {
         return Err(Error::CheckinNoCoins);
     }
     let to = wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
     let mut psbt = spend::build_spend(wallet, delays, Path::TwoOfThree, |b| {
-        b.drain_wallet().drain_to(to.clone()).fee_rate(fee_rate);
+        b.drain_wallet().exclude_unconfirmed().drain_to(to.clone()).fee_rate(fee_rate);
     })?;
     psbt.proprietary.insert(checkin_marker(), Vec::new());
     check_checkin(wallet, &psbt, delays)?;
     Ok(psbt)
 }
 
-/// Checks a check-in is complete: marked as one, spending every unspent
+/// Checks a check-in is complete: marked as one, spending every confirmed
 /// Savings coin and nothing else, through the 2-of-3 path, into exactly one
-/// output back to this wallet. Run it again just before signing and
-/// broadcasting, since a coin may have arrived since it was built.
+/// output back to this wallet. Unconfirmed coins must not be in it and
+/// don't count as missing (see [`build_checkin`]). Run it again just before
+/// signing and broadcasting, since a coin may have confirmed since it was
+/// built.
 pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(), Error> {
     if !is_checkin(psbt) {
         return Err(Error::NotACheckin);
@@ -169,11 +184,15 @@ pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(),
         return Err(Error::CheckinPaysOut);
     }
     for (input, txin) in tx.input.iter().enumerate() {
-        if wallet.get_utxo(txin.previous_output).is_none() {
-            return Err(Error::UnknownCoin { input });
+        match wallet.get_utxo(txin.previous_output) {
+            None => return Err(Error::UnknownCoin { input }),
+            Some(utxo) if !utxo.chain_position.is_confirmed() => {
+                return Err(Error::CheckinSpendsUnconfirmed { coin: utxo.outpoint });
+            }
+            Some(_) => {}
         }
     }
-    for utxo in wallet.list_unspent() {
+    for utxo in wallet.list_unspent().filter(|u| u.chain_position.is_confirmed()) {
         if !tx.input.iter().any(|i| i.previous_output == utxo.outpoint) {
             return Err(Error::CheckinMissesCoin { coin: utxo.outpoint });
         }
@@ -219,6 +238,16 @@ mod tests {
     fn refuses_zero() {
         assert!(matches!(CheckinRule::new(0, 1, delays()), Err(Error::CheckinIntervalZero)));
         assert!(matches!(CheckinRule::new(5, 0, delays()), Err(Error::CheckinMarginZero)));
+    }
+
+    #[test]
+    fn without_a_rule_nothing_is_due_but_overdue_still_shows() {
+        // Even with a 1-block device delay, where no rule could fit.
+        let d = Delays::new(1, 2).unwrap();
+        assert!(!status(d, None, 0).overdue);
+        let s = status(d, None, 1);
+        assert!(s.overdue && !s.checkin_due);
+        assert_eq!((s.device_opens_in, s.heir_opens_in), (0, 1));
     }
 
     #[test]

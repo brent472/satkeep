@@ -171,3 +171,80 @@ fn an_immature_coinbase_coin_holds_up_the_check_in() {
     let (tx, _) = check_in(&mut savings, &node);
     assert_eq!(tx.input.len(), 2);
 }
+
+#[test]
+fn an_unconfirmed_incoming_coin_neither_blocks_nor_joins_a_check_in() {
+    // Anyone can send to a Savings address, with a low fee or as a
+    // replaceable transaction. If the check-in had to include that coin, the
+    // sender could stall it or knock it out by replacing the coin.
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    savings.fund(&node, btc(1.0));
+    let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
+    node.send_to(&address, btc(0.5)); // not mined
+    savings.sync(&node);
+    let unconfirmed = savings.wallet.list_unspent().find(|u| !u.chain_position.is_confirmed()).expect("seen in mempool");
+    let delays = savings.delays();
+
+    let psbt = build_checkin(&mut savings.wallet, delays, FEE_RATE).expect("not blocked by the unconfirmed coin");
+    assert_eq!(psbt.unsigned_tx.input.len(), 1, "only the confirmed coin");
+    assert!(psbt.unsigned_tx.input.iter().all(|i| i.previous_output != unconfirmed.outpoint), "doesn't join");
+    assert!(check_checkin(&savings.wallet, &psbt, delays).is_ok(), "an unconfirmed coin isn't missing");
+
+    // A hand-made check-in that does include it is refused.
+    let back = savings.wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
+    let mut builder = savings.wallet.build_tx();
+    builder.drain_wallet().drain_to(back).fee_rate(FEE_RATE).set_condition(Condition { csv: None, timelock: None });
+    let mut with_it = builder.finish().unwrap();
+    with_it.proprietary = psbt.proprietary.clone();
+    assert_eq!(with_it.unsigned_tx.input.len(), 2);
+    assert!(matches!(
+        check_checkin(&savings.wallet, &with_it, delays),
+        Err(Error::CheckinSpendsUnconfirmed { coin }) if coin == unconfirmed.outpoint
+    ));
+
+    // The check-in goes through while the coin is still unconfirmed.
+    let mut signed = psbt;
+    savings.sign(&mut signed, &[Holder::Phone, Holder::Helper]);
+    let tx = savings.finalize(&signed).unwrap();
+    assert_eq!(node.accepts(&tx), Ok(()));
+}
+
+#[test]
+fn a_confirmed_coin_left_out_is_still_refused() {
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    savings.fund(&node, btc(1.0));
+    savings.fund(&node, btc(0.5));
+    let delays = savings.delays();
+    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    assert_eq!(full.unsigned_tx.input.len(), 2);
+
+    let coins: Vec<_> = savings.wallet.list_unspent().map(|u| u.outpoint).collect();
+    let back = savings.wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
+    let mut builder = savings.wallet.build_tx();
+    builder
+        .add_utxo(coins[0])
+        .unwrap()
+        .manually_selected_only()
+        .drain_to(back)
+        .fee_rate(FEE_RATE)
+        .set_condition(Condition { csv: None, timelock: None });
+    let mut partial = builder.finish().unwrap();
+    partial.proprietary = full.proprietary.clone();
+    assert!(matches!(
+        check_checkin(&savings.wallet, &partial, delays),
+        Err(Error::CheckinMissesCoin { coin }) if coin == coins[1]
+    ));
+}
+
+#[test]
+fn no_confirmed_coins_means_nothing_to_check_in() {
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::new(10, 20).unwrap());
+    let address = savings.wallet.reveal_next_address(KeychainKind::External).address;
+    node.send_to(&address, btc(1.0)); // not mined
+    savings.sync(&node);
+    let delays = savings.delays();
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::CheckinNoCoins)));
+}

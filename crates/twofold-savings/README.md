@@ -46,7 +46,7 @@ let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or
 
 ## Check-in
 
-Each coin's delay clock starts when that coin confirms. A **check-in** spends every Savings coin, through the 2-of-3 path, into one new Savings address, so the device and heir delays start again from zero. It must happen before the oldest coin reaches the device delay; after that, DEVICE alone could spend it.
+Each coin's delay clock starts when that coin confirms. A **check-in** spends every confirmed Savings coin, through the 2-of-3 path, into one new Savings address, so the device and heir delays start again from zero. It must happen before the oldest coin reaches the device delay; after that, DEVICE alone could spend it.
 
 - **Interval rule.** `checkin::CheckinRule::new(interval, margin, delays)` requires `interval + margin <= device delay`, with both at least 1 block. So an interval at or past the device delay is always refused. Defaults: interval 26,280 blocks (about 6 months), margin 4,320 blocks (about 30 days). Against the 39,420-block device delay, that leaves 13,140 blocks. All three are placeholders.
 - **Coin status.** For each coin, `checkin::coins` gives:
@@ -56,9 +56,9 @@ Each coin's delay clock starts when that coin confirms. A **check-in** spends ev
 
   `checkin::reminder` sums these up for the whole wallet.
 - **Building and checking.**
-  - `checkin::build_checkin` drains every coin to one new change address through the 2-of-3 path, and marks the PSBT with a proprietary field (`twofold`/`checkin`) that other software ignores.
-  - `checkin::check_checkin` refuses a check-in that leaves out any unspent coin, pays anywhere but one Savings address, or uses a delayed path.
-  - The CLI runs the check again at `sign` and at `broadcast`, so a coin that arrived after the check-in was built gets it refused.
+  - `checkin::build_checkin` drains every confirmed coin to one new change address through the 2-of-3 path, and marks the PSBT with a proprietary field (`twofold`/`checkin`) that other software ignores. Unconfirmed coins are left out.
+  - `checkin::check_checkin` refuses a check-in that leaves out any confirmed coin, spends an unconfirmed one, pays anywhere but one Savings address, or uses a delayed path.
+  - The CLI runs the check again at `sign` and at `broadcast`, so a coin that confirmed after the check-in was built gets it refused.
 - **Why it can't be a delayed path.** The check-in's sequence carries no delay, so its delayed leaves can't be satisfied. DEVICE or HEIR alone can't approve it even when their paths are open, and the network agrees (CSV fails). The tests check both.
 
 ## Finding for the reviewer: BDK alone finalizes delayed spends wrongly, both ways
@@ -102,7 +102,8 @@ Every assumption about policy, timelocks, fees or signing in this crate, per the
 - They are **relative** delays (`older`, BIP 68/112), counted in **blocks only**. Delays are stored as `u16`, which caps them at the 65,535-block consensus limit and rules out time-based values. The heir delay must be longer than the device delay, and the device delay at least 1 block.
 - Each coin's clock starts when **that coin** confirms. New deposits start their own clock. Change from any Savings spend goes to a new Savings address, so it gets a fresh clock too. A check-in must therefore include every coin.
 - **Check-in timing.** The interval (default 26,280 blocks) plus a margin (default 4,320 blocks) must fit inside the device delay. The margin is room for fees, confirmations and a late check-in. Coins are "due" from the interval and "overdue" once their device path is open. These are placeholders, like the delays.
-- **What a check-in includes.** Every unspent coin, including unconfirmed incoming ones; their clocks haven't started, so including them costs only fees. A coinbase coin that hasn't matured can't be spent, so the check-in is refused until it matures. That only happens on regtest and signet, where Savings can be funded by mining.
+- **A check-in spends only confirmed coins.** Unconfirmed coins are left out, and they don't count as missing, because their delays haven't started, so there's nothing to restart. Including them would be a risk. Anyone can send to a Savings address, and a check-in can't confirm before the coins it spends. So a stranger could stall the check-in with a coin paying a very low fee, or break it by replacing their coin (RBF). A check-in that does spend an unconfirmed coin is refused (`Error::CheckinSpendsUnconfirmed`). Once a coin confirms, its clock starts, and the next check-in must include it.
+- **Immature coinbase coins.** A coinbase coin that hasn't matured is confirmed but can't be spent, so the check-in is refused until it matures. That only happens on regtest and signet, where Savings can be funded by mining.
 - The 61,320-block heir delay sits 4,215 blocks (about 1 month) below the cap, which leaves little room to lengthen it.
 - "Has N confirmations" means the funding block counts as the first. A spend with a delay of N can go in the block N blocks after the coin's block, which is when the coin has N confirmations from the next block's point of view.
 
@@ -165,7 +166,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. |
 | `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
-| `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a coin (one arrived later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
+| `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
 | `tests/default_delays.rs` | The real 39,420 / 61,320 delays open at exactly those confirmations (ignored by default) |
 | `tests/export.rs` | Bitcoin Core derives the same addresses from the export |
 | `tests/harness.rs` | The harness's hand-built spends are valid when they have enough signatures, so a rejection elsewhere is the policy's doing |

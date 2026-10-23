@@ -191,5 +191,51 @@ fn nothing_to_check_in() {
     let node = Node::start();
     let (cli, _) = wallet(&node);
     let err = cli.fails(&["checkin", "--out", &cli.path("c.psbt")]);
-    assert!(err.contains("no Savings coins to check in"), "{err}");
+    assert!(err.contains("no confirmed Savings coins to check in"), "{err}");
+}
+
+#[test]
+fn an_unconfirmed_incoming_coin_doesnt_hold_up_a_check_in() {
+    let node = Node::start();
+    let (cli, holders) = wallet(&node);
+    fund(&cli, &node, 1.0);
+    let address = cli.ok(&["address"]);
+    let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
+    node.send_to(&address, Amount::from_btc(0.5).unwrap()); // not mined
+
+    let file = cli.path("checkin.psbt");
+    let out = prepare_and_approve(&cli, &holders, &file);
+    assert!(out.contains("Prepared a check-in of 1 coin, 1.00000000 BTC"), "{out}");
+    assert!(out.contains("Left out 1 unconfirmed coin: its delays haven't started yet."), "{out}");
+    let sent = cli.ok(&["broadcast", "--psbt", &file]);
+    assert!(sent.starts_with("Sent."), "{sent}");
+
+    node.mine(1);
+    let balance = cli.ok(&["balance"]);
+    assert_eq!(balance.matches("1 confirmation  ").count(), 2, "the check-in's coin and the newcomer: {balance}");
+}
+
+#[test]
+fn balance_works_for_a_wallet_without_a_check_in_rule() {
+    // A wallet made before check-ins existed has no interval in
+    // savings.json, and here the defaults don't fit its 10-block device
+    // delay. balance still lists each coin and still warns when overdue.
+    let node = Node::start();
+    let (cli, _) = wallet(&node);
+    let config = cli.wallet_dir().join("savings.json");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let old = text.replace("\"checkin_interval\": 5", "\"checkin_interval\": null").replace("\"checkin_margin\": 2", "\"checkin_margin\": null");
+    assert_ne!(old, text);
+    std::fs::write(&config, old).unwrap();
+
+    fund(&cli, &node, 1.0);
+    node.mine(4);
+    let out = cli.ok(&["balance"]);
+    assert!(out.contains("Check-ins aren't set up for this wallet"), "{out}");
+    assert!(out.contains("5 confirmations  device path opens in 5 blocks  heir path opens in 15 blocks\n"), "never 'due': {out}");
+    assert!(!out.contains("Next check-in"), "{out}");
+
+    node.mine(5);
+    let out = cli.ok(&["balance"]);
+    assert!(out.contains("OVERDUE") && out.contains("WARNING: check-in overdue."), "{out}");
 }

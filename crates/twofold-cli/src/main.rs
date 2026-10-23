@@ -16,7 +16,7 @@ use bdk_wallet::KeychainKind;
 use clap::{Parser, Subcommand, ValueEnum};
 use twofold_savings::bitcoin::psbt::Psbt;
 use twofold_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
-use twofold_savings::checkin::{self, CheckinRule, Reminder};
+use twofold_savings::checkin::{self, Reminder};
 use twofold_savings::spend::{self, Path as SpendPath};
 use twofold_savings::{DEFAULT_DEVICE_DELAY, DEFAULT_HEIR_DELAY, HolderKey};
 
@@ -346,6 +346,14 @@ fn run(cli: Cli) -> Result<()> {
             println!("Network fee: {}", btc(psbt.fee()?));
             println!("Saved, unsigned, to {}.", out.display());
             println!("Once confirmed, both delays restart for all of it.");
+            let waiting = opened.wallet.list_unspent().filter(|u| !u.chain_position.is_confirmed()).count();
+            if waiting > 0 {
+                println!(
+                    "Left out {waiting} unconfirmed coin{}: {} delays haven't started yet.",
+                    if waiting == 1 { "" } else { "s" },
+                    if waiting == 1 { "its" } else { "their" }
+                );
+            }
             println!("Needs approval from any 2 of PHONE, DEVICE, HELPER: run `twofold sign`, then `twofold broadcast`.");
         }
         Command::Broadcast { ref psbt } => {
@@ -542,12 +550,13 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
         println!("Waiting for confirmation: {}", btc(waiting));
     }
     let delays = opened.policy.delays();
+    // Without a rule nothing is "due", but each coin's delays and "overdue"
+    // still show: they don't depend on the rule.
     let rule = match opened.config.checkin_rule() {
-        Ok(rule) => rule,
+        Ok(rule) => Some(rule),
         Err(e) => {
-            // Still show the coins, using a rule that never says "due".
             println!("Check-ins aren't set up for this wallet: {e:#}");
-            CheckinRule::new(1, delays.device() - 1, delays).map_err(|e| anyhow::anyhow!(e))?
+            None
         }
     };
     let coins = checkin::coins(&opened.wallet, delays, rule);
@@ -570,12 +579,9 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
             opens_in(s.heir_opens_in),
         );
     }
-    if opened.config.checkin_rule().is_err() {
-        return Ok(());
-    }
     let oldest = coins.iter().filter(|c| c.status.confirmations > 0).max_by_key(|c| c.status.confirmations);
-    match (checkin::reminder(&coins), oldest) {
-        (Reminder::Overdue, _) => {
+    match (checkin::reminder(&coins), oldest, rule) {
+        (Reminder::Overdue, _, _) => {
             let open = coins.iter().filter(|c| c.status.overdue).count();
             println!();
             println!(
@@ -584,7 +590,7 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
             );
             println!("Run `twofold checkin` now.");
         }
-        (Reminder::Due, Some(oldest)) => {
+        (Reminder::Due, Some(oldest), Some(rule)) => {
             println!();
             println!(
                 "Check-in due: the oldest coin has {} confirmations, and check-ins are due every {} blocks.",
@@ -593,12 +599,12 @@ fn print_balance(opened: &Opened, client: &Client) -> Result<()> {
             );
             println!("Its device path {}. Run `twofold checkin`.", opens_in(oldest.status.device_opens_in));
         }
-        (_, Some(oldest)) => {
+        (_, Some(oldest), Some(rule)) => {
             let due_in = u32::from(rule.interval()) - oldest.status.confirmations;
             println!();
             println!("Next check-in due in {} (every {}).", blocks(due_in), blocks(rule.interval().into()));
         }
-        (_, None) => {}
+        _ => {}
     }
     Ok(())
 }

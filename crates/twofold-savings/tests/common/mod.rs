@@ -91,6 +91,10 @@ impl Savings {
             let height = event.block_height();
             self.wallet.apply_block_connected_to(&event.block, height, event.connected_to()).expect("apply block");
         }
+        // And the mempool, so the wallet sees unconfirmed incoming coins.
+        let mempool = emitter.mempool().expect("read mempool");
+        self.wallet.apply_unconfirmed_txs(mempool.update);
+        self.wallet.apply_evicted_txs(mempool.evicted);
     }
 
     /// Sends `amount` from the faucet to a new Savings address and mines it.
