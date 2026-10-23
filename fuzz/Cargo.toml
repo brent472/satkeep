@@ -41,3 +41,10 @@ path = "fuzz_targets/holder_key.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "backup_file"
+path = "fuzz_targets/backup_file.rs"
+test = false
+doc = false
+bench = false

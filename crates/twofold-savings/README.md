@@ -61,6 +61,27 @@ Each coin's delay clock starts when that coin confirms. A **check-in** spends ev
   - The CLI runs the check again at `sign` and at `broadcast`, so a coin that confirmed after the check-in was built gets it refused.
 - **Why it can't be a delayed path.** The check-in's sequence carries no delay, so its delayed leaves can't be satisfied. DEVICE or HEIR alone can't approve it even when their paths are open, and the network agrees (CSV fails). The tests check both.
 
+## Phone key backup (prototype)
+
+`backup` is a prototype of the phone key backup: the phone key, encrypted on the phone, kept in the owner's own cloud, and unlocked only with their security device. The design, the device survey, the threats and the decisions behind it are in [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md).
+
+```rust
+device.enter_pin(pin)?;                                   // on the device itself
+let file = backup::make_backup(&phone, &setup, wallet_id, created, &mut device)?;
+backup::save(&mut cloud, file)?;                          // the only visible copy
+let header = backup::read_header(&file)?;                 // date and devices, no unlocking
+let restored = backup::restore(&file, &mut device)?;      // needs the right device and its PIN
+backup::replace_device(&mut cloud, &phone, &setup, wallet_id, created, &mut new_device)?;
+```
+
+- **Format.** A fresh random data key per backup encrypts the phrase and the wallet's public setup with XChaCha20-Poly1305. The whole header (the date, the device ids) is authenticated, so changing any of it stops the backup opening.
+- **Lock entries.** Each one wraps the data key under a key derived (HKDF-SHA256) from one device's secret, bound to the wallet id, the device id, the unlock method and the format version.
+- **Devices.** A `SecurityDevice` gives a 32-byte secret for a request, the same every time, only after its own PIN, the way Trezor's SLIP-0011 CipherKeyValue works. `SimulatedDevice` does that in software, with a retry limit. Real devices aren't connected yet.
+- **The recovery contact's lock entry** is reserved in the format, and never opened by a device. Nothing makes or opens one yet.
+- **The cloud.** `MemoryCloud` stands in for iCloud and Google Drive and, like them, never truly forgets: deleted and replaced files stay retrievable. A test pins the consequence: replacing the device doesn't stop the old device opening an *old* copy, which is why a lost or stolen device also means a new phone key (decision D3 in the research).
+- **Nothing secret is printed or put in an error.** `Restored` and `SimulatedDevice` aren't `Debug`, and the phrase, data key, device secret and key-encryption key are wiped from memory after use. The cipher wipes its own copy of the key too; HKDF's working state isn't wiped (the `hkdf` crate doesn't support it).
+- **The device is only ever asked for this wallet's own label.** A changed file can't make it derive a key for anything else.
+
 ## Finding for the reviewer: BDK alone finalizes delayed spends wrongly, both ways
 
 **What we found.** When BDK 3.2.0 finalizes a PSBT, it gives miniscript 12.3.7 three satisfiers: the PSBT itself, a height check and an age check. miniscript combines them with **OR** (`impl_tuple_satisfier` in `miniscript/src/miniscript/satisfy.rs`), which goes wrong in two directions.
@@ -189,6 +210,8 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | --- | --- |
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently. Checked for all 32 combinations of the five keys, at ages around each delay. Also names each forbidden case. The internal key matches Liana v15.0's published test vectors and a value from Liana's own code for the Savings tree, and isn't the old role-order key. |
 | `src/holder.rs` (unit) | A phrase round-trips, and BIP39's public test phrase gives the account key BIP86 publishes for it. A bad checksum, 11 or 24 words, an old `tprv` key and garbage are all refused without repeating their input. A phrase is spotted in text however it's split up. |
+| `src/backup/tests.rs` (unit) | The backup alone shows only its date and device ids: no phrase word or setup text is in it. The right device with its PIN restores the same 12 words, keys and setup. A wrong device is refused before it's asked anything; a device without its PIN unlocks nothing; wrong PINs block it for good. Replacing the device locks the backup to the new one only, and the old device still opens an old copy (the limit, pinned). Changing any single byte, the date included, stops it opening; cut-short, padded and garbage files are refused; a contact entry is never opened by a device. No error repeats the phrase. |
+| `tests/backup.rs` | A phone key restored from its backup approves a regtest 2-of-3 spend with the helper. A key restored from another wallet's backup adds no signature, and the spend can't be finalized. |
 | `tests/allowed_paths.rs` | Each allowed path spends on regtest, through the expected leaf, at exactly its delay |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through all three leaves, is refused by Twofold **and** rejected by the node. This includes the case of signing a shorter sequence to skip a delay. |
 | `tests/checkin.rs` | A check-in restarts both delays for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses a delayed path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. DEVICE or HEIR alone can't approve a check-in even with their paths open. |
@@ -203,4 +226,5 @@ The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
 ## Not here yet
 
 - The signet demo
-- The recovery contact path
+- The recovery contact path, for the policy and for the backup
+- Real security devices and real cloud storage for the backup

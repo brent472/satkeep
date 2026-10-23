@@ -149,6 +149,11 @@ impl Savings {
         }
     }
 
+    /// PHONE's key, for the backup tests that back it up and restore it.
+    pub fn phone_key(&self) -> &HolderKey {
+        &self.phone
+    }
+
     fn holder(&self, holder: Holder) -> &HolderKey {
         match holder {
             Holder::Phone => &self.phone,

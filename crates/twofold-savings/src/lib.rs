@@ -3,7 +3,11 @@
 //! Savings can be spent by any 2 of PHONE, DEVICE and HELPER. After a delay
 //! DEVICE can spend alone, and after a longer delay HEIR can spend alone.
 //! See the crate README for every assumption behind this policy.
+//!
+//! [`backup`] is the phone key backup prototype: the phone key encrypted to
+//! the owner's cloud, unlocked only with their security device.
 
+pub mod backup;
 pub mod checkin;
 mod delays;
 mod error;
