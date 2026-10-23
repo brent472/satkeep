@@ -5,6 +5,7 @@ description = "Developer command-line tool for the Twofold Savings wallet. Test 
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "twofold"

@@ -5,6 +5,7 @@ description = "The Twofold Savings wallet policy: 2 of 3 keys, with delayed devi
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 bdk_wallet.workspace = true

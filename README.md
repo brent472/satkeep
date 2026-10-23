@@ -25,6 +25,18 @@ Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on t
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |
 | [`CLAUDE.md`](CLAUDE.md) | Ground rules for anyone (or any AI assistant) working in this repo |
 
+## Dependencies
+
+Twofold holds keys, so every dependency is a risk worth weighing.
+
+- **A new dependency needs a reason in its PR**: what it's for, why an existing crate or a few lines of our own code won't do, and who maintains it.
+- `cargo deny check` (policy in [`deny.toml`](deny.toml)) must pass. It fails on:
+  - known security advisories and yanked crates
+  - two versions of `bitcoin`, `secp256k1` or `miniscript` in one build
+  - any source other than crates.io
+  - licences that aren't permissive
+- `Cargo.lock` is committed, so every build uses the same, reviewed versions.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
