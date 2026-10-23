@@ -42,7 +42,7 @@ fn two_of_three_payment_needs_two_approvals_and_returns_change() {
     let err = cli.fails(&["broadcast", "--psbt", &psbt]);
     assert!(err.contains("not enough keys have approved"), "one approval is not enough: {err}");
 
-    let args = ["sign", "--psbt", &psbt, "--key-stdin"];
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
     let again = common::expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
     assert!(again.contains("already approved"), "{again}");
 
@@ -122,7 +122,7 @@ fn a_key_from_another_wallet_adds_nothing() {
     let psbt = cli.path("pay.psbt");
     cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
     let stranger = HolderKey::generate();
-    let args = ["sign", "--psbt", &psbt, "--key-stdin"];
+    let args = ["sign", "--psbt", &psbt, "--yes", "--key-stdin"];
     let err = common::expect_failure(&args, cli.run_with_stdin(&args, &stranger.to_secret_string()));
     assert!(err.contains("isn't part of this payment"), "{err}");
 }
@@ -186,7 +186,7 @@ fn keygen_keys_can_create_a_wallet_and_approve() {
 
     let psbt = cli.path("pay.psbt");
     cli.ok(&["send", "--to", &to(&node), "--all", "--out", &psbt]);
-    cli.ok(&["sign", "--psbt", &psbt, "--key-file", &cli.path("phone.key")]);
-    cli.ok(&["sign", "--psbt", &psbt, "--key-file", &cli.path("device.key")]);
+    cli.ok(&["sign", "--psbt", &psbt, "--yes", "--key-file", &cli.path("phone.key")]);
+    cli.ok(&["sign", "--psbt", &psbt, "--yes", "--key-file", &cli.path("device.key")]);
     cli.ok(&["broadcast", "--psbt", &psbt]);
 }

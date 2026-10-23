@@ -101,9 +101,10 @@ impl<'a> Cli<'a> {
         expect_failure(args, self.run(args))
     }
 
-    /// Signs the PSBT at `psbt` as `holder`, passing the key on stdin.
+    /// Signs the PSBT at `psbt` as `holder` without the approval prompt,
+    /// passing the key on stdin.
     pub fn sign(&self, psbt: &str, holder: &HolderKey) -> String {
-        let args = ["sign", "--psbt", psbt, "--key-stdin"];
+        let args = ["sign", "--psbt", psbt, "--yes", "--key-stdin"];
         expect_ok(&args, self.run_with_stdin(&args, &holder.to_secret_string()))
     }
 

@@ -39,6 +39,19 @@ impl Path {
     }
 }
 
+/// The path a PSBT's inputs ask for, read from their sequences: a sequence
+/// equal to the device or heir delay means that delayed path, anything else
+/// the 2-of-3 path. `None` if the inputs disagree, which [`build_spend`]
+/// never produces.
+pub fn path_of(psbt: &Psbt, delays: Delays) -> Option<Path> {
+    let path_of_input = |sequence: Sequence| {
+        [Path::Device, Path::Heir].into_iter().find(|p| p.sequence(delays) == Some(sequence)).unwrap_or(Path::TwoOfThree)
+    };
+    let mut paths = psbt.unsigned_tx.input.iter().map(|i| path_of_input(i.sequence));
+    let first = paths.next()?;
+    paths.all(|p| p == first).then_some(first)
+}
+
 /// Builds an unsigned spend through `path`. `configure` adds the recipients
 /// and fee rate. Refuses if any coin chosen is too young for the path's
 /// delay.
@@ -100,4 +113,32 @@ pub fn finalize(wallet: &Wallet, psbt: &Psbt) -> Result<Transaction, Error> {
         return Err(Error::NotEnoughApprovals);
     }
     Ok(psbt.extract_tx()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bitcoin::{OutPoint, Transaction, TxIn, absolute, transaction};
+
+    fn psbt_with(sequences: &[Sequence]) -> Psbt {
+        let input = sequences.iter().map(|&sequence| TxIn { previous_output: OutPoint::null(), sequence, ..Default::default() });
+        let tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: input.collect(),
+            output: vec![],
+        };
+        Psbt::from_unsigned_tx(tx).unwrap()
+    }
+
+    #[test]
+    fn reads_the_path_from_the_input_sequences() {
+        let d = Delays::new(10, 20).unwrap();
+        let (device, heir) = (Sequence::from_height(10), Sequence::from_height(20));
+        assert_eq!(path_of(&psbt_with(&[Sequence::ENABLE_RBF_NO_LOCKTIME]), d), Some(Path::TwoOfThree));
+        assert_eq!(path_of(&psbt_with(&[device, device]), d), Some(Path::Device));
+        assert_eq!(path_of(&psbt_with(&[heir]), d), Some(Path::Heir));
+        assert_eq!(path_of(&psbt_with(&[device, heir]), d), None, "inputs disagree");
+        assert_eq!(path_of(&psbt_with(&[]), d), None);
+    }
 }

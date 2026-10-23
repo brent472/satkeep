@@ -5,7 +5,7 @@ mod node;
 mod wallet_dir;
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -109,10 +109,18 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Approve a payment with one holder's key. Updates the PSBT file in place.
+    /// Show a payment, ask to approve it, then sign with one holder's key.
+    /// Updates the PSBT file in place.
+    ///
+    /// Standard input carries the answer to "Approve? (y/N)" first, then,
+    /// with --key-stdin, the key on the next line. A declined payment never
+    /// reads the key.
     Sign {
         #[arg(long)]
         psbt: PathBuf,
+        /// Approve without asking (for scripts and tests)
+        #[arg(long)]
+        yes: bool,
         /// File holding the private key (from `twofold keygen`). There is
         /// deliberately no way to pass the key itself as an argument.
         #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
@@ -270,15 +278,27 @@ fn run(cli: Cli) -> Result<()> {
             println!("Saved, unsigned, to {}.", out.display());
             println!("Needs approval from {}: run `twofold sign`, then `twofold broadcast`.", path.who_approves());
         }
-        Command::Sign { ref psbt, ref key_file, key_stdin } => {
+        Command::Sign { ref psbt, ref key_file, key_stdin, yes } => {
+            let opened = cli.open()?;
             let mut payment = read_psbt(psbt)?;
-            let mut text = String::new();
-            if key_stdin {
-                std::io::stdin().read_to_string(&mut text).context("reading the key from standard input")?;
+            print_payment(&opened, &payment)?;
+            let stdin = std::io::stdin();
+            let mut lines = stdin.lock().lines();
+            if !yes {
+                print!("Approve? (y/N) ");
+                std::io::stdout().flush()?;
+                let answer = lines.next().transpose().context("reading the answer")?.unwrap_or_default();
+                if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+                    println!();
+                    bail!("not approved; nothing was signed");
+                }
+            }
+            let text = if key_stdin {
+                lines.next().transpose().context("reading the key from standard input")?.unwrap_or_default()
             } else {
                 let path = key_file.as_ref().expect("clap requires --key-file or --key-stdin");
-                text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-            }
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
+            };
             let holder = HolderKey::from_secret_str(&text)?;
             drop(text);
             let added = holder.sign(&mut payment)?;
@@ -390,6 +410,45 @@ fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork)
     let url = url.clone().unwrap_or_else(|| node::default_url(network));
     let cookie = cookie.clone().unwrap_or_else(|| node::default_cookie(network));
     node::connect(&url, &cookie, network)
+}
+
+/// Prints what a payment does, so a holder sees it before approving:
+/// every output's address and amount (marking money that comes back to
+/// Savings), the network fee, and which path it needs. Refuses a payment
+/// that doesn't spend this wallet's coins.
+fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
+    let wallet = &opened.wallet;
+    for (i, input) in payment.unsigned_tx.input.iter().enumerate() {
+        if wallet.get_utxo(input.previous_output).is_none() {
+            bail!(
+                "input {i} isn't an unspent coin of this Savings wallet. Run `twofold balance` to sync, \
+                 or check --wallet-dir"
+            );
+        }
+    }
+    let path = spend::path_of(payment, opened.policy.delays())
+        .context("this payment's inputs ask for different approval paths")?;
+    let network = opened.network().network();
+    println!("Payment to approve:");
+    for output in &payment.unsigned_tx.output {
+        let amount = btc(output.value);
+        let address = Address::from_script(&output.script_pubkey, network)
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| format!("script {}", output.script_pubkey.to_hex_string()));
+        match wallet.derivation_of_spk(output.script_pubkey.clone()) {
+            Some((KeychainKind::Internal, _)) => println!("  {amount} comes back to Savings as change ({address})"),
+            Some((KeychainKind::External, _)) => println!("  {amount} to {address} (one of your own Savings addresses)"),
+            None => println!("  {amount} to {address}"),
+        }
+    }
+    println!("  Network fee: {}", btc(payment.fee()?));
+    let who = match path {
+        SpendPath::TwoOfThree => PathArg::TwoOfThree,
+        SpendPath::Device => PathArg::Device,
+        SpendPath::Heir => PathArg::Heir,
+    };
+    println!("  Approval path: {}", who.who_approves());
+    Ok(())
 }
 
 fn open_and_sync(cli: &Cli) -> Result<(Opened, Client)> {
