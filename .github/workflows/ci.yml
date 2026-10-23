@@ -14,6 +14,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_DENY_VERSION: "0.20.2"
+  # cargo-deny 0.20.2's Linux (musl) tarball, as published in its release on
+  # 2026-10-23. The download must match both this and the release's .sha256.
+  CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
   CARGO_FUZZ_VERSION: "0.13.2"
   # Same pins as exit-drill.yml.
   CORE_VERSION: "31.1"
@@ -36,7 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install cargo-deny (checked against its published SHA256)
+      - name: Install cargo-deny (checked against its pinned and published SHA256)
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
@@ -46,6 +49,7 @@ jobs:
           curl -sSfL -o "$f.sha256" "$base/$f.sha256"
           expected=$(cut -d' ' -f1 "$f.sha256" | tr -d '\r\n' | tr 'A-F' 'a-f')
           echo "${expected}  $f" | sha256sum -c -
+          echo "${CARGO_DENY_SHA256}  $f" | sha256sum -c -
           tar xzf "$f"
           install "$(find . -name cargo-deny -type f | head -1)" "$HOME/.cargo/bin/cargo-deny"
       - run: cargo deny check
