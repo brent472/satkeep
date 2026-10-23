@@ -1,0 +1,13 @@
+[package]
+name = "twofold-testenv"
+version = "0.1.0"
+description = "Throwaway regtest nodes for Twofold's tests. Test-only."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bdk_wallet.workspace = true
+bdk_bitcoind_rpc.workspace = true
+corepc-node = { version = "0.12.0", default-features = false, features = ["latest"] }
+serde_json = "1.0"

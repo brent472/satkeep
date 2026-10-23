@@ -634,10 +634,20 @@ version = "0.1.0"
 dependencies = [
  "bdk_bitcoind_rpc",
  "bdk_wallet",
- "corepc-node",
  "rand",
  "serde_json",
  "thiserror",
+ "twofold-testenv",
+]
+
+[[package]]
+name = "twofold-testenv"
+version = "0.1.0"
+dependencies = [
+ "bdk_bitcoind_rpc",
+ "bdk_wallet",
+ "corepc-node",
+ "serde_json",
 ]
 
 [[package]]

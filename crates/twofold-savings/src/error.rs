@@ -23,9 +23,11 @@ pub enum Error {
     UnknownCoin { input: usize },
     #[error("not enough keys have approved this payment")]
     NotEnoughApprovals,
+    #[error("that isn't a valid test-network private key for a Savings key holder")]
+    BadHolderKey,
     #[error("BDK could not build the payment: {0}")]
     Build(#[from] bdk_wallet::error::CreateTxError),
-    #[error("BDK could not finalize the payment: {0}")]
+    #[error("BDK could not sign or finalize the payment: {0}")]
     Finalize(#[from] bdk_wallet::signer::SignerError),
     #[error("could not extract the finished transaction: {0}")]
     Extract(#[from] crate::bitcoin::psbt::ExtractTxError),
