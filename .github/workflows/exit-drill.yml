@@ -5,11 +5,6 @@ name: Exit drill
 
 on:
   workflow_dispatch:
-  # TEMPORARY, for testing this workflow before it reaches main (GitHub can
-  # only start a manual workflow that's on the default branch). Removed
-  # before review.
-  push:
-    branches: [milestone-1/exit-drill]
 
 permissions:
   contents: read
