@@ -193,7 +193,14 @@ Either way the card needs:
 | `age` / rage | No audit found ([spec](https://github.com/C2SP/C2SP/blob/main/age.md)) | Built around X25519 and password recipients, which our hardware unlocks don't fit. In a multi-recipient file, any recipient can forge the contents for the others ([Filippo Valsorda](https://words.filippo.io/age-authentication/)). |
 | `hpke` | "Nobody has performed a paid audit" ([docs](https://docs.rs/crate/hpke/latest)) | Only needed for an HPKE card; revisit then. |
 
-All three would be new dependencies, so the prototype PR will ask for them with reasons, and `cargo deny` must pass.
+All three are new dependencies, approved for the prototype.
+
+**Which versions, and why.** The prototype uses the mature line: `chacha20poly1305` 0.10.1, `hkdf` 0.12.4, `sha2` 0.10.9, not the newest 0.11 / 0.13 / 0.11.
+- The newest line pulls in `ctutils` 0.4.2, which has a fresh advisory ([RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), non-constant-time comparisons). `cargo deny` caught it.
+- The fixed `ctutils` 0.4.4 came out the same day as this work and needs Rust 1.87, above our 1.85 floor.
+- The 0.10 line doesn't use `ctutils` at all, and is closer to the versions NCC reviewed.
+- It brings in `subtle` (constant-time helpers, BSD-3-Clause), allowed in `deny.toml` for that crate only. The rest are RustCrypto crates plus `generic-array` and `typenum`, all MIT or Apache-2.0.
+- Moving to the newest line is a small change once `ctutils` 0.4.4 has settled.
 
 ## 5. The recovery contact: helping unlock without reading
 
@@ -329,9 +336,11 @@ All seven were approved as recommended, except **D2, which brief v3.8 superseded
 | **D6** | Section 13's open decision on Spending-only users | Second key first (current copy) / password-locked (weaker) / recovery contact | **Keep "second key first."** An old phone counts as a second key, so nobody has to buy anything. |
 | **D7** | The written backup's restore path | Settings only, as the copy says | Agree; nothing to change |
 
-## 9. Prototype plan (after approval)
+## 9. Prototype
 
-A `backup` module, with the security device simulated in software, on test networks only.
+Built as planned, as the `backup` module in [`twofold-savings`](../crates/twofold-savings/README.md#phone-key-backup-prototype), on test networks only. One addition: a fuzz target (`backup_file`), because the backup file is outside input once it comes back from the cloud.
+
+The plan, as approved:
 
 **Simulated device:**
 - It holds a random secret, generated in each test.
