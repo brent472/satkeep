@@ -22,7 +22,7 @@ use satkeep_backup::kit::{self, Kit};
 use satkeep_backup::setup::WalletSetup;
 use satkeep_backup::{LockKind, SecurityDevice};
 
-pub use keys::AccountKey;
+pub use keys::{AccountKey, Alone};
 
 /// What unlocking a kit gives back. Deliberately not `Debug`: it holds the
 /// phone key.
@@ -109,44 +109,57 @@ pub struct HeirWallet {
     pub count: usize,
     /// Its public descriptor, for Liana.
     pub descriptor: String,
-    /// The heir delay in the descriptor (what the coins follow), in blocks.
-    pub heir_delay: u32,
+    /// The heir delay in blocks, from the descriptor's heir path (what the
+    /// coins follow).
+    pub heir_delay: u16,
     /// The heir delay the setup lists for it, when that differs.
     pub setup_says: Option<u16>,
 }
 
-/// The heir's route: the Savings wallets in the kit's **plain** setup whose
-/// descriptors hold `heir`'s key. Never asks for the second key and never
+/// What the heir's route found in the kit's plain setup.
+pub struct HeirReport {
+    /// Savings wallets in the setup.
+    pub count: usize,
+    /// The wallets the heir can claim alone after a block delay.
+    pub claimable: Vec<HeirWallet>,
+    /// Wallets that hold HEIR's key, but not in a path the heir can use
+    /// alone: (number, why). Not exported.
+    pub not_alone: Vec<(usize, &'static str)>,
+}
+
+/// The heir's route: the Savings wallets in the kit's **plain** setup with
+/// one Taproot leaf where `heir` alone spends after a block delay
+/// (`and_v(v:pk(HEIR),older(N))`). Never asks for the second key and never
 /// opens the backup, so the setup is unverified; HEIR's key can only ever
 /// sign for wallets that contain it.
-pub fn heir_wallets(kit: &Kit, heir: &AccountKey) -> Result<Vec<HeirWallet>> {
+pub fn heir_wallets(kit: &Kit, heir: &AccountKey) -> Result<HeirReport> {
     let setup = kit.plain_setup.as_ref().context(
         "this is the raw backup, with no plain wallet setup: the heir's route needs the kit itself (its PDF or its \
          armoured text)",
     )?;
     let count = setup.savings.len();
-    let mut out = Vec::new();
+    let mut report = HeirReport { count, claimable: Vec::new(), not_alone: Vec::new() };
     for (i, wallet) in setup.savings.iter().enumerate() {
         if !heir.is_in(&wallet.descriptor)? {
             continue;
         }
-        let heir_delay = older_in(&wallet.descriptor)
-            .with_context(|| format!("Savings wallet {} holds the heir key but no single heir delay", i + 1))?;
-        let listed = wallet.heir.map(|h| h.heir_delay);
-        let setup_says = listed.filter(|d| u32::from(*d) != heir_delay);
-        out.push(HeirWallet { number: i + 1, count, descriptor: wallet.descriptor.clone(), heir_delay, setup_says });
+        match heir.alone_after(&wallet.descriptor)? {
+            Alone::After(heir_delay) => {
+                let setup_says = wallet.heir.map(|h| h.heir_delay).filter(|listed| *listed != heir_delay);
+                report.claimable.push(HeirWallet {
+                    number: i + 1,
+                    count,
+                    descriptor: wallet.descriptor.clone(),
+                    heir_delay,
+                    setup_says,
+                });
+            }
+            Alone::Nowhere => report.not_alone.push((i + 1, "not in a path the heir can use alone")),
+            Alone::TimeBased => report.not_alone.push((i + 1, "its heir delay is time-based, which Satkeep never uses")),
+            Alone::MoreThanOne => report.not_alone.push((i + 1, "in more than one heir path, which Satkeep never makes")),
+        }
     }
-    Ok(out)
-}
-
-/// The one relative timelock (`older(N)`) in a descriptor.
-fn older_in(descriptor: &str) -> Option<u32> {
-    let mut found = descriptor.match_indices("older(").map(|(at, tag)| {
-        let rest = &descriptor[at + tag.len()..];
-        rest[..rest.find(')')?].parse::<u32>().ok()
-    });
-    let first = found.next()??;
-    found.all(|other| other == Some(first)).then_some(first)
+    Ok(report)
 }
 
 /// Reads a holder's recovery phrase from the text of a key file or stdin:
@@ -227,14 +240,6 @@ mod tests {
         assert_eq!(super::about(1_008), "about 7 days");
         assert_eq!(super::about(61_320), "about 14 months");
         assert_eq!(super::about(52_560), "about 12 months");
-    }
-
-    #[test]
-    fn the_heir_delay_is_read_from_the_descriptor() {
-        assert_eq!(super::older_in("tr(k,{multi_a(2,a,b,c),and_v(v:pk(h),older(61320))})#x"), Some(61_320));
-        assert_eq!(super::older_in("wsh(sortedmulti(2,a,b,c))#x"), None);
-        assert_eq!(super::older_in("tr(k,{and_v(v:pk(h),older(5)),and_v(v:pk(i),older(6))})"), None, "two different delays");
-        assert_eq!(super::older_in("tr(k,and_v(v:pk(h),older(x)))"), None);
     }
 
     #[test]

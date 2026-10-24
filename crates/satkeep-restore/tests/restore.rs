@@ -586,3 +586,44 @@ fn the_heirs_route_needs_the_kit_and_12_words_and_never_takes_a_second_key() {
     assert!(!out.status.success(), "the heir's route took a second key");
     assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument"));
 }
+
+#[test]
+fn a_changed_setup_that_only_mentions_the_heir_key_offers_nothing() {
+    let owner = Owner::new();
+    let key = owner.key_file("heir.key", &owner.heir_key);
+    let real = owner.heir.export_descriptor();
+    let internal = &real[3..real.find(',').unwrap()];
+    let pk = |k: &HolderKey| k.public_key(0).to_string();
+    let (phone, device, heir) = (pk(&owner.phone), pk(&owner.device), pk(&owner.heir_key));
+    let stranger = pk(&HolderKey::generate());
+    let cases = [
+        // HEIR only in the 2-of-3; a stranger's key behind the delay.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{heir}),and_v(v:pk({stranger}),older(20))}})"), "not in a path the heir can use alone"),
+        // HEIR with someone else behind the delay.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{stranger}),and_v(v:multi_a(2,{heir},{stranger}),older(20))}})"), "not in a path the heir can use alone"),
+        // A time-based delay (bit 22 set: 512 seconds), not blocks.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{stranger}),and_v(v:pk({heir}),older(4194305))}})"), "time-based"),
+    ];
+    for (i, (descriptor, why)) in cases.iter().enumerate() {
+        let mut changed = owner.setup.clone();
+        changed.savings = vec![SavingsWallet {
+            descriptor: descriptor.clone(),
+            birthday: 0,
+            heir: Some(HeirSettings { heir_delay: 20, checkin_interval: 10, checkin_margin: 5, refresh_window: None }),
+        }];
+        let kit = owner.kit_for(&format!("changed{i}.pdf"), &owner.phone, &owner.setup, &changed, owner.secret);
+        let out = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key)], &owner.heir_key, "");
+        assert!(!out.status.success(), "case {i} offered a wallet the heir can't spend alone");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains(why), "case {i}: {stdout}");
+        assert!(!stdout.contains("main descriptor"), "case {i} exported something: {stdout}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("lets this heir key move coins alone"), "case {i}");
+    }
+
+    // An oversized key file is refused before it's read.
+    let huge = owner.dir.file("huge.key");
+    std::fs::write(&huge, "abandon ".repeat(1000)).unwrap();
+    let out = owner.heir(&["heir", "--kit", &kit_s(&owner.kit()), "--key-file", &kit_s(&huge)], &owner.heir_key, "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("too large to be a key file"));
+}

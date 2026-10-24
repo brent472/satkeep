@@ -45,11 +45,16 @@ An heir has their own key (HEIR) and the kit, but not the second key. So `heir` 
 
 - **The heir's 12 words** come from a key file (`--key-file`) or standard input (`--key-stdin`), as `satkeep sign` takes keys. They're never taken on the command line and never printed back. A file with anything but 12 English BIP39 words is refused, without repeating it.
 - **It's marked UNVERIFIED.** Every output starts by saying so: without the second key nobody can check the plain setup against the locked copy, so someone with the cloud account could have changed it (docs/restore-tool.md, threat 7.2).
-- **What limits the harm:** the heir's key can only ever sign for wallets that contain it. The tool exports only the Savings wallets whose descriptors hold HEIR's key (same fingerprint, path and `tpub`), for Liana. If none do, it says so plainly and exports nothing.
+- **What limits the harm:** the heir's key can only ever sign for wallets that contain it.
+- **Which wallets it exports, for Liana:** only Savings wallets that have exactly one Taproot leaf where HEIR alone spends after a block delay, `and_v(v:pk(HEIR),older(N))`. HEIR's key must match on fingerprint, path and `tpub`.
+  - **Why so strict:** a changed setup can't make the tool claim the heir can move coins alone when HEIR is only in a 2-of-3, or shares the delayed path with someone else.
+  - **Not offered,** with the reason given: a wallet that holds HEIR's key without such a leaf, or whose delay is time-based.
+  - **If nothing can be offered,** it says so plainly and exports nothing.
 - **For each wallet,** it shows the heir delay in blocks and roughly in hours, days or months, and says the heir can only move coins that haven't moved for at least that long.
-  - **Where the delay comes from:** the descriptor's `older(N)`, which is what the coins follow.
+  - **Where the delay comes from:** N in that heir leaf, which is what the coins follow.
   - **If the setup lists a different delay,** it says so.
 - **The raw backup is refused:** it has no plain setup, and the heir can't unlock the locked one.
+- **The key file or stdin** is read up to 4 KiB, into a buffer sized for that up front, so it never grows and leaves a copy behind. A larger file is refused.
 
 **Tests (regtest):**
 - **Works:**
@@ -58,7 +63,8 @@ An heir has their own key (HEIR) and the kit, but not the second key. So `heir` 
   - the node refuses that spend one block before the heir delay (`non-BIP68-final`) and accepts it at the delay.
 - **Forbidden:**
   - another person's words, or a setup with no beneficiary, export nothing;
-  - the raw backup and an 11-word file are refused;
+  - a changed setup with HEIR only in the 2-of-3, sharing the delayed path, or behind a time-based delay offers nothing;
+  - the raw backup, an 11-word file and an oversized file are refused;
   - `heir` doesn't accept a second key.
 - **Every heir run** is checked to show none of the heir's words, nor the phone key's.
 

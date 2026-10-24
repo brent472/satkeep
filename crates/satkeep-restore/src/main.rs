@@ -181,15 +181,21 @@ fn run(cli: Cli) -> Result<()> {
 /// unlocking. The heir's words are never printed.
 fn heir(args: &HeirArgs) -> Result<()> {
     use anyhow::Context;
+    use std::io::{BufRead, Read};
+    /// Far more than 12 words, far less than anything that could exhaust memory.
+    const MAX_KEY_TEXT: u64 = 4096;
     let kit = read_kit(&args.kit)?;
-    let text = Zeroizing::new(if args.key_stdin {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).context("reading the heir's 12 words from standard input")?;
-        line
+    // Room for the whole limit up front, so the buffer never grows and leaves
+    // an unwiped copy behind.
+    let mut text = Zeroizing::new(String::with_capacity(MAX_KEY_TEXT as usize + 1));
+    if args.key_stdin {
+        std::io::stdin().lock().take(MAX_KEY_TEXT).read_line(&mut text).context("reading the heir's 12 words from standard input")?;
     } else {
         let path = args.key_file.as_ref().expect("clap requires --key-file or --key-stdin");
-        std::fs::read_to_string(path).with_context(|| format!("reading the heir's key file {}", path.display()))?
-    });
+        let file = std::fs::File::open(path).with_context(|| format!("reading the heir's key file {}", path.display()))?;
+        anyhow::ensure!(file.metadata()?.len() <= MAX_KEY_TEXT, "{} is too large to be a key file", path.display());
+        file.take(MAX_KEY_TEXT).read_to_string(&mut text).with_context(|| format!("reading the heir's key file {}", path.display()))?;
+    }
     let phrase = satkeep_restore::read_phrase(&text)?;
     drop(text);
     let key = satkeep_restore::AccountKey::from_phrase(&phrase);
@@ -200,22 +206,28 @@ fn heir(args: &HeirArgs) -> Result<()> {
          against the copy locked in the backup, so anyone with access to the cloud drive could have changed it. The \
          heir's key can only ever sign for wallets that contain it."
     );
-    let claimable = satkeep_restore::heir_wallets(&kit, &key)?;
-    let count = kit.plain_setup.as_ref().map_or(0, |s| s.savings.len());
-    if claimable.is_empty() {
-        bail!(
-            "none of the {count} Savings wallet(s) in this kit's setup holds this heir key, so there's nothing to \
-             export. Check that these are the heir's 12 words and that this is the right kit."
-        );
+    let report = satkeep_restore::heir_wallets(&kit, &key)?;
+    let count = report.count;
+    for (number, why) in &report.not_alone {
+        println!("\nSavings wallet {number} of {count} holds this heir key, but {why}, so it isn't offered.");
     }
-    for wallet in &claimable {
+    if report.claimable.is_empty() {
+        if report.not_alone.is_empty() {
+            bail!(
+                "none of the {count} Savings wallet(s) in this kit's setup holds this heir key, so there's nothing to \
+                 export. Check that these are the heir's 12 words and that this is the right kit."
+            );
+        }
+        bail!("none of the {count} Savings wallet(s) in this kit's setup lets this heir key move coins alone, so there's nothing to export.");
+    }
+    for wallet in &report.claimable {
         println!(
             "\nSavings wallet {} of {} holds this heir key. The heir can move its coins alone after {} blocks ({}), \
              and only coins that haven't moved for at least that long.",
             wallet.number,
             wallet.count,
             wallet.heir_delay,
-            satkeep_restore::about(wallet.heir_delay)
+            satkeep_restore::about(u32::from(wallet.heir_delay))
         );
         if let Some(listed) = wallet.setup_says {
             println!(
