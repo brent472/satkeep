@@ -22,13 +22,13 @@ use satkeep_backup::kit::{self, Kit};
 use satkeep_backup::setup::WalletSetup;
 use satkeep_backup::{LockKind, SecurityDevice};
 
-pub use keys::PhoneKey;
+pub use keys::AccountKey;
 
 /// What unlocking a kit gives back. Deliberately not `Debug`: it holds the
 /// phone key.
 pub struct Unlocked {
     pub phrase: Mnemonic,
-    pub phone: PhoneKey,
+    pub phone: AccountKey,
     /// The wallet setup from inside the locked backup: the authenticated one.
     pub setup: WalletSetup,
 }
@@ -72,7 +72,7 @@ pub fn describe(kit: &Kit) -> Result<String> {
 /// PIN, and checks the phone key is PHONE in every Savings wallet.
 pub fn unlock(kit: &Kit, device: &mut dyn SecurityDevice) -> Result<Unlocked> {
     let restored = kit::restore_kit(kit, device)?;
-    let phone = PhoneKey::from_phrase(&restored.phrase);
+    let phone = AccountKey::from_phrase(&restored.phrase);
     for (i, wallet) in restored.wallet_setup.savings.iter().enumerate() {
         if !phone.is_in(&wallet.descriptor)? {
             bail!(
@@ -100,6 +100,79 @@ pub fn core_imports(unlocked: &Unlocked, birthday_time: impl Fn(u32) -> Result<u
         }
     }
     Ok(imports)
+}
+
+/// A Savings wallet the heir can claim.
+pub struct HeirWallet {
+    /// Its position in the setup, from 1.
+    pub number: usize,
+    pub count: usize,
+    /// Its public descriptor, for Liana.
+    pub descriptor: String,
+    /// The heir delay in the descriptor (what the coins follow), in blocks.
+    pub heir_delay: u32,
+    /// The heir delay the setup lists for it, when that differs.
+    pub setup_says: Option<u16>,
+}
+
+/// The heir's route: the Savings wallets in the kit's **plain** setup whose
+/// descriptors hold `heir`'s key. Never asks for the second key and never
+/// opens the backup, so the setup is unverified; HEIR's key can only ever
+/// sign for wallets that contain it.
+pub fn heir_wallets(kit: &Kit, heir: &AccountKey) -> Result<Vec<HeirWallet>> {
+    let setup = kit.plain_setup.as_ref().context(
+        "this is the raw backup, with no plain wallet setup: the heir's route needs the kit itself (its PDF or its \
+         armoured text)",
+    )?;
+    let count = setup.savings.len();
+    let mut out = Vec::new();
+    for (i, wallet) in setup.savings.iter().enumerate() {
+        if !heir.is_in(&wallet.descriptor)? {
+            continue;
+        }
+        let heir_delay = older_in(&wallet.descriptor)
+            .with_context(|| format!("Savings wallet {} holds the heir key but no single heir delay", i + 1))?;
+        let listed = wallet.heir.map(|h| h.heir_delay);
+        let setup_says = listed.filter(|d| u32::from(*d) != heir_delay);
+        out.push(HeirWallet { number: i + 1, count, descriptor: wallet.descriptor.clone(), heir_delay, setup_says });
+    }
+    Ok(out)
+}
+
+/// The one relative timelock (`older(N)`) in a descriptor.
+fn older_in(descriptor: &str) -> Option<u32> {
+    let mut found = descriptor.match_indices("older(").map(|(at, tag)| {
+        let rest = &descriptor[at + tag.len()..];
+        rest[..rest.find(')')?].parse::<u32>().ok()
+    });
+    let first = found.next()??;
+    found.all(|other| other == Some(first)).then_some(first)
+}
+
+/// Reads a holder's recovery phrase from the text of a key file or stdin:
+/// 12 English BIP39 words. The error never repeats the text.
+pub fn read_phrase(text: &str) -> Result<Mnemonic> {
+    // Windows tools may put a byte-order mark in front of the text.
+    let text = text.trim().trim_start_matches('\u{feff}').trim();
+    anyhow::ensure!(!(text.starts_with("tprv") || text.starts_with("xprv")), "that's an extended key, not 12 words");
+    let phrase = Mnemonic::parse_in(satkeep_backup::bip39::Language::English, text)
+        .map_err(|_| anyhow::anyhow!("that isn't a 12-word recovery phrase (the words aren't repeated here)"))?;
+    anyhow::ensure!(phrase.word_count() == satkeep_backup::PHRASE_WORDS, "that isn't a 12-word recovery phrase");
+    Ok(phrase)
+}
+
+/// Roughly how long `blocks` take, at 10 minutes a block.
+pub fn about(blocks: u32) -> String {
+    let blocks = f64::from(blocks);
+    let hours = blocks / 6.0;
+    if hours < 48.0 {
+        let n = hours.round().max(1.0);
+        format!("about {n} hour{}", if n == 1.0 { "" } else { "s" })
+    } else if hours < 24.0 * 60.0 {
+        format!("about {} days", (hours / 24.0).round())
+    } else {
+        format!("about {} months", (hours / 24.0 / 30.44).round())
+    }
 }
 
 /// The Savings wallets, one per line, with nothing secret.
@@ -147,6 +220,23 @@ fn date(unix: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn durations() {
+        assert_eq!(super::about(20), "about 3 hours");
+        assert_eq!(super::about(1), "about 1 hour");
+        assert_eq!(super::about(1_008), "about 7 days");
+        assert_eq!(super::about(61_320), "about 14 months");
+        assert_eq!(super::about(52_560), "about 12 months");
+    }
+
+    #[test]
+    fn the_heir_delay_is_read_from_the_descriptor() {
+        assert_eq!(super::older_in("tr(k,{multi_a(2,a,b,c),and_v(v:pk(h),older(61320))})#x"), Some(61_320));
+        assert_eq!(super::older_in("wsh(sortedmulti(2,a,b,c))#x"), None);
+        assert_eq!(super::older_in("tr(k,{and_v(v:pk(h),older(5)),and_v(v:pk(i),older(6))})"), None, "two different delays");
+        assert_eq!(super::older_in("tr(k,and_v(v:pk(h),older(x)))"), None);
+    }
+
     #[test]
     fn dates() {
         assert_eq!(super::date(0), "1970-01-01");
