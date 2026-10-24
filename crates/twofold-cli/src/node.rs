@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use bdk_bitcoind_rpc::Emitter;
 use bdk_bitcoind_rpc::bitcoincore_rpc::{Auth, Client, RpcApi};
-use bdk_wallet::Wallet;
+use bdk_wallet::chain::BlockId;
+use bdk_wallet::{Update, Wallet};
 use serde_json::{Value, json};
 use twofold_savings::bitcoin::{Transaction, Txid, consensus};
 
@@ -39,6 +40,16 @@ pub fn height(client: &Client) -> Result<u32> {
 /// Reads new blocks (from the wallet's birthday on) and the mempool into the
 /// wallet. The caller persists.
 pub fn sync(client: &Client, wallet: &mut Wallet, birthday: u32) -> Result<()> {
+    // The emitter starts by checking the wallet's latest checkpoint with
+    // `getblock`, which on a new wallet is the genesis block, and a pruned
+    // node can't serve that. A checkpoint at the block before the birthday
+    // gives it a recent block instead; the birthday block itself is still read.
+    if birthday > 0 && wallet.latest_checkpoint().height() < birthday - 1 {
+        let height = birthday - 1;
+        let hash = client.get_block_hash(height.into()).context("asking the node for the block before the wallet's birthday")?;
+        let chain = wallet.latest_checkpoint().insert(BlockId { height, hash });
+        wallet.apply_update(Update { chain: Some(chain), ..Default::default() })?;
+    }
     let unconfirmed: Vec<_> = wallet
         .transactions()
         .filter(|t| !t.chain_position.is_confirmed())

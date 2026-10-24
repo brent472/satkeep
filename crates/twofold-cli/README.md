@@ -115,6 +115,8 @@ Global options:
 
 If you pass both `--wallet-dir` and `--network`, they must agree.
 
+**A pruned node works.** A wallet reads blocks from its birthday (the node's height at `create` or `add-heir`) on, starting from the block before it, and later from where it last synced. The node must still have those blocks: a wallet left unsynced for longer than the node keeps blocks gets a "pruned data" error. (Bitcoin Core always keeps at least the last 288 blocks, about two days; on signet with `-prune=550` it currently keeps about a week.)
+
 ## Demo on your own regtest node (PowerShell)
 
 This walks through every Savings path on a regtest node you run yourself:

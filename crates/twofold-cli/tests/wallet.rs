@@ -99,6 +99,28 @@ fn export_matches_the_library_in_both_shapes() {
 }
 
 #[test]
+fn reads_from_the_birthday_block_on_and_not_before() {
+    // The first sync starts from a checkpoint at the block before the
+    // birthday (so a pruned node works): coins in the birthday block itself
+    // are found, and blocks before it aren't read.
+    let node = Node::start();
+    let holders = Holders::generate();
+    let keys =
+        SavingsKeys::new(holders.phone.public_key(0), holders.device.public_key(0), holders.helper.public_key(0), None).unwrap();
+    let policy = SavingsPolicy::new(keys, Delays::none(), Network::Regtest).unwrap();
+    let first = policy.receive_and_change().0.at_derivation_index(0).unwrap().address(Network::Regtest).unwrap();
+    node.send_to(&first, Amount::from_btc(1.0).unwrap());
+    node.mine(1);
+    node.send_to(&first, Amount::from_btc(2.0).unwrap());
+    node.mine(1);
+
+    let cli = Cli::new(&node);
+    cli.create_plain(&holders); // birthday: the block with the 2 BTC
+    let out = cli.ok(&["balance"]);
+    assert!(out.contains("Total: 2.00000000 BTC"), "{out}");
+}
+
+#[test]
 fn refuses_a_node_on_another_network() {
     let node = Node::start(); // regtest
     let cli = Cli::new(&node);
