@@ -84,7 +84,6 @@ jobs:
           tar xzf "$tarball"
           lianad=$(find "$PWD" -name lianad -type f | head -1)
           echo "LIANAD=$lianad" >> "$GITHUB_ENV"
-          echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
 
       - name: Build Liana's signer from the signed v15.0 source
         # satkeep_sign.rs is a few lines around liana::signer::HotSigner. It's
@@ -126,6 +125,9 @@ jobs:
 
       - name: Run the drill
         id: drill
+        # Each command inside has a 60 s timeout (drill.py); this is the
+        # backstop for anything else. A good run takes about 4 minutes.
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           export WORK="$RUNNER_TEMP/drill"

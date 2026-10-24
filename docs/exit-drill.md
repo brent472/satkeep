@@ -55,14 +55,31 @@ Satkeep runs only at the very start:
 - `satkeep create` and `satkeep export` produce the two descriptors: one wallet with a beneficiary and one with none, from the same keys.
 
 After that, no Satkeep code runs. The holders' recovery materials are that descriptor and their recovery phrases:
-- **Liana** (`lianad` + `liana-cli`) watches the wallet, builds every spend (`createspend` for 2-of-3, `createrecovery` for the delayed paths), adds the signatures (`updatespend`), finalizes and broadcasts (`broadcastspend`).
-- **Liana's own signer** signs Liana's spends. `liana-cli` has no signing command, so [`contrib/exit-drill/satkeep_sign.rs`](../contrib/exit-drill/satkeep_sign.rs), a few lines around `liana::signer::HotSigner` (the signer the Liana app uses), reads each holder's phrase from their key file and signs. It's built from Liana's signed v15.0 source, inside Liana's tree, with Liana's own `Cargo.lock`.
+- **Liana** (`lianad`, through its JSON-RPC interface; see [Talking to Liana](#talking-to-liana)) watches the wallet, builds every spend (`createspend` for 2-of-3, `createrecovery` for the delayed paths), adds the signatures (`updatespend`), finalizes and broadcasts (`broadcastspend`).
+- **Liana's own signer** signs Liana's spends. Liana's JSON-RPC interface has no signing command, so [`contrib/exit-drill/satkeep_sign.rs`](../contrib/exit-drill/satkeep_sign.rs), a few lines around `liana::signer::HotSigner` (the signer the Liana app uses), reads each holder's phrase from their key file and signs. It's built from Liana's signed v15.0 source, inside Liana's tree, with Liana's own `Cargo.lock`.
 - **Bitcoin Core alone** does the same spends a second time, with no Liana, and is the exit for the P2WSH shape:
   - a watch-only wallet with the public descriptor builds the spend (`walletcreatefundedpsbt`, with the delay as the input's sequence for the heir path)
   - the holders' wallets sign it. Core can't read a recovery phrase, so the script turns each phrase into a master key (`tprv`) with Python's standard library, following BIP39 and BIP32, separately from Satkeep's and Liana's code. It then checks Core sees the same key fingerprint as Satkeep's public key.
   - `finalizepsbt` and `sendrawtransaction` finish and send it
 
 The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py) only runs these commands and checks their results. It has no wallet logic of its own.
+
+### Talking to Liana
+
+**The drill sends its requests to `lianad`'s JSON-RPC socket itself, not through `liana-cli`.**
+- **Why:** `liana-cli` v15.0 has a read bug that makes it wait forever, now and then, for a reply that has already fully arrived. It hung about one drill run in six (5 of 30 copies in PR #16).
+- **The bug,** in [`lianad/src/bin/cli.rs`](https://github.com/wizardsardine/liana/blob/v15.0/lianad/src/bin/cli.rs#L130-L163):
+  - after a partial read, `trimmed()` shrinks the buffer to what has arrived;
+  - if the next read fills that buffer exactly, the client grows it and reads again without trying to parse;
+  - `lianad` sends no newline after a reply and keeps the connection open, so when those were the reply's last bytes, nothing more comes.
+  - A draft report for Liana is in [`docs/pr/liana-cli-read-hang.md`](pr/liana-cli-read-hang.md). It hasn't been posted.
+- **Result:** with this change, 20 of 20 copies passed, including 100 `getnewaddress` calls.
+- **It's still Liana:** the drill uses Liana's own daemon and its documented JSON-RPC interface, exactly as `liana-cli` does, just with a reader that waits for a complete reply. The Liana app that people actually run doesn't use `liana-cli`.
+- **How the drill talks to it:** one connection per call. It sends the request and a newline, then reads until what has arrived decodes as one complete JSON object with its id (`json.JSONDecoder.raw_decode`), within the 60-second timeout. An error from `lianad` fails the drill with Liana's own message.
+- **The sync check is real now.**
+  - The drill mines a block before starting Liana, so the node leaves initial block download.
+  - It waits until Liana reports `sync` 1.0 and its block height reaches the node's tip.
+  - Before, at block 0, the height check passed on its own (0 ≥ 0) while Liana's sync was still 0.
 
 ## How it's run
 
@@ -79,6 +96,18 @@ gh workflow run exit-drill.yml
 ```
 
 It runs on a GitHub-hosted Ubuntu machine with a fresh regtest node. Keys are generated inside the run and thrown away with the machine.
+
+**Hangs fail fast:**
+- **Each command** the drill runs (`bitcoin-cli`, `bitcoind`, Liana's signer, `satkeep`), and each request to `lianad`, gets 60 seconds. Then the drill fails with a message naming it, such as "lianad createspend didn't finish within 60 s".
+- **The message never includes** the command's other arguments, its input or its output, any of which could hold key material.
+- **The waits** for the node to start and for Liana to catch up have the same deadline, and fail when it passes ("bitcoind didn't answer within 60 s").
+- **The workflow step** has a 15-minute backstop. A good run takes about 4 minutes.
+- **`DRILL_COMMAND_TIMEOUT`** sets the timeout in seconds.
+- **When the drill fails,** it prints what `lianad` and `bitcoind` were doing, while they still run:
+  - the last 60 lines of each `lianad` log and of Bitcoin Core's `debug.log` (`bitcoind` runs with `-debug=rpc`, which logs RPC method names, never their parameters);
+  - `lianad`'s `getinfo` and `bitcoin-cli getrpcinfo`;
+  - whether each Core wallet is still scanning.
+  - `lianad` is watch-only and holds no private keys, and the scan-log job checks this output too.
 
 **Downloads, and how they're verified. Any mismatch fails the job.**
 
@@ -109,7 +138,7 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
    satkeep --wallet-dir plain create --phone … --device … --helper …
    satkeep --wallet-dir plain export   # wsh(sortedmulti(2, …)), for Bitcoin Core, Sparrow and other multisig wallets
    ```
-2. **Liana.** Write a `lianad.toml` with `main_descriptor` set to the export, `network = "regtest"` and the node's cookie, then start `lianad --conf lianad.toml`. Check that `liana-cli --conf lianad.toml listaddresses 0 5` matches `satkeep address`.
+2. **Liana.** Write a `lianad.toml` with `main_descriptor` set to the export, `network = "regtest"` and the node's cookie, then start `lianad --conf lianad.toml`. Check that `liana-cli --conf lianad.toml listaddresses 0 5` matches `satkeep address`. (By hand, `liana-cli` is fine. If it ever sits without answering, that's the read bug in [Talking to Liana](#talking-to-liana): press Ctrl-C and run it again. A `getnewaddress` that hung has still taken its address, so ask again for the next one.)
 3. **Signers.**
    - **Liana:** build [`satkeep_sign.rs`](../contrib/exit-drill/satkeep_sign.rs) as the workflow does (copy it to `liana/examples/` in Liana's v15.0 tree, then `cargo build --release --locked -p liana --example satkeep_sign`). Then `satkeep_sign phone.key < in.psbt > out.psbt` signs as PHONE. In the Liana desktop app, the phrase can be imported as a hot signer instead.
    - **Bitcoin Core:** one wallet per holder (`createwallet <name> blank=true`). Turn the holder's phrase into its master `tprv` (BIP39 seed with an empty passphrase, then BIP32 master key; `phrase_to_tprv` in [`drill.py`](../contrib/exit-drill/drill.py) does it with Python's standard library). Import the receive and change descriptors with that holder's `tpub…` replaced by `tprv…/87h/1h/<account>h`, passing the descriptor on stdin (`bitcoin-cli -stdin importdescriptors`).
