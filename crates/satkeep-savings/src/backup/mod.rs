@@ -14,9 +14,11 @@ mod cloud;
 pub use cloud::{CloudStore, MemoryCloud};
 pub use satkeep_backup::kit::{self, Kit};
 pub use satkeep_backup::setup::{self, HeirSettings, SavingsWallet, WalletSetup};
+#[cfg(feature = "simulated-device")]
+pub use satkeep_backup::{MAX_PIN_TRIES, SimulatedDevice};
 pub use satkeep_backup::{
-    BackupError, DeviceError, DeviceId, Header, LockEntry, LockKind, MAX_PIN_TRIES, SecurityDevice, SimulatedDevice,
-    UnlockMethod, WalletId, new_wallet_id, read_header,
+    BackupError, DeviceError, DeviceId, Header, LockEntry, LockKind, SecurityDevice, UnlockMethod, WalletId, new_wallet_id,
+    read_header,
 };
 
 use crate::HolderKey;

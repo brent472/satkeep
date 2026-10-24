@@ -32,6 +32,10 @@ pub const END: &str = "-----END SATKEEP EXIT KIT-----";
 pub const MAGIC: &[u8; 4] = b"SKKT";
 pub const VERSION: u8 = 1;
 pub const BYTES_PER_LINE: usize = 32;
+/// The longest line a reader looks at. A written line is 89 bytes; this
+/// leaves room for extra spaces when it's typed back in, and stops a hostile
+/// file from making the reader split one huge line.
+pub const MAX_LINE: usize = 256;
 /// The largest input [`read`] looks through: far above any kit PDF.
 pub const MAX_INPUT: usize = 64 * 1024 * 1024;
 const MAX_DATA: usize = 4 + 1 + 4 + format::MAX_FILE + 4 + MAX_SETUP;
@@ -124,6 +128,9 @@ fn decode_block(block: &[u8]) -> Result<Kit, BackupError> {
     let mut last_was_short = false;
     for raw in block.split(|b| *b == b'\n') {
         let damaged = BackupError::KitLine { line: expected };
+        if raw.len() > MAX_LINE {
+            return Err(damaged);
+        }
         let line = std::str::from_utf8(raw).map_err(|_| damaged)?;
         let tokens: Vec<&str> = line.split_whitespace().collect();
         if tokens.is_empty() {

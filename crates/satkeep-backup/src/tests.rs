@@ -362,6 +362,16 @@ fn a_typo_or_missing_line_names_the_line() {
     assert_eq!(kit::read(without_last.join("\n").as_bytes()), Err(BackupError::KitIncomplete), "the last line missing");
     let no_end = text.replace(kit::END, "");
     assert_eq!(kit::read(no_end.as_bytes()), Err(BackupError::KitIncomplete), "no END marker");
+    let mut too_long = lines.clone();
+    let padded = format!("{}{}", lines[1], " ".repeat(kit::MAX_LINE));
+    too_long[1] = &padded;
+    assert_eq!(kit::read(too_long.join("
+").as_bytes()), Err(BackupError::KitLine { line: 1 }), "an over-long line");
+    let huge = format!("{}
+0001{}
+{}
+", kit::BEGIN, " a".repeat(8 * 1024 * 1024), kit::END);
+    assert_eq!(kit::read(huge.as_bytes()), Err(BackupError::KitLine { line: 1 }), "a huge line is refused before it's split");
     assert_eq!(kit::read(b"no kit here"), Err(BackupError::NotAKit));
     assert_eq!(kit::read(b""), Err(BackupError::NotAKit));
 }

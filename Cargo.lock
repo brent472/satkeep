@@ -877,6 +877,7 @@ dependencies = [
  "bip39",
  "rand",
  "satkeep-backup",
+ "satkeep-savings",
  "satkeep-testenv",
  "serde_json",
  "thiserror",

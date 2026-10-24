@@ -166,7 +166,7 @@ Nothing may follow. **The setup here is the plain copy:** it lets a viewer show 
      - **Pairs that don't decode are skipped** if another one decodes. A PDF may draw the same markers as page text.
      - **If none decodes,** the first pair's error is reported: the number of the first line that's missing or fails its check, or "incomplete" if lines are missing from the end.
      - **Two pairs that decode to different kit data are refused.**
-- **Input size:** a reader looks through at most 64 MiB.
+- **Input size:** a reader looks through at most 64 MiB. Inside a block, a line over 256 bytes is refused as damaged before it's split up; a written line is 89 bytes.
 
 ### 5.4 Restoring from a kit
 

@@ -35,7 +35,8 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 - **Mainnet is refused** in the wallet setup until the launch review.
 - **The kit's line check** finds typos when the kit is typed back in. It isn't a signature. A changed kit is caught by the backup's own authentication and by comparing the plain setup with the locked one.
 - **The wallet setup checks only its form.** Whether a descriptor parses and holds the phone key is the restore tool's check (restore-tool.md, T5).
-- **The `simulated-device` feature** is for tests and the prototype. Release builds of the restore tool leave it out.
+- **The `simulated-device` feature** is for tests, the prototype and fuzzing. `satkeep-savings` passes it on only through its own `simulated-device` feature, which its tests turn on. The CLI (`cargo build -p satkeep-cli`), and the restore tool to come, build without it.
+- **Kit lines over 256 bytes are refused** before they're split, so a hostile file can't make the reader use memory out of proportion to it.
 - **Nothing here prints or logs key material**, and no error carries any. `Restored` and `SimulatedDevice` aren't `Debug`. The phrase, data key, device secret and key-encryption key are wiped after use, except HKDF's working state (the `hkdf` crate doesn't support wiping it).
 
 ## Tests
