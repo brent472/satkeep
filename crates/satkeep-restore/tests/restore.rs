@@ -56,6 +56,8 @@ struct Owner {
     setup: WalletSetup,
     plain: SavingsPolicy,
     heir: SavingsPolicy,
+    /// HEIR, the beneficiary's key.
+    heir_key: HolderKey,
     /// The simulated second key's secret.
     secret: [u8; 32],
 }
@@ -96,7 +98,7 @@ impl Owner {
                 },
             ],
         };
-        Self { node, dir: TempDir::new(), phone, device, setup, plain, heir, secret: random_secret() }
+        Self { node, dir: TempDir::new(), phone, device, setup, plain, heir, heir_key, secret: random_secret() }
     }
 
     /// A kit PDF for `phone` and `setup`, locked to the second key with
@@ -441,4 +443,187 @@ fn a_key_on_the_command_line_is_refused_and_never_repeated() {
 
 fn kit_s(path: &Path) -> String {
     s(path)
+}
+
+// ------------------------------------------------------- the heir's route ----
+
+impl Owner {
+    fn key_file(&self, name: &str, key: &HolderKey) -> PathBuf {
+        let path = self.dir.file(name);
+        std::fs::write(&path, key.to_secret_string()).unwrap();
+        path
+    }
+
+    /// The raw backup file alone, with no plain setup.
+    fn raw_backup(&self) -> PathBuf {
+        let mut device = SimulatedDevice::from_secret(self.secret, PIN);
+        device.enter_pin(PIN).unwrap();
+        let file = backup::make_backup(&self.phone, &self.setup, backup::new_wallet_id(), CREATED, &mut device).unwrap();
+        let path = self.dir.file("backup.skbk");
+        std::fs::write(&path, file).unwrap();
+        path
+    }
+
+    /// Runs `heir` with `typed` on stdin, and checks no output holds the
+    /// phone key's or `heir`'s words, or a private key.
+    fn heir(&self, args: &[&str], heir: &HolderKey, typed: &str) -> Output {
+        let out = self.run_typing(args, typed);
+        self.check_no_secrets(&out, false);
+        assert_no_part_of(&out, heir);
+        out
+    }
+}
+
+#[test]
+fn the_heir_sees_the_heir_wallet_and_can_spend_it_after_the_delay_and_not_before() {
+    let owner = Owner::new();
+    let kit = owner.kit();
+    let key = owner.key_file("heir.key", &owner.heir_key);
+
+    // From a key file, and from stdin: the same answer.
+    let from_file = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key)], &owner.heir_key, "");
+    let from_stdin =
+        owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-stdin"], &owner.heir_key, &owner.heir_key.to_secret_string());
+    for out in [&from_file, &from_stdin] {
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.starts_with("UNVERIFIED"), "{text}");
+        assert!(text.contains("Savings wallet 2 of 2 holds this heir key"), "{text}");
+        assert!(!text.contains("Savings wallet 1 of 2"), "the wallet without a beneficiary isn't offered: {text}");
+        assert!(text.contains(&format!("after {HEIR_DELAY} blocks (about 3 hours)")), "{text}");
+        assert!(text.contains("only coins that haven't moved for at least that long"), "{text}");
+        assert!(text.contains(&format!("Liana's main descriptor (UNVERIFIED):\n{}", owner.heir.export_descriptor())), "{text}");
+    }
+
+    // The exported descriptor, watched in Bitcoin Core, and HEIR's signature:
+    // refused one block before the delay, accepted at it.
+    let descriptor = owner.heir.export_descriptor();
+    let body = descriptor.split('#').next().unwrap();
+    let mut imports = Vec::new();
+    for (branch, internal) in [("0", false), ("1", true)] {
+        let single = body.replace("<0;1>", branch);
+        let info: Value = owner.node.rpc().call("getdescriptorinfo", &[json!(single)]).unwrap();
+        imports.push(json!({"desc": info["descriptor"], "active": true, "internal": internal, "timestamp": 0}));
+    }
+    owner.node.rpc().call::<Value>("createwallet", &[json!("heirwatch"), json!(true), json!(true)]).unwrap();
+    let watch = owner.wallet("heirwatch");
+    let results: Value = watch.call("importdescriptors", &[json!(imports)]).unwrap();
+    assert!(results.as_array().unwrap().iter().all(|r| r["success"] == json!(true)), "{results}");
+    let coins: Vec<Value> = watch.call("listunspent", &[]).unwrap();
+    assert_eq!(coins.len(), 1, "the heir wallet's coin");
+    let coin = &coins[0];
+    let to = owner.node.new_address().to_string();
+    let input = json!([{"txid": coin["txid"], "vout": coin["vout"], "sequence": HEIR_DELAY}]);
+    let funded: Value = watch
+        .call("walletcreatefundedpsbt", &[input, json!([{ to: 1.9 }]), json!(0), json!({"add_inputs": false, "fee_rate": 2})])
+        .unwrap();
+    let mut psbt = Psbt::from_str(funded["psbt"].as_str().unwrap()).unwrap();
+    assert_eq!(owner.heir_key.sign(&mut psbt).unwrap(), 1, "HEIR signs the heir leaf");
+    let finalized: Value = owner.node.rpc().call("finalizepsbt", &[json!(psbt.to_string())]).unwrap();
+    assert_eq!(finalized["complete"], json!(true), "HEIR alone completes the heir path");
+    let hex = finalized["hex"].clone();
+
+    let confirmations = coin["confirmations"].as_u64().unwrap() as u32;
+    owner.node.mine(u32::from(HEIR_DELAY) - 1 - confirmations);
+    let early: Value = owner.node.rpc().call("testmempoolaccept", &[json!([hex])]).unwrap();
+    assert_eq!(early[0]["allowed"], json!(false), "one block early: {early}");
+    assert_eq!(early[0]["reject-reason"], json!("non-BIP68-final"), "{early}");
+    owner.node.mine(1);
+    let on_time: Value = owner.node.rpc().call("testmempoolaccept", &[json!([hex])]).unwrap();
+    assert_eq!(on_time[0]["allowed"], json!(true), "at the heir delay: {on_time}");
+    owner.node.rpc().call::<Value>("sendrawtransaction", &[hex]).unwrap();
+    owner.node.mine(1);
+}
+
+#[test]
+fn a_setup_without_this_heirs_key_exports_nothing() {
+    let owner = Owner::new();
+    let kit = owner.kit();
+
+    // Another person's words: none of the wallets holds that key.
+    let stranger = HolderKey::generate();
+    let key = owner.key_file("stranger.key", &stranger);
+    let out = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key)], &stranger, "");
+    assert!(!out.status.success(), "a stranger's key exported something");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("UNVERIFIED"), "{stdout}");
+    assert!(!stdout.contains("main descriptor"), "nothing exported: {stdout}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("none of the 2 Savings wallet(s) in this kit's setup holds this heir key"), "{err}");
+
+    // A setup with no beneficiary: the heir key is in no wallet.
+    let plain_only = WalletSetup { savings: owner.setup.savings[..1].to_vec(), ..owner.setup.clone() };
+    let kit = owner.kit_for("plain.pdf", &owner.phone, &plain_only, &plain_only, owner.secret);
+    let key = owner.key_file("heir.key", &owner.heir_key);
+    let out = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key)], &owner.heir_key, "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("none of the 1 Savings wallet(s)"));
+}
+
+#[test]
+fn the_heirs_route_needs_the_kit_and_12_words_and_never_takes_a_second_key() {
+    let owner = Owner::new();
+    let key = owner.key_file("heir.key", &owner.heir_key);
+
+    // The raw backup has no plain setup.
+    let raw = owner.raw_backup();
+    let out = owner.heir(&["heir", "--kit", &kit_s(&raw), "--key-file", &kit_s(&key)], &owner.heir_key, "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("the heir's route needs the kit itself"));
+
+    // Not 12 words: refused, and the words aren't repeated.
+    let kit = owner.kit();
+    let eleven = owner.dir.file("eleven.key");
+    let words: Vec<String> = owner.heir_key.to_secret_string().split(' ').take(11).map(str::to_owned).collect();
+    std::fs::write(&eleven, words.join(" ")).unwrap();
+    let out = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&eleven)], &owner.heir_key, "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("isn't a 12-word recovery phrase"));
+
+    // It has no way to be given a second key, and never asks for one.
+    let device = owner.second_key();
+    let out = owner.run(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key), "--simulated-device", &kit_s(&device)]);
+    assert!(!out.status.success(), "the heir's route took a second key");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument"));
+}
+
+#[test]
+fn a_changed_setup_that_only_mentions_the_heir_key_offers_nothing() {
+    let owner = Owner::new();
+    let key = owner.key_file("heir.key", &owner.heir_key);
+    let real = owner.heir.export_descriptor();
+    let internal = &real[3..real.find(',').unwrap()];
+    let pk = |k: &HolderKey| k.public_key(0).to_string();
+    let (phone, device, heir) = (pk(&owner.phone), pk(&owner.device), pk(&owner.heir_key));
+    let stranger = pk(&HolderKey::generate());
+    let cases = [
+        // HEIR only in the 2-of-3; a stranger's key behind the delay.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{heir}),and_v(v:pk({stranger}),older(20))}})"), "not in a path the heir can use alone"),
+        // HEIR with someone else behind the delay.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{stranger}),and_v(v:multi_a(2,{heir},{stranger}),older(20))}})"), "not in a path the heir can use alone"),
+        // A time-based delay (bit 22 set: 512 seconds), not blocks.
+        (format!("tr({internal},{{multi_a(2,{phone},{device},{stranger}),and_v(v:pk({heir}),older(4194305))}})"), "time-based"),
+    ];
+    for (i, (descriptor, why)) in cases.iter().enumerate() {
+        let mut changed = owner.setup.clone();
+        changed.savings = vec![SavingsWallet {
+            descriptor: descriptor.clone(),
+            birthday: 0,
+            heir: Some(HeirSettings { heir_delay: 20, checkin_interval: 10, checkin_margin: 5, refresh_window: None }),
+        }];
+        let kit = owner.kit_for(&format!("changed{i}.pdf"), &owner.phone, &owner.setup, &changed, owner.secret);
+        let out = owner.heir(&["heir", "--kit", &kit_s(&kit), "--key-file", &kit_s(&key)], &owner.heir_key, "");
+        assert!(!out.status.success(), "case {i} offered a wallet the heir can't spend alone");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains(why), "case {i}: {stdout}");
+        assert!(!stdout.contains("main descriptor"), "case {i} exported something: {stdout}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("lets this heir key move coins alone"), "case {i}");
+    }
+
+    // An oversized key file is refused before it's read.
+    let huge = owner.dir.file("huge.key");
+    std::fs::write(&huge, "abandon ".repeat(1000)).unwrap();
+    let out = owner.heir(&["heir", "--kit", &kit_s(&owner.kit()), "--key-file", &kit_s(&huge)], &owner.heir_key, "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("too large to be a key file"));
 }

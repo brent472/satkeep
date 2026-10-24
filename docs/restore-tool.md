@@ -231,7 +231,11 @@ Each item is its own branch and PR, stopping for review after each, as usual.
      - **The first** ([`satkeep-restore`](../crates/satkeep-restore/README.md)) is unlock and export: `show`, `core` (RPC import or `--out` file) and `liana` (with `--show-phrase`), with the works and forbidden tests on regtest.
      - **Its dependencies:** `bitcoin`, `miniscript`, `bitcoincore-rpc`, `clap`, `serde_json` and `anyhow`, approved 2026-10-24. All were already in `Cargo.lock`, and there's no `bdk_wallet`.
      - **Mainnet:** the format and the node check both refuse it. There's no mainnet node to test against.
-     - **The second** is the heir's route. How it's started is waiting for the owner's decision.
+     - **The second** is the heir's route: `satkeep-restore heir`.
+       - **Started by** HEIR's 12 words from a key file or stdin, plus the kit. No second key.
+       - **Reads only the plain setup,** marked unverified, and exports for Liana only the wallets that hold HEIR's key.
+       - **Shows each heir delay,** and that only coins that haven't moved for that long can be moved.
+       - **The owner decided this** on 2026-10-24.
 4. **The exit drill.** Make a kit with the prototype, restore it with the tool, import into Liana and Bitcoin Core, and spend 2 of 3 with PHONE (from the tool) and DEVICE, in both Savings shapes. Then run the key-material scan.
 5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
 6. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.

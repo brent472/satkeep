@@ -2,7 +2,7 @@
 
 `satkeep-restore` gets the phone key back from a Satkeep exit kit with the second key, and hands Savings to Bitcoin Core or Liana. It needs no Satkeep app, server or helper. **Test networks only.**
 
-The plan, the threats and the decisions are in [`docs/restore-tool.md`](../../docs/restore-tool.md). The kit's format is [`docs/backup-format.md`](../../docs/backup-format.md), read through [`satkeep-backup`](../satkeep-backup/README.md). This is the plan's step 3, first part: unlock and export. The heir's route comes next.
+The plan, the threats and the decisions are in [`docs/restore-tool.md`](../../docs/restore-tool.md). The kit's format is [`docs/backup-format.md`](../../docs/backup-format.md), read through [`satkeep-backup`](../satkeep-backup/README.md). This is the plan's step 3: unlock and export, and the heir's route.
 
 It's a developer tool: its wording isn't product copy.
 
@@ -15,6 +15,7 @@ It's a developer tool: its wording isn't product copy.
 | `core --kit FILE … --out FILE` | The same, but write Bitcoin Core's `importdescriptors` request to a new file instead |
 | `liana --kit FILE …` | Unlock, check the phone key, and print each Savings wallet's public descriptor for Liana. Liana can't hold Savings with no beneficiary, so that one is marked for Bitcoin Core or Sparrow. |
 | `liana … --show-phrase` | Also print the phone key's 12 words, after a warning, for Liana's hot signer |
+| `heir --kit FILE --key-file FILE` (or `--key-stdin`) | **The heir's route:** with HEIR's 12 words and the kit's plain setup, and no second key, show the Savings wallets the heir can claim, for Liana. Marked **UNVERIFIED**. |
 
 `--kit` takes the kit PDF, its armoured text (pasted or typed back in), or the raw backup file.
 
@@ -38,6 +39,35 @@ It's a developer tool: its wording isn't product copy.
   - **The passphrase shows as it's typed** on a plain terminal. There's no approved crate to hide typing yet; a later step can fix that.
 - **Spending needs a second signature:** Core can sign as PHONE, but a Savings payment still needs DEVICE. The tests check Core can't finalize with PHONE alone, and that PHONE from Core plus DEVICE spends both shapes on regtest.
 
+## The heir's route
+
+An heir has their own key (HEIR) and the kit, but not the second key. So `heir` never asks for one and never unlocks the backup: it reads only the kit's plain wallet setup.
+
+- **The heir's 12 words** come from a key file (`--key-file`) or standard input (`--key-stdin`), as `satkeep sign` takes keys. They're never taken on the command line and never printed back. A file with anything but 12 English BIP39 words is refused, without repeating it.
+- **It's marked UNVERIFIED.** Every output starts by saying so: without the second key nobody can check the plain setup against the locked copy, so someone with the cloud account could have changed it (docs/restore-tool.md, threat 7.2).
+- **What limits the harm:** the heir's key can only ever sign for wallets that contain it.
+- **Which wallets it exports, for Liana:** only Savings wallets that have exactly one Taproot leaf where HEIR alone spends after a block delay, `and_v(v:pk(HEIR),older(N))`. HEIR's key must match on fingerprint, path and `tpub`.
+  - **Why so strict:** a changed setup can't make the tool claim the heir can move coins alone when HEIR is only in a 2-of-3, or shares the delayed path with someone else.
+  - **Not offered,** with the reason given: a wallet that holds HEIR's key without such a leaf, or whose delay is time-based.
+  - **If nothing can be offered,** it says so plainly and exports nothing.
+- **For each wallet,** it shows the heir delay in blocks and roughly in hours, days or months, and says the heir can only move coins that haven't moved for at least that long.
+  - **Where the delay comes from:** N in that heir leaf, which is what the coins follow.
+  - **If the setup lists a different delay,** it says so.
+- **The raw backup is refused:** it has no plain setup, and the heir can't unlock the locked one.
+- **The key file or stdin** is read up to 4 KiB, into a buffer sized for that up front, so it never grows and leaves a copy behind. A larger file is refused.
+
+**Tests (regtest):**
+- **Works:**
+  - the heir sees only the wallet with a beneficiary, from a key file and from stdin;
+  - its exported descriptor, watched in Bitcoin Core, lets HEIR alone spend;
+  - the node refuses that spend one block before the heir delay (`non-BIP68-final`) and accepts it at the delay.
+- **Forbidden:**
+  - another person's words, or a setup with no beneficiary, export nothing;
+  - a changed setup with HEIR only in the 2-of-3, sharing the delayed path, or behind a time-based delay offers nothing;
+  - the raw backup, an 11-word file and an oversized file are refused;
+  - `heir` doesn't accept a second key.
+- **Every heir run** is checked to show none of the heir's words, nor the phone key's.
+
 ## The second key
 
 - **Release builds** don't talk to any second key yet. Trezor and the second phone come in later steps (restore-tool.md, section 9). `show` works without one.
@@ -52,14 +82,14 @@ It's a developer tool: its wording isn't product copy.
 - **Only a node on this machine:** the import sends PHONE's key over plain HTTP, so `--rpc-url` must be `http://127.0.0.1`, `http://localhost` or `http://[::1]`.
 - **Memory:**
   - the phrase, its seed, the descriptors with PHONE's key and the wallet passphrase are wiped from memory after use;
-  - the phone key's account `Xpriv` (in `PhoneKey`) isn't, because the `bitcoin` crate doesn't support wiping it;
+  - the phone key's account `Xpriv` (in `AccountKey`) isn't, because the `bitcoin` crate doesn't support wiping it;
   - the JSON sent to Core isn't, because `serde_json` can't wipe its strings: the import request, and the passphrase in `createwallet` and `walletpassphrase`. Each lives only until its call returns.
 
 ## Assumptions
 
 - **Test networks only.** The wallet setup format itself refuses mainnet, and so does the connection to Core.
 - **The pocket** isn't handled yet. Its descriptor isn't designed (brief 3.11).
-- **The heir's route** is the next PR. That's HEIR's key with the kit's plain setup, which is unverified without the second key. How it's started is waiting for the owner's decision.
+- **The heir's route** reads an unverified setup (above). It points the heir at Liana, and its spend was checked with Bitcoin Core on regtest, as Liana doesn't run on the Windows development machine. The exit drill (step 4) will run it through Liana.
 
 ## Dependencies
 

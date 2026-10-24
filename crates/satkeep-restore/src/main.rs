@@ -46,6 +46,13 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// The heir's route: with HEIR's key and the kit's plain wallet setup,
+    /// and no second key, show the Savings wallets the heir can claim, for
+    /// Liana. Never unlocks the backup, so the setup is unverified.
+    Heir {
+        #[command(flatten)]
+        heir: HeirArgs,
+    },
     /// Unlock the kit and print the Savings descriptors for Liana. The phone
     /// key's 12 words only with --show-phrase.
     Liana {
@@ -56,6 +63,21 @@ enum Command {
         #[arg(long)]
         show_phrase: bool,
     },
+}
+
+#[derive(Args)]
+struct HeirArgs {
+    /// The exit kit: its PDF or its armoured text (the raw backup has no
+    /// plain wallet setup).
+    #[arg(long)]
+    kit: PathBuf,
+    /// File holding the heir's 12 words. They're never taken on the command
+    /// line and never printed.
+    #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
+    key_file: Option<PathBuf>,
+    /// Read the heir's 12 words from standard input instead.
+    #[arg(long)]
+    key_stdin: bool,
 }
 
 #[derive(Args)]
@@ -126,6 +148,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Heir { heir: args } => heir(&args)?,
         Command::Liana { unlock: args, show_phrase } => {
             let kit = read_kit(&args.kit)?;
             let unlocked = unlock_with(&kit, &args)?;
@@ -151,6 +174,74 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// The heir's route. Reads only the kit's plain setup: no second key, no
+/// unlocking. The heir's words are never printed.
+fn heir(args: &HeirArgs) -> Result<()> {
+    use anyhow::Context;
+    use std::io::{BufRead, Read};
+    /// Far more than 12 words, far less than anything that could exhaust memory.
+    const MAX_KEY_TEXT: u64 = 4096;
+    let kit = read_kit(&args.kit)?;
+    // Room for the whole limit up front, so the buffer never grows and leaves
+    // an unwiped copy behind.
+    let mut text = Zeroizing::new(String::with_capacity(MAX_KEY_TEXT as usize + 1));
+    if args.key_stdin {
+        std::io::stdin().lock().take(MAX_KEY_TEXT).read_line(&mut text).context("reading the heir's 12 words from standard input")?;
+    } else {
+        let path = args.key_file.as_ref().expect("clap requires --key-file or --key-stdin");
+        let file = std::fs::File::open(path).with_context(|| format!("reading the heir's key file {}", path.display()))?;
+        anyhow::ensure!(file.metadata()?.len() <= MAX_KEY_TEXT, "{} is too large to be a key file", path.display());
+        file.take(MAX_KEY_TEXT).read_to_string(&mut text).with_context(|| format!("reading the heir's key file {}", path.display()))?;
+    }
+    let phrase = satkeep_restore::read_phrase(&text)?;
+    drop(text);
+    let key = satkeep_restore::AccountKey::from_phrase(&phrase);
+    drop(phrase);
+
+    println!(
+        "UNVERIFIED: the heir's route reads the kit's plain wallet setup. Without the second key nobody can check it \
+         against the copy locked in the backup, so anyone with access to the cloud drive could have changed it. The \
+         heir's key can only ever sign for wallets that contain it."
+    );
+    let report = satkeep_restore::heir_wallets(&kit, &key)?;
+    let count = report.count;
+    for (number, why) in &report.not_alone {
+        println!("\nSavings wallet {number} of {count} holds this heir key, but {why}, so it isn't offered.");
+    }
+    if report.claimable.is_empty() {
+        if report.not_alone.is_empty() {
+            bail!(
+                "none of the {count} Savings wallet(s) in this kit's setup holds this heir key, so there's nothing to \
+                 export. Check that these are the heir's 12 words and that this is the right kit."
+            );
+        }
+        bail!("none of the {count} Savings wallet(s) in this kit's setup lets this heir key move coins alone, so there's nothing to export.");
+    }
+    for wallet in &report.claimable {
+        println!(
+            "\nSavings wallet {} of {} holds this heir key. The heir can move its coins alone after {} blocks ({}), \
+             and only coins that haven't moved for at least that long.",
+            wallet.number,
+            wallet.count,
+            wallet.heir_delay,
+            satkeep_restore::about(u32::from(wallet.heir_delay))
+        );
+        if let Some(listed) = wallet.setup_says {
+            println!(
+                "  (The setup lists its heir delay as {listed} blocks, but the descriptor says {}: the descriptor is what \
+                 the coins follow.)",
+                wallet.heir_delay
+            );
+        }
+        println!("Liana's main descriptor (UNVERIFIED):\n{}", wallet.descriptor);
+    }
+    println!(
+        "\nNext: in Liana, create a wallet from that descriptor and add the heir's 12 words as a hot signer. Liana's \
+         recovery offers the coins once they're old enough."
+    );
     Ok(())
 }
 
