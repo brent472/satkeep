@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/satkeep-backup", "crates/satkeep-cli", "crates/satkeep-savings", "crates/satkeep-testenv"]
+members = ["crates/satkeep-backup", "crates/satkeep-cli", "crates/satkeep-restore", "crates/satkeep-savings", "crates/satkeep-testenv"]
 
 [workspace.package]
 edition = "2024"
