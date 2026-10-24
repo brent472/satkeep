@@ -319,7 +319,7 @@ fn with_descriptor(descriptor: &str) -> WalletSetup {
 #[test]
 fn public_descriptors_are_accepted_even_when_a_tpub_happens_to_contain_prv() {
     // The spec's real descriptors (also checked by the vector test).
-    let spec = include_str!("../../../docs/backup-format.md");
+    let spec = &spec();
     let vectors = WalletSetup::from_text(&vector(spec, "setup")).unwrap();
     assert!(vectors.to_text().is_ok());
     // "prv" inside a public key's piece, and 51 or 52 characters that aren't
@@ -504,6 +504,12 @@ impl SecurityDevice for FixedDevice {
     }
 }
 
+/// The spec, with LF line endings even where git checked it out with CRLF
+/// (core.autocrlf on Windows): the vectors' text uses LF.
+fn spec() -> String {
+    include_str!("../../../docs/backup-format.md").replace("\r\n", "\n")
+}
+
 /// The text of the code block after `<!-- vector: name -->` in the spec.
 fn vector(spec: &str, name: &str) -> String {
     let marker = format!("<!-- vector: {name} -->");
@@ -530,7 +536,7 @@ fn input<const N: usize>(spec: &str, name: &str) -> [u8; N] {
 
 #[test]
 fn the_spec_test_vectors_decode_and_are_made_exactly() {
-    let spec = include_str!("../../../docs/backup-format.md");
+    let spec = &spec();
     let wallet_id: WalletId = input(spec, "wallet-id");
     let created: u64 = input_text(spec, "created").parse().unwrap();
     let request = vector(spec, "unlock-request").trim_end_matches('\n').as_bytes().to_vec();

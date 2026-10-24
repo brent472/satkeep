@@ -36,6 +36,10 @@ pub use device::{MAX_PIN_TRIES, SimulatedDevice};
 pub use device::{DeviceError, DeviceId, SecurityDevice, UnlockMethod};
 pub use format::{Header, LockEntry, LockKind};
 pub use setup::WalletSetup;
+// The phrase type in `Restored`, and the wiping wrapper, for users of this
+// crate (the restore tool) without their own dependency on either.
+pub use bip39;
+pub use zeroize;
 
 use format::{NONCE_LEN, WRAPPED_KEY_LEN};
 

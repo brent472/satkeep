@@ -869,6 +869,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "satkeep-restore"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "bitcoincore-rpc",
+ "clap",
+ "miniscript",
+ "satkeep-backup",
+ "satkeep-restore",
+ "satkeep-savings",
+ "satkeep-testenv",
+ "serde_json",
+]
+
+[[package]]
 name = "satkeep-savings"
 version = "0.1.0"
 dependencies = [

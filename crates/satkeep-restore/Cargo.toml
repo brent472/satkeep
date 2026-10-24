@@ -1,0 +1,33 @@
+[package]
+name = "satkeep-restore"
+version = "0.1.0"
+description = "Restore the phone key from a Satkeep exit kit with the second key, and hand Savings to Bitcoin Core or Liana. Test networks only."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "satkeep-restore"
+path = "src/main.rs"
+
+[features]
+# The software second key, for tests only (`--simulated-device`). Release
+# builds leave it out.
+simulated-device = ["satkeep-backup/simulated-device"]
+
+# Every dependency below was already in Cargo.lock at this version (approved
+# for this crate on 2026-10-24); none adds a crate to the build. No bdk_wallet.
+[dependencies]
+anyhow = "1.0.104"           # errors, as in satkeep-cli
+bitcoin = "0.32.102"         # BIP32: the phone key from its phrase; the PSBT-free key types
+bitcoincore-rpc = "0.19.0"   # importdescriptors into the owner's own Bitcoin Core (cookie auth)
+clap = { version = "4.6.7", features = ["derive"] } # arguments, as in satkeep-cli
+miniscript = "12.3.7"        # parse the Savings descriptors; check PHONE is in each; write them with PHONE's key
+satkeep-backup = { path = "../satkeep-backup" } # the kit and the unlock; also re-exports bip39 and zeroize
+serde_json = "1.0.154"       # RPC parameters and the descriptor file
+
+[dev-dependencies]
+satkeep-restore = { path = ".", features = ["simulated-device"] }
+satkeep-savings = { path = "../satkeep-savings", features = ["simulated-device"] }
+satkeep-testenv = { path = "../satkeep-testenv" }

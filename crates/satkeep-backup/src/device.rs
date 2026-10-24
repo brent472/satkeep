@@ -94,6 +94,13 @@ impl SimulatedDevice {
         Self { secret, pin: Zeroizing::new(pin.to_owned()), unlocked: false, wrong_tries: 0, requests: 0 }
     }
 
+    /// The same simulated device again, from its secret: for tests that
+    /// make a backup in one process and unlock it in another (the restore
+    /// tool's). Test networks and the `simulated-device` feature only.
+    pub fn from_secret(secret: [u8; 32], pin: &str) -> Self {
+        Self { secret: Zeroizing::new(secret), pin: Zeroizing::new(pin.to_owned()), unlocked: false, wrong_tries: 0, requests: 0 }
+    }
+
     /// Enters the PIN on the device. A right PIN unlocks it for one
     /// [`SecurityDevice::unlock_secret`] call.
     pub fn enter_pin(&mut self, pin: &str) -> Result<(), DeviceError> {

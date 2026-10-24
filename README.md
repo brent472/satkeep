@@ -77,6 +77,7 @@ The exact descriptors, and the tests for every path, are in [`crates/satkeep-sav
 | [`docs/signet-demo.md`](docs/signet-demo.md) | One transaction for each allowed Savings path, in both shapes, on signet, with links to each |
 | [`docs/backup-format.md`](docs/backup-format.md) | The phone key backup, wallet setup and exit kit formats, byte by byte, with test vectors |
 | [`crates/satkeep-backup`](crates/satkeep-backup/README.md) | Those formats in code, shared by the app side and the restore tool |
+| [`crates/satkeep-restore`](crates/satkeep-restore/README.md) | `satkeep-restore`: the phone key back from the exit kit with the second key, and Savings into Bitcoin Core or Liana, with no Satkeep app or server |
 | [`crates/satkeep-savings`](crates/satkeep-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/satkeep-cli`](crates/satkeep-cli/README.md) | `satkeep`, a developer command-line tool for Savings on test networks |
 | [`docs/design.md`](docs/design.md) | Design references: the brand sheet (the visual master), screens, type and color |
