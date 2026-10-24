@@ -97,7 +97,7 @@ satkeep-restore heir --kit "Satkeep exit kit.pdf" --key-file my-words.txt
 **Then, in Liana:**
 1. add the wallet from the line the tool printed;
 2. add your 12 words as a hot signer;
-3. once the wait is over, use Liana's recovery to move the coins to your own wallet.
+3. once the wait is over, use Liana's recovery to send the coins to **a separate wallet that only you control**. Never send them to an address from the wallet you just added: because the kit is unverified, that wallet could include someone else's key.
 
 ## For experts: Bitcoin Core
 

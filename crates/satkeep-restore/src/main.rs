@@ -321,8 +321,9 @@ fn heir(args: &HeirArgs) -> Result<()> {
         println!("Liana's main descriptor (UNVERIFIED):\n{}", wallet.descriptor);
     }
     println!(
-        "\nNext: in Liana, create a wallet from that descriptor and add the heir's 12 words as a hot signer. Liana's \
-         recovery offers the coins once they're old enough."
+        "\nNext: in Liana, create a wallet from that descriptor and add the heir's 12 words as a hot signer. Once the \
+         coins are old enough, use Liana's recovery to send them to a wallet only you control, never to an address \
+         from this one: the setup is unverified."
     );
     Ok(())
 }
