@@ -5,8 +5,8 @@ The restore tool, first part: `satkeep-restore` unlocks the exit kit with the se
 | Command | What it does |
 | --- | --- |
 | `show --kit FILE` | What the kit holds, without unlocking: date, second key, and the plain wallet setup marked **unverified** |
-| `core --kit FILE …` | Unlock, check the phone key is PHONE in every Savings wallet (T5), and import each wallet's receive and change descriptors, with PHONE's `tprv`, into a **new** Bitcoin Core wallet over local RPC, rescanning from each birthday |
-| `core … --out FILE` | Write Core's `importdescriptors` request to a new file instead: created new, never overwritten, owner-only on Unix |
+| `core --kit FILE …` | Unlock, check the phone key is PHONE in every Savings wallet (T5), and import each wallet's receive and change descriptors, with PHONE's `tprv`, into a **new, encrypted** Bitcoin Core wallet over local RPC, rescanning from each birthday |
+| `core … --out FILE` | Write Core's `importdescriptors` request to a new file instead: created new, never overwritten, owner-only on Unix. The tool says it holds the phone key **unencrypted** and should be deleted once it's imported. |
 | `liana --kit FILE …` | The public descriptors for Liana. The no-beneficiary shape is marked for Core or Sparrow, since Liana can't hold it. |
 | `liana … --show-phrase` | Also the phone key's 12 words, after a warning |
 
@@ -17,12 +17,24 @@ The restore tool, first part: `satkeep-restore` unlocks the exit kit with the se
 - **Test builds** (`--features simulated-device`) add `--simulated-device FILE`: the device's secret and PIN in the file, with the PIN to try typed on stdin.
 - **For that,** `satkeep-backup` gains `SimulatedDevice::from_secret`, behind its feature. It also re-exports `bip39` and `zeroize`, so the tool needs no dependency of its own on them.
 
+## The Core wallet is encrypted (added in review)
+
+- **The passphrase:** `core` asks for a new wallet passphrase twice on stdin. They must match, and it can't be empty.
+- **The import:** Core creates the wallet encrypted with it, unlocks it with `walletpassphrase` for at most 60 s around `importdescriptors`, then locks it again (`walletlock`), even if the import fails.
+- **After:** the tool says the wallet is encrypted and that the passphrase is needed to sign as PHONE.
+- **Tests:** the wallet reports as encrypted and locked (`unlocked_until` 0), `walletprocesspsbt` fails until `walletpassphrase`, and mismatched or empty passphrases are refused and create no wallet.
+- **Visible while typing:** the passphrase shows as it's typed on a plain terminal, since no approved crate hides typing. The README says so; a later step can fix it.
+
 ## Secrets
 
 - **The command line:** keys are never taken on it. An argument that looks like one (`tprv`, `xprv`, 12 BIP39 words) is refused before parsing and never repeated.
 - **Output:** nothing secret on stdout except the 12 words with `--show-phrase`, and nothing secret ever on stderr.
 - **Core's import errors** are never repeated, because they could quote the request; only position and error code are shown.
-- **Memory:** the phrase, the seed and the private descriptors are wiped after use. The JSON request to Core can't be wiped (`serde_json`), and the README says so.
+- **Memory:**
+  - the phrase, the seed, the private descriptors and the wallet passphrase are wiped after use;
+  - the account `Xpriv` in `PhoneKey` isn't, because the `bitcoin` crate doesn't support it;
+  - the JSON sent to Core isn't, because `serde_json` can't wipe its strings. That's the import request, and the passphrase in `createwallet` and `walletpassphrase`.
+  - The README says all of this.
 
 ## Tests (regtest, throwaway nodes)
 
@@ -47,7 +59,7 @@ The restore tool, first part: `satkeep-restore` unlocks the exit kit with the se
 **Mainnet:** the wallet setup format and the node check both refuse it. There's no mainnet node to test against.
 
 **Results:**
-- `cargo test --workspace` passes (8 regtest tests here, plus 2 unit tests);
+- `cargo test --workspace` passes (9 regtest tests here, plus 2 unit tests);
 - `cargo clippy --workspace --all-targets -D warnings` is clean;
 - `cargo deny check` passes;
 - a release build's help has no `--simulated-device`.
@@ -77,6 +89,12 @@ The restore tool, first part: `satkeep-restore` unlocks the exit kit with the se
 - Core's import errors are never repeated;
 - the wallet name is restricted before it goes into the URL;
 - a plain `cargo build -p satkeep-restore` can't reach the simulated device.
+
+**CodeQL: 3 "cleartext logging" alerts, dismissed as false positives.** Each flagged line prints only public data. CodeQL traces it back to the device secret because it comes out of the decrypted backup.
+- **#5,** `main.rs:99` (`show`): prints `describe()`, which is the backup's date, the wallet id, the second key's id prefix and unlock method, and each Savings wallet's shape, heir delay and birthday block height.
+- **#6,** `main.rs:110` (`core`): prints `wallets()`, which is each Savings wallet's shape, heir delay and birthday block height from the authenticated setup. Not even the descriptors.
+- **#7,** `main.rs:132` (`liana`): the same `wallets()` line.
+- **Nothing restructured:** each alert is dismissed with that reason, and the code wasn't changed to quiet the scanner.
 
 **Also fixed here:** the backup format's vector tests read `docs/backup-format.md` with `include_str!`. On a Windows checkout with `core.autocrlf` that file has CRLF line endings and the tests failed; they now normalise line endings first. CI on Linux wasn't affected.
 
