@@ -23,7 +23,7 @@ It's a developer tool: its wording isn't product copy.
 ## What it checks
 
 1. **The kit:** every line's check, and refuses two different kits in one file (the format's rules).
-2. **The unlock:** the second key must be the one the backup is locked to, after its own PIN. It's only ever asked for this wallet's label.
+2. **The unlock:** the second key must be the one the backup is locked to, after its own PIN. A security device is only ever asked for this wallet's label. A second phone gets a request naming this wallet and that phone, and checks both itself (below).
 3. **The setup:** the kit's plain wallet setup must match the copy locked inside the backup, or the kit has been changed. Only the locked copy is used.
 4. **The phone key is PHONE in every Savings wallet** (T5). The tool derives the phone key's public key from its 12 words, exactly as Satkeep does: BIP39 seed with no passphrase, BIP32 test-network master key, account m/87'/1'/0' ([derivation](../satkeep-savings/README.md#recovery-phrases-and-derivation)). Then it looks for that key, with its fingerprint and path, in each descriptor. A backup and a setup that don't belong together export nothing.
 5. **The node** is on this machine, on the setup's network, and never mainnet.
@@ -80,9 +80,16 @@ Each ends with one line starting "Next:", a single plain step. The step-by-step 
 
 ## The second key
 
-- **Release builds** don't talk to any second key yet. Trezor and the second phone come in later steps (restore-tool.md, section 9). `show` works without one.
+- **A second phone** (decision D4: an old phone or tablet with the Satkeep app) works in every build, with no cable and no server. The format is [`docs/backup-format.md`](../../docs/backup-format.md) section 3.4.
+  - **The request:** the tool shows an unlock request on standard error, between `BEGIN` and `END SATKEEP UNLOCK REQUEST` lines: 244 hex digits naming the wallet, the phone, the backup's ephemeral key and a fresh session key.
+  - **The phone** checks the request is for it and for one of its wallets, asks for its own face, fingerprint or passcode, and shows a 72-digit answer.
+  - **The answer** is typed on standard input; case and spaces don't matter. A typo, or an answer to an earlier request, fails its check and can be typed again, 3 tries in all. It's read up to 4 KiB, never printed and never put in an error.
+  - **No curve code in the tool:** it only hashes. The P-256 work is on the phone, so release builds don't include `p256`.
+  - **Not yet:** a backup locked to more than one second phone is refused, since the tool can't tell which one is at hand. The app's side comes with the app.
+  - **The request and the answer together** give the unlock secret, which opens the backup. Both show on the terminal, so close it afterwards, as with `--show-phrase`.
+- **Trezor** comes in a later step (restore-tool.md, section 9). Until then, a backup locked only to a security device needs a test build. `show` works without any second key.
 - **The exit drill** also builds `examples/make_test_kit` (test-only, `required-features = ["simulated-device"]`). It makes a kit the way the app will, from a phone key file and a wallet setup, locked to a fresh simulated second key, and uses no new dependency (`satkeep-savings` is a dev-dependency).
-- **Test builds** (`--features simulated-device`) add `--simulated-device FILE`. The file holds a simulated device's state, its secret and its PIN, and the PIN to try is typed on standard input, as if on the device.
+- **Test builds** (`--features simulated-device`) add `--simulated-device FILE`, and the simulated second phone the tests answer requests with. The file holds a simulated device's state, its secret and its PIN, and the PIN to try is typed on standard input, as if on the device.
 
 ## Rules for anything secret
 
@@ -100,7 +107,7 @@ Each ends with one line starting "Next:", a single plain step. The step-by-step 
 
 - **Test networks only.** The wallet setup format itself refuses mainnet, and so does the connection to Core.
 - **The pocket** isn't handled yet. Its descriptor isn't designed (brief 3.11).
-- **The heir's route** reads an unverified setup (above). It points the heir at Liana, and its spend was checked with Bitcoin Core on regtest, as Liana doesn't run on the Windows development machine. The exit drill (step 4) will run it through Liana.
+- **The heir's route** reads an unverified setup (above). It points the heir at Liana, and its spend was checked with Bitcoin Core on regtest, as Liana doesn't run on the Windows development machine, and through Liana in the exit drill's section C.
 
 ## Dependencies
 
@@ -127,7 +134,8 @@ Each was already in `Cargo.lock` at this version and was approved for this crate
 - `core --out` writes a file that imports as it is, and only once;
 - `liana` prints the descriptors, and the 12 words only on request;
 - `sparrow` writes the plain wallet's descriptor to a new file (once), and the 12 words only on request;
-- `core`, `liana` and `sparrow` name Liana, Sparrow and Bitcoin Core per wallet and end with one "Next:" step.
+- `core`, `liana` and `sparrow` name Liana, Sparrow and Bitcoin Core per wallet and end with one "Next:" step;
+- **a second phone:** `show` names it, and through the request and answer `liana` prints the descriptors and `core` imports both shapes, with Core then signing as PHONE. A typo can be typed again.
 
 **Forbidden:**
 - the wrong second key, a wrong PIN, and no second key;
@@ -135,6 +143,7 @@ Each was already in `Cargo.lock` at this version and was approved for this crate
 - a node on another network, a node on another machine, and an existing Core wallet;
 - a key on the command line: the phrase whole, split over several arguments, 7 of its words, or a `tprv`;
 - PHONE alone finalizing a spend;
-- `sparrow` on a kit with only Savings with a beneficiary (it points to Liana and writes nothing).
+- `sparrow` on a kit with only Savings with a beneficiary (it points to Liana and writes nothing);
+- **a second phone:** three wrong answers, no answer, and an answer to an earlier request all unlock nothing, and the answer is never printed.
 
 **In the exit drill, on the runner:** a `lianad` on `liana`'s output sees the same coins as Bitcoin Core, `sparrow`'s file passes the drill's port of Sparrow's descriptor parser, and the heir's route goes through Liana. A real Sparrow import stays a manual check, because Sparrow is a desktop app.

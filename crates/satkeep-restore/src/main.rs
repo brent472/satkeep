@@ -334,11 +334,46 @@ fn unlock_with(kit: &Kit, args: &UnlockArgs) -> Result<satkeep_restore::Unlocked
         let mut device = simulated_device(path)?;
         return unlock(kit, &mut device);
     }
-    let _ = (kit, args, unlock);
+    let _ = args;
+    let header = satkeep_backup::read_header(&kit.backup)?;
+    if header.entries.iter().any(|e| e.method == satkeep_backup::UnlockMethod::SecondPhone) {
+        let mut phone = second_phone(&header)?;
+        return unlock(kit, &mut phone);
+    }
     bail!(
-        "this build of satkeep-restore can't talk to a second key yet: Trezor and the second phone come in later \
-         versions. `show` works without one."
+        "this backup is locked to a kind of second key this version of satkeep-restore can't talk to yet: Trezor \
+         comes in a later version. `show` works without one."
     )
+}
+
+/// The second phone's exchange: shows the unlock request, then reads the
+/// answer the phone shows, typed on standard input. Neither is ever put in
+/// an error, and the answer isn't printed.
+fn second_phone(header: &satkeep_backup::Header) -> Result<satkeep_backup::SecondPhoneUnlock> {
+    use std::io::{BufRead, Read};
+    const TRIES: u32 = 3;
+    const MAX_ANSWER_TEXT: u64 = 4096;
+    let mut phone = satkeep_backup::SecondPhoneUnlock::for_backup(header)?;
+    eprintln!("This backup is locked to a second phone. Give the Satkeep app on that phone this unlock request:\n");
+    eprintln!("-----BEGIN SATKEEP UNLOCK REQUEST-----\n{}\n-----END SATKEEP UNLOCK REQUEST-----\n", phone.request_text().as_str());
+    eprintln!(
+        "The phone checks the request is for it and asks for its own face, fingerprint or passcode. Then it shows an \
+         answer of 72 characters: type it here (spaces don't matter)."
+    );
+    for attempt in 1..=TRIES {
+        eprint!("Answer from the second phone: ");
+        let mut line = Zeroizing::new(String::new());
+        let read = std::io::stdin().lock().take(MAX_ANSWER_TEXT).read_line(&mut line);
+        if read.map_err(|_| anyhow::anyhow!("couldn't read the second phone's answer"))? == 0 {
+            bail!("no answer from the second phone was typed");
+        }
+        match phone.enter_answer(&line) {
+            Ok(()) => return Ok(phone),
+            Err(refused) if attempt < TRIES => eprintln!("{refused}. Type it again."),
+            Err(refused) => bail!("{refused}; nothing was unlocked"),
+        }
+    }
+    unreachable!("the last try returns or fails")
 }
 
 #[cfg(feature = "simulated-device")]

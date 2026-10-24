@@ -58,7 +58,15 @@ If anything doesn't match, it stops. Don't work around that.
 
 **What it prints:** which app to use for each wallet, and one next step at the end. Follow that step.
 
-*To be decided:* this version of the tool talks only to a test second key. Trezor and the old-phone second key come in later versions.
+**If the second key is the owner's old phone or tablet,** there's nothing to connect. The phone needs the Satkeep app still on it, but no internet:
+1. The tool shows an **unlock request**: a block of letters and numbers between two lines that say SATKEEP UNLOCK REQUEST.
+2. Give it to the Satkeep app on that phone. *To be decided:* how, scanning it or typing it, comes with the app.
+3. The phone checks the request is for it, and asks for its own face, fingerprint or passcode.
+4. It shows an **answer** of 72 letters and numbers. Type it into the tool; spaces don't matter.
+- **A typo** is caught, and you can type the answer again.
+- **Keep both to yourself:** the request and the answer together unlock the backup. Close the window afterwards.
+
+*To be decided:* this version of the tool talks to the old-phone second key and to a test one. Trezor comes in a later version.
 
 ## Step 4a: In Liana (Savings with a beneficiary)
 
@@ -121,5 +129,7 @@ It imports each wallet into a new, encrypted wallet in your own Bitcoin Core, on
 
 - **"that key can't unlock this backup":** this second key isn't the one the backup is locked to. Try the owner's other device.
 - **"wrong PIN":** the second key counts wrong PINs and locks itself after too many. Stop and find the right PIN.
+- **"that answer has a typo, or it answers a different unlock request":** check the answer on the phone and type it again. An answer only works for the request it was made for. If you started the tool again, give the phone the new request.
+- **"this backup isn't locked to this phone"** (on the phone): it's the wrong phone or tablet. Try the owner's other device.
 - **"the kit has been changed":** the plain copy in the kit doesn't match the locked one. Don't use it. Look for another copy of the kit, such as a printout or an older download.
 - **"the phone key … isn't in Savings wallet":** the backup and the wallet list don't belong together. Don't use this kit.

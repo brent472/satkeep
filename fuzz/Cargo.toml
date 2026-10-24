@@ -56,3 +56,10 @@ path = "fuzz_targets/kit.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "second_phone"
+path = "fuzz_targets/second_phone.rs"
+test = false
+doc = false
+bench = false

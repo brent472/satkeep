@@ -8,9 +8,13 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-# The software security device, for tests and the prototype. Release builds
-# of the restore tool leave it out.
-simulated-device = []
+# Locking a backup to a second phone (the app's side): ECDH with the phone's
+# P-256 key. The restore tool's side needs no curve code, so its release
+# builds leave this out.
+second-phone-lock = ["dep:p256"]
+# The software security device and second phone, for tests and the
+# prototype. Release builds of the restore tool leave them out.
+simulated-device = ["second-phone-lock"]
 
 [dependencies]
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
@@ -19,6 +23,10 @@ bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroi
 # when dropped, as 0.10 always did; from 0.11 it's a feature.
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
 hkdf = "0.13.0"
+# The second phone's key is P-256, the only curve the Secure Enclave and
+# Android Keystore offer for ECDH. RustCrypto, like chacha20poly1305 and
+# hkdf. Only with the second-phone-lock feature.
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh"], optional = true }
 sha2 = "0.11.1"
 thiserror.workspace = true
 zeroize = "1.9.1"

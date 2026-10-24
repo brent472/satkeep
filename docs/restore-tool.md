@@ -238,6 +238,9 @@ Each item is its own branch and PR, stopping for review after each, as usual.
        - **The owner decided this** on 2026-10-24.
 4. **The exit drill.** Make a kit with the prototype, restore it with the tool, import into Liana and Bitcoin Core, and spend 2 of 3 with PHONE (from the tool) and DEVICE, in both Savings shapes. Then run the key-material scan.
 5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
+   - **Status:** done. The format is [`backup-format.md`](backup-format.md) section 3.4, with P-256 test vectors. `satkeep-restore` unlocks a backup locked to a second phone in every build, through the request it shows and the answer typed back.
+   - **The dependency:** `p256` 0.14, approved 2026-10-24, only for locking a backup to a phone and for the simulated phone. The tool's side is hashing only, so its release builds don't include `p256`.
+   - **Before it,** RustCrypto moved to its current generation (PR #25), so `p256` 0.14 sits on one generation.
 6. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.
 
 The Satkeep card's unlock (FIDO `hmac-secret`) waits for the card's design. The everyday pocket's export waits for its descriptor. The format leaves room for both.
