@@ -14,7 +14,7 @@ Milestone 1, step 4. Can someone holding the Savings keys and the wallet descrip
 
 ## Result
 
-From [run 40025126932](https://github.com/brent472/satkeep/actions/runs/40025126932) of the `Exit drill` workflow on 2026-10-23, Ubuntu 24.04, with keys made from 12-word recovery phrases and a 20-block heir delay. All 17 checks passed. (Earlier runs, [40004699830](https://github.com/brent472/satkeep/actions/runs/40004699830) and 39960059017 in the private archive, drilled the old single shape with the card-only path.)
+From [run 40100414377](https://github.com/brent472/satkeep/actions/runs/40100414377) of the `Exit drill` workflow on 2026-10-24, after the rename to Satkeep, Ubuntu 24.04, with keys made from 12-word recovery phrases and a 20-block heir delay. All 17 checks passed, the same as [run 40025126932](https://github.com/brent472/satkeep/actions/runs/40025126932) on 2026-10-23 under the old name. (Earlier runs, [40004699830](https://github.com/brent472/satkeep/actions/runs/40004699830) and 39960059017 in the private archive, drilled the old single shape with the card-only path.)
 
 **A. With a beneficiary (Taproot)**
 
