@@ -62,6 +62,9 @@ WORK = os.environ["WORK"]
 HEIR_DELAY = 20
 # The wallet's minimum heir delay (placeholder 26,280) is lowered to match.
 MIN_HEIR_DELAY = HEIR_DELAY
+# The payment rule's refresh window (placeholder 8,760) must be shorter than
+# the drill's 10-block check-in interval.
+REFRESH_WINDOW = 2
 DATADIR = os.path.join(WORK, "bitcoind")
 COOKIE = os.path.join(DATADIR, "regtest", ".cookie")
 LIANA_CONF = os.path.join(WORK, "lianad.toml")
@@ -348,7 +351,8 @@ def main():
     keys = ["--phone", holders["phone"]["public"][0], "--device", holders["device"]["public"][0],
             "--helper", holders["helper"]["public"][0]]
     satkeep("create", *keys, "--heir", holders["heir"]["public"][0], "--heir-delay", str(HEIR_DELAY),
-            "--checkin-interval", "10", "--checkin-margin", "5", "--min-heir-delay", str(MIN_HEIR_DELAY))
+            "--checkin-interval", "10", "--checkin-margin", "5", "--refresh-window", str(REFRESH_WINDOW),
+            "--min-heir-delay", str(MIN_HEIR_DELAY))
     descriptor = satkeep("export")
     print(f"Exported descriptor, with a beneficiary: {descriptor}")
     satkeep_receive = [satkeep("address") for _ in range(5)]

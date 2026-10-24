@@ -98,7 +98,7 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
 1. **Keys and descriptor.** These are the only Satkeep steps.
    ```bash
    satkeep keygen --name phone   # and device, helper, heir
-   satkeep create --phone … --device … --helper … --heir … --heir-delay 20 --checkin-interval 10 --checkin-margin 5 --min-heir-delay 20
+   satkeep create --phone … --device … --helper … --heir … --heir-delay 20 --checkin-interval 10 --checkin-margin 5 --refresh-window 2 --min-heir-delay 20
    satkeep export                # the Taproot descriptor, for Liana and Bitcoin Core
    satkeep --wallet-dir plain create --phone … --device … --helper …
    satkeep --wallet-dir plain export   # wsh(sortedmulti(2, …)), for Bitcoin Core, Sparrow and other multisig wallets
