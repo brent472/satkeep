@@ -1,5 +1,7 @@
 # Design references
 
+> **Trademark:** The code is MIT-licensed. The Satkeep™ name, logo and brand sheet are not covered by that license, and may not be used to imply endorsement or for another product. Satkeep is a working name pending trademark clearance.
+
 - **Brand sheet (visual master):** [`brand/SATKEEP_brand_sheet.png`](brand/SATKEEP_brand_sheet.png) (brief v3.15). Where anything else disagrees with this image, the image wins, except on wording: Section 19 of the brief wins on copy.
 - **Older images, history only:**
   - The Satkeep concept image the sheet was patched from stays in the private repo. Its screens are out of date, so don't design from it.
