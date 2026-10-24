@@ -1,6 +1,6 @@
 # Milestone 1 — Prove the Savings wallet rules
 
-**What Twofold is:** a phone-first bitcoin self-custody wallet. Spending is a normal phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus a delayed inheritance path. Full spec: the master brief, `docs/master-brief.md` in the private repo `brent472/twofold-private`.
+**What Satkeep is:** a phone-first bitcoin self-custody wallet. Spending is a normal phone-key wallet. Savings needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus a delayed inheritance path. Full spec: the master brief, `docs/master-brief.md` in the private repo `brent472/satkeep-private`.
 
 **Goal:** prove the Savings spending rules work and are safe, on test bitcoin only, before any app UI exists.
 
@@ -28,7 +28,7 @@
 2. **A small Rust command-line tool** using BDK and rust-miniscript: create the wallet, receive, build PSBTs, sign with any 2 keys, broadcast.
 3. **Check-in** (only with a beneficiary): a send-to-self transaction that restarts the heir delay and consolidates coins. It must run sooner than the heir delay. The plan is once a year (52,560 blocks), with a margin of about 2 months (8,760 blocks).
    - **Payment rule** (brief 3.12): every Savings payment and pocket refill also spends the coins within a window of needing a check-in (placeholder: older than about 10 months), with change back to Savings, so it counts as their check-in. A wallet setting, on by default; off for privacy.
-4. **Leave without Twofold:** export the wallet descriptor, import it into Liana or Sparrow, and spend with no Twofold code involved.
+4. **Leave without Satkeep:** export the wallet descriptor, import it into Liana or Sparrow, and spend with no Satkeep code involved.
 
 ## Tests
 
@@ -57,10 +57,10 @@ Decided in brief 3.9–3.10: the recovery contact is not a Savings key. They hel
 
 - [ ] All tests pass on regtest
 - [x] Signet demo transaction for each allowed path ([signet-demo.md](signet-demo.md))
-- [x] Exit through Liana or Sparrow works with no Twofold code
+- [x] Exit through Liana or Sparrow works with no Satkeep code
 - [x] README has a diagram of the spending paths
 - [ ] One experienced Bitcoin developer has reviewed the policy
 
 ## Next
 
-**Milestone 2:** a clickable iPhone prototype built from the Twofold App Screens design, using Sections 18 and 19 of the master brief for type and copy. Fake data only. Then run the mom test (5 bitcoin-naive adults; setup under 5 minutes; 4 of 5 finish every task unaided).
+**Milestone 2:** a clickable iPhone prototype built from the "Twofold App Screens" design (the canvas still has the old name), using Sections 18 and 19 of the master brief for type and copy. Fake data only. Then run the mom test (5 bitcoin-naive adults; setup under 5 minutes; 4 of 5 finish every task unaided).

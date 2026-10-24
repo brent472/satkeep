@@ -1,6 +1,6 @@
-# Twofold — working rules
+# Satkeep — working rules
 
-Twofold is a phone-first bitcoin self-custody wallet. The user sees one balance: a small everyday pocket on the phone key (up to a cap the owner sets) for Face ID payments, and Savings, which needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus a delayed inheritance path once a beneficiary is added. Full spec: `docs/master-brief.md` in the private repo `brent472/twofold-private` (clone it beside this repo, as `../twofold-private`, to read it). Current task: `docs/milestone-1.md`.
+Satkeep is a phone-first bitcoin self-custody wallet. The user sees one balance: a small everyday pocket on the phone key (up to a cap the owner sets) for Face ID payments, and Savings, which needs any 2 of 3 keys (phone, a second device, a replaceable helper), plus inheritance once a beneficiary is added: a helper-assisted claim after a wait, backed by an on-chain heir path. Full spec: `docs/master-brief.md` in the private repo `brent472/satkeep-private` (clone it beside this repo, as `../satkeep-private`, to read it). Current task: `docs/milestone-1.md`.
 
 ## Non-negotiables
 
@@ -11,7 +11,7 @@ Twofold is a phone-first bitcoin self-custody wallet. The user sees one balance:
 - **Write assumptions down.** Every assumption about policy, timelocks, fees or signing goes in the README of the crate or in `docs/`.
 - **The helper can never spend alone.** Any design or code where one key — including the helper — can move Savings without a delay is a bug.
 - **Timelocks are placeholders** until an outside Bitcoin reviewer signs off (heir: 14 months ≈ 61,320 blocks; relative-timelock cap is 65,535 blocks; the 9-month card-only path was removed in brief 3.8). Keep them configurable.
-- **Check-in rule:** the refresh transaction must run sooner than the heir path (plan: once a year, one tap, never automatic).
+- **Check-in rule:** the refresh transaction must run sooner than the heir path (plan: once a year, one tap, never automatic; Savings payments and pocket refills that include the oldest coins count, receiving doesn't).
 
 ## How we work
 
@@ -23,6 +23,6 @@ Twofold is a phone-first bitcoin self-custody wallet. The user sees one balance:
 
 ## Copy and design
 
-- Product copy comes from Section 19 of the master brief (in the private repo `brent472/twofold-private`); don't invent UI wording.
-- Typography is Inter throughout; the brand sheet in `docs/brand/` is the visual master.
+- Product copy comes from Section 19 of the master brief (in the private repo `brent472/satkeep-private`); don't invent UI wording.
+- Typography is Inter throughout; the Satkeep concept image in the private repo's `docs/brand/` is the identity reference (it isn't in this repo yet); its screens predate the current product, so Section 19 wins on content.
 - Plain words in the app: key, approve, network fee, Savings, everyday payments. No "multisig", "UTXO", "PSBT", "xpub" or "seed" in main flows.

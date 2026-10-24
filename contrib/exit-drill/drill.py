@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Exit drill: recover and spend a Twofold Savings wallet with no Twofold code.
+"""Exit drill: recover and spend a Satkeep Savings wallet with no Satkeep code.
 
-Twofold is used only to make fresh test keys and export the wallet
+Satkeep is used only to make fresh test keys and export the wallet
 descriptor. Everything after that is done by Liana (lianad + liana-cli) and
 Bitcoin Core (bitcoind + bitcoin-cli) on a fresh regtest node:
 
 Savings comes in two shapes, and the drill covers both, with the same keys:
 
 A. Savings with a beneficiary: 2 of 3, plus HEIR alone after the heir delay.
-  1. Liana imports the descriptor and shows the same addresses as Twofold
+  1. Liana imports the descriptor and shows the same addresses as Satkeep
      and Bitcoin Core.
   2. Liana spends with 2 of 3 keys, and with HEIR alone after its delay,
      and refuses the heir spend one block early. Liana's own signer
-     (HotSigner, via twofold_sign.rs) signs with the recovery phrases in
-     Twofold's key files.
+     (HotSigner, via satkeep_sign.rs) signs with the recovery phrases in
+     Satkeep's key files.
   3. Bitcoin Core alone does the same spends, the node refuses the heir
      spend one block early, and DEVICE alone is refused at any age (there
      is no card-only path).
@@ -28,9 +28,9 @@ B. Savings with no beneficiary yet: plain 2 of 3 in the standard P2WSH
 Core can't read a recovery phrase, so
      this script turns each phrase into a master key (tprv) with Python's
      standard library: BIP39 seed, then BIP32 master key. That's written
-     from the BIPs, separately from Twofold's code and Liana's.
+     from the BIPs, separately from Satkeep's code and Liana's.
 
-Secrets are never printed, not even masked: the phrases stay in Twofold's
+Secrets are never printed, not even masked: the phrases stay in Satkeep's
 key files and go to Liana's signer as a file path; the master keys go to
 bitcoin-cli on stdin (never as arguments). Any command that reads a key
 fails without repeating its output. The workflow then scans this script's
@@ -38,8 +38,8 @@ output and the whole job log, and fails if either has anything key-like
 (scan_log.py). Run on a throwaway machine only.
 
 Environment: BITCOIN_BIN (folder with bitcoind and bitcoin-cli), LIANAD,
-LIANA_CLI, LIANA_SIGN (twofold_sign built from Liana's source), TWOFOLD
-(the twofold binary), WORK (an empty scratch folder).
+LIANA_CLI, LIANA_SIGN (satkeep_sign built from Liana's source), SATKEEP
+(the satkeep binary), WORK (an empty scratch folder).
 """
 
 import hashlib
@@ -56,10 +56,15 @@ BIN = os.environ["BITCOIN_BIN"]
 LIANAD = os.environ["LIANAD"]
 LIANA_CLI = os.environ["LIANA_CLI"]
 LIANA_SIGN = os.environ["LIANA_SIGN"]
-TWOFOLD = os.environ["TWOFOLD"]
+SATKEEP = os.environ["SATKEEP"]
 WORK = os.environ["WORK"]
 
 HEIR_DELAY = 20
+# The wallet's minimum heir delay (placeholder 26,280) is lowered to match.
+MIN_HEIR_DELAY = HEIR_DELAY
+# The payment rule's refresh window (placeholder 8,760) must be shorter than
+# the drill's 10-block check-in interval.
+REFRESH_WINDOW = 2
 DATADIR = os.path.join(WORK, "bitcoind")
 COOKIE = os.path.join(DATADIR, "regtest", ".cookie")
 LIANA_CONF = os.path.join(WORK, "lianad.toml")
@@ -121,12 +126,12 @@ class LianaError(Exception):
     pass
 
 
-def twofold(*args):
-    code, out, err = run([TWOFOLD] + list(args))
+def satkeep(*args):
+    code, out, err = run([SATKEEP] + list(args))
     if code != 0:
         if args[0] == "keygen":
-            raise RuntimeError("twofold keygen failed (no detail: it handles a new key)")
-        raise RuntimeError(f"twofold {args[0]} failed: {err}")
+            raise RuntimeError("satkeep keygen failed (no detail: it handles a new key)")
+        raise RuntimeError(f"satkeep {args[0]} failed: {err}")
     return out
 
 
@@ -243,7 +248,7 @@ def liana_sign(psbt, holder):
 
 
 def key_file(holder):
-    return os.path.join(WORK, "twofold", "regtest", "keys", f"{holder}.key")
+    return os.path.join(WORK, "satkeep", "regtest", "keys", f"{holder}.key")
 
 
 def txid_of(psbt):
@@ -277,10 +282,10 @@ def core_wallets(prefix, holders, descriptor):
         res = cli_json("importdescriptors", stdin_args=[json.dumps(imports)], wallet=wallet)
         if not all(r.get("success") for r in res):
             raise RuntimeError(f"importing {name}'s key into Bitcoin Core failed")  # no detail: it could echo the key
-        # The master key made here must be the one behind Twofold's public keys.
+        # The master key made here must be the one behind Satkeep's public keys.
         derived = cli_json("listdescriptors", wallet=wallet)["descriptors"]
         if not any(f"[{h['fp']}/87h/1h/0h]" in d["desc"] or f"[{h['fp']}/87'/1'/0']" in d["desc"] for d in derived):
-            raise RuntimeError(f"Bitcoin Core's key for {name} isn't the one in Twofold's public key")
+            raise RuntimeError(f"Bitcoin Core's key for {name} isn't the one in Satkeep's public key")
         signers[name] = wallet
     return receive_desc, change_desc, signers
 
@@ -328,13 +333,13 @@ def main():
 
     burn = cli_json("deriveaddresses", cli_json("getdescriptorinfo", f"rawtr({NUMS_XONLY})")["descriptor"])[0]
 
-    # --- Twofold: fresh keys and the two descriptors, nothing more -------------
-    os.environ["TWOFOLD_HOME"] = os.path.join(WORK, "twofold")
-    os.environ["TWOFOLD_RPC_URL"] = "http://127.0.0.1:18443"
-    os.environ["TWOFOLD_RPC_COOKIE"] = COOKIE
+    # --- Satkeep: fresh keys and the two descriptors, nothing more -------------
+    os.environ["SATKEEP_HOME"] = os.path.join(WORK, "satkeep")
+    os.environ["SATKEEP_RPC_URL"] = "http://127.0.0.1:18443"
+    os.environ["SATKEEP_RPC_COOKIE"] = COOKIE
     holders = {}
     for name in ["phone", "device", "helper", "heir"]:
-        out = twofold("keygen", "--name", name)
+        out = satkeep("keygen", "--name", name)
         public = [line.strip() for line in out.splitlines() if line.startswith("  ")]
         with open(key_file(name)) as f:
             phrase = f.read().strip()
@@ -342,24 +347,25 @@ def main():
             raise RuntimeError(f"{name}'s key file doesn't hold a 12-word recovery phrase")
         secret = phrase_to_tprv(phrase)
         holders[name] = {"public": public, "secret": secret, "fp": public[0][1:9]}
-    check("`twofold keygen` saves a 12-word recovery phrase for each holder", True)
+    check("`satkeep keygen` saves a 12-word recovery phrase for each holder", True)
     keys = ["--phone", holders["phone"]["public"][0], "--device", holders["device"]["public"][0],
             "--helper", holders["helper"]["public"][0]]
-    twofold("create", *keys, "--heir", holders["heir"]["public"][0], "--heir-delay", str(HEIR_DELAY),
-            "--checkin-interval", "10", "--checkin-margin", "5")
-    descriptor = twofold("export")
+    satkeep("create", *keys, "--heir", holders["heir"]["public"][0], "--heir-delay", str(HEIR_DELAY),
+            "--checkin-interval", "10", "--checkin-margin", "5", "--refresh-window", str(REFRESH_WINDOW),
+            "--min-heir-delay", str(MIN_HEIR_DELAY))
+    descriptor = satkeep("export")
     print(f"Exported descriptor, with a beneficiary: {descriptor}")
-    twofold_receive = [twofold("address") for _ in range(5)]
-    plain_dir = os.path.join(WORK, "twofold-plain")
-    twofold("--wallet-dir", plain_dir, "create", *keys)
-    plain_descriptor = twofold("--wallet-dir", plain_dir, "export")
+    satkeep_receive = [satkeep("address") for _ in range(5)]
+    plain_dir = os.path.join(WORK, "satkeep-plain")
+    satkeep("--wallet-dir", plain_dir, "create", *keys)
+    plain_descriptor = satkeep("--wallet-dir", plain_dir, "export")
     print(f"Exported descriptor, no beneficiary: {plain_descriptor}")
-    plain_receive = [twofold("--wallet-dir", plain_dir, "address") for _ in range(5)]
+    plain_receive = [satkeep("--wallet-dir", plain_dir, "address") for _ in range(5)]
 
     # --- Bitcoin Core wallets: watch-only and signers, for each shape ----------
     receive_desc, change_desc, signers = core_wallets("", holders, descriptor)
     plain_receive_desc, _, plain_signers = core_wallets("plain-", holders, plain_descriptor)
-    check("Bitcoin Core's keys, made from each phrase by Python's standard library, match Twofold's public keys", True)
+    check("Bitcoin Core's keys, made from each phrase by Python's standard library, match Satkeep's public keys", True)
 
     def core_psbt(watch, outpoint_, sequence=None):
         txid_, vout = outpoint_.split(":")
@@ -387,14 +393,14 @@ def main():
     try:
         wait_for_liana_sync()
         print(f"Liana {liana('getinfo')['version']} running on the exported descriptor")
-        check("A. Liana v15.0 imports the descriptor with a beneficiary from `twofold export`", True)
+        check("A. Liana v15.0 imports the descriptor with a beneficiary from `satkeep export`", True)
 
         listed = liana("listaddresses", 0, 5)["addresses"]
         liana_receive = [a["receive"] for a in listed]
         liana_change = [a["change"] for a in listed]
         core_receive = cli_json("deriveaddresses", receive_desc, "[0,4]")
         core_change = cli_json("deriveaddresses", change_desc, "[0,4]")
-        check("A. Liana's first 5 receive addresses match `twofold address`", liana_receive == twofold_receive)
+        check("A. Liana's first 5 receive addresses match `satkeep address`", liana_receive == satkeep_receive)
         check("A. Liana's first 5 receive and change addresses match Bitcoin Core's", (liana_receive, liana_change) == (core_receive, core_change))
 
         # --- Fund: one block reward to Liana, one to plain Savings, matured ----
@@ -488,7 +494,7 @@ def main():
     check("B. The export has the form Sparrow's own descriptor parser imports (checked against its source, not run)",
           sparrow_reads(plain_descriptor))
     core_plain = cli_json("deriveaddresses", plain_receive_desc, "[0,4]")
-    check("B. Bitcoin Core derives the same first 5 addresses as `twofold address`", core_plain == plain_receive)
+    check("B. Bitcoin Core derives the same first 5 addresses as `satkeep address`", core_plain == plain_receive)
 
     try:
         plain_coin = next(u for u in cli_json("listunspent", "1", "9999999", "[]", "true", wallet="plain-watch"))

@@ -12,20 +12,20 @@ use bdk_wallet::descriptor::policy::Condition;
 use bdk_wallet::{KeychainKind, Wallet};
 use libfuzzer_sys::arbitrary::{Result as ArbResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use twofold_savings::bitcoin::block::{Header, Version as BlockVersion};
-use twofold_savings::bitcoin::hashes::Hash;
-use twofold_savings::bitcoin::key::Secp256k1;
-use twofold_savings::bitcoin::psbt::Psbt;
-use twofold_savings::bitcoin::secp256k1::XOnlyPublicKey;
-use twofold_savings::bitcoin::transaction::Version;
-use twofold_savings::bitcoin::{
+use satkeep_savings::bitcoin::block::{Header, Version as BlockVersion};
+use satkeep_savings::bitcoin::hashes::Hash;
+use satkeep_savings::bitcoin::key::Secp256k1;
+use satkeep_savings::bitcoin::psbt::Psbt;
+use satkeep_savings::bitcoin::secp256k1::XOnlyPublicKey;
+use satkeep_savings::bitcoin::transaction::Version;
+use satkeep_savings::bitcoin::{
     Address, Amount, Block, CompactTarget, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn,
     TxMerkleNode, TxOut, Txid, absolute,
 };
-use twofold_savings::checkin::{self, build_checkin, check_checkin};
-use twofold_savings::migrate;
-use twofold_savings::spend::{self, Path};
-use twofold_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
+use satkeep_savings::checkin::{self, build_checkin, check_checkin};
+use satkeep_savings::migrate;
+use satkeep_savings::spend::{self, Path};
+use satkeep_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
 
 struct Fixture {
     wallet: Wallet,

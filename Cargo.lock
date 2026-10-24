@@ -839,6 +839,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "satkeep-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bdk_bitcoind_rpc",
+ "bdk_wallet",
+ "clap",
+ "satkeep-savings",
+ "satkeep-testenv",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
+name = "satkeep-savings"
+version = "0.1.0"
+dependencies = [
+ "bdk_bitcoind_rpc",
+ "bdk_wallet",
+ "bip39",
+ "chacha20poly1305",
+ "hkdf",
+ "rand",
+ "satkeep-testenv",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "satkeep-testenv"
+version = "0.1.0"
+dependencies = [
+ "bdk_bitcoind_rpc",
+ "bdk_wallet",
+ "corepc-node",
+ "serde_json",
+]
+
+[[package]]
 name = "secp256k1"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -997,49 +1040,6 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
-
-[[package]]
-name = "twofold-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bdk_bitcoind_rpc",
- "bdk_wallet",
- "clap",
- "serde",
- "serde_json",
- "tempfile",
- "twofold-savings",
- "twofold-testenv",
- "zeroize",
-]
-
-[[package]]
-name = "twofold-savings"
-version = "0.1.0"
-dependencies = [
- "bdk_bitcoind_rpc",
- "bdk_wallet",
- "bip39",
- "chacha20poly1305",
- "hkdf",
- "rand",
- "serde_json",
- "sha2",
- "thiserror",
- "twofold-testenv",
- "zeroize",
-]
-
-[[package]]
-name = "twofold-testenv"
-version = "0.1.0"
-dependencies = [
- "bdk_bitcoind_rpc",
- "bdk_wallet",
- "corepc-node",
- "serde_json",
-]
 
 [[package]]
 name = "typenum"

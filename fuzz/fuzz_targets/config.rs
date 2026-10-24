@@ -6,7 +6,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use twofold_cli::wallet_dir::Config;
+use satkeep_cli::wallet_dir::Config;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else { return };

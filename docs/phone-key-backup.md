@@ -2,14 +2,14 @@
 
 **Status:** research approved (decisions D1–D7, section 8), then updated for master brief v3.8. The prototype in section 9 is built in the same PR as this document.
 
-The requirements come from the master brief v3.8 (private repo `brent472/twofold-private`):
+The requirements come from the master brief v3.8 (private repo `brent472/satkeep-private`):
 - Section 04, *Phone key backup* and *Threats to address*
 - Section 13, the two open decisions on the backup
 - the Section 19 screens: *Onboarding: back up your phone key*, *Restore a wallet*, *Protection*, *Recover my account* and *Settings*
 
 This document doesn't reproduce the brief's text. Where it says a screen "promises" or "shows" something, it paraphrases what the copy requires the design to do.
 
-Everything here is on test networks only, like the rest of Twofold. Sources are linked inline. Anything marked **unconfirmed** wasn't verified against a primary source; treat it as a lead, not a fact.
+Everything here is on test networks only, like the rest of Satkeep. Sources are linked inline. Anything marked **unconfirmed** wasn't verified against a primary source; treat it as a lead, not a fact.
 
 ## Contents
 
@@ -31,7 +31,7 @@ From the brief, and from what the screen copy commits us to:
 | --- | --- | --- |
 | R1 | The phone key (its 12-word BIP39 phrase) is encrypted on the phone, and the ciphertext is stored in the person's personal cloud account (iCloud on iPhone, Google Drive on Android). There's nothing to write down in the main flow. | Section 04; backup onboarding screen |
 | R2 | The cloud copy alone reveals nothing. Unlocking it needs the security device (the "second key"). | Section 04; backup onboarding screen |
-| R3 | Twofold's servers (the helper) store neither the backup nor **even a fragment** of what unlocks it. So restoring someone's phone key is impossible for them. | Section 04; backup onboarding screen |
+| R3 | Satkeep's servers (the helper) store neither the backup nor **even a fragment** of what unlocks it. So restoring someone's phone key is impossible for them. | Section 04; backup onboarding screen |
 | R4 | Restore on a new phone needs only the cloud login used before plus the second key, with **no delay**, and it brings back both wallets. | *Restore a wallet*; *Recover my account*, lost phone |
 | R5 | Before unlocking, the restore screen shows the date of the backup it found. | *Restore a wallet* |
 | R6 | The wrong second key gets its own clear error. | *Restore a wallet* |
@@ -43,7 +43,7 @@ From the brief, and from what the screen copy commits us to:
 | R12 | An advanced, opt-in export shows the 12 words, from Settings only. | Section 04; *Settings*, Recovery kit |
 | R13 | Unlocking the backup or signing must require the security device's own PIN or fingerprint, since a taken-over cloud account plus a stolen device would otherwise add up to 2 of 3. | Section 04, *Threats* |
 | R14 | It must cover the four threats asked for: cloud account takeover, a stolen device, malware on the phone during restore, and a stale backup after the device is replaced. | Work queue |
-| R15 | If Twofold disappears, the owner can still restore from a file they can reach without our app (an exit kit holding the locked backup) plus the second key, with an open-source tool. | Owner's instruction for this PR; see section 6.2 |
+| R15 | If Satkeep disappears, the owner can still restore from a file they can reach without our app (an exit kit holding the locked backup) plus the second key, with an open-source tool. | Owner's instruction for this PR; see section 6.2 |
 
 R11 is easy: the backup is a few hundred bytes.
 
@@ -81,7 +81,7 @@ payload:
 
 **How the pieces fit:**
 - **Data key:** a fresh random 32-byte key for every backup. It encrypts the payload, and it's what gets "locked" with each unlock path.
-- **KEK:** each lock entry wraps the data key under a KEK. The KEK is `HKDF-SHA256(secret from the device, salt = wallet id, info = "twofold/phone-key-backup/v1" ‖ device id ‖ method)`.
+- **KEK:** each lock entry wraps the data key under a KEK. The KEK is `HKDF-SHA256(secret from the device, salt = wallet id, info = "satkeep/phone-key-backup/v1" ‖ device id ‖ method)`.
   - This binds every wrap to this wallet, this device and this format, which Bitkey's own construction doesn't do ([`ssb.rs`](https://raw.githubusercontent.com/proto-at-block/bitkey/main/core/crypto/src/ssb.rs) uses an empty info and no associated data).
 - **Associated data:** the whole header is authenticated, so changing the date, the device id or a lock entry makes decryption fail.
 
@@ -134,8 +134,8 @@ There are four ways a device can do this:
 | --- | --- | --- |
 | **(a) Device-side encrypt/decrypt** | e.g. Trezor's [SLIP-0011 CipherKeyValue](https://github.com/satoshilabs/slips/blob/master/slip-0011.md): an AES key derived on the device from a path and a label | Clean: the output isn't something that's ever published |
 | **(b) ECDH** | The device multiplies a host-supplied public key by its private key ([SLIP-0017](https://github.com/satoshilabs/slips/blob/master/slip-0017.md)) | Clean; the device confirms on screen |
-| **(c) A deterministic message signature fed into HKDF** | Sign a fixed, Twofold-specific message with RFC 6979 ECDSA | Works widely but has real caveats (3.2) |
-| **(d) Wrapping keys on a custom card** | Seal/unseal (Bitkey), or a FIDO `hmac-secret`-style secret | What the Twofold card should do (3.3) |
+| **(c) A deterministic message signature fed into HKDF** | Sign a fixed, Satkeep-specific message with RFC 6979 ECDSA | Works widely but has real caveats (3.2) |
+| **(d) Wrapping keys on a custom card** | Seal/unseal (Bitkey), or a FIDO `hmac-secret`-style secret | What the Satkeep card should do (3.3) |
 
 ### 3.2 The survey
 
@@ -143,8 +143,8 @@ Verdicts are from vendor docs, specs and firmware source. **No hardware was test
 
 | Device | Mechanism | On-device check | Phone transport | Verdict |
 | --- | --- | --- | --- | --- |
-| **Old phone or tablet with the Twofold app** | (b) or (d): a non-exportable P-256 key in the Secure Enclave or Android Keystore, needing biometrics, used for ECDH ([Apple](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave), [Android](https://developer.android.com/privacy-and-security/keystore)) | Its own biometric or passcode | Network, between our own apps | **Works.** Our code at both ends. |
-| **Future Twofold card** | (d) Design it for this: FIDO CTAP2 [`hmac-secret`](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-errata-20220621.html#sctn-hmac-secret-extension) / PRF, or HPKE ([RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)) decapsulation, behind the fingerprint | Fingerprint, with retry limits | NFC | **Works by design** (3.3) |
+| **Old phone or tablet with the Satkeep app** | (b) or (d): a non-exportable P-256 key in the Secure Enclave or Android Keystore, needing biometrics, used for ECDH ([Apple](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave), [Android](https://developer.android.com/privacy-and-security/keystore)) | Its own biometric or passcode | Network, between our own apps | **Works.** Our code at both ends. |
+| **Future Satkeep card** | (d) Design it for this: FIDO CTAP2 [`hmac-secret`](https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-errata-20220621.html#sctn-hmac-secret-extension) / PRF, or HPKE ([RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)) decapsulation, behind the fingerprint | Fingerprint, with retry limits | NFC | **Works by design** (3.3) |
 | **Trezor Safe 7** | (a) CipherKeyValue with `ask_on_encrypt`/`ask_on_decrypt` set, on a dedicated path and label ([source](https://github.com/trezor/trezor-firmware/blob/main/core/src/apps/misc/cipher_key_value.py)); (b) as a fallback | PIN; confirms the label on screen | Bluetooth on iOS and Android ([Trezor](https://trezor.io/guides/trezor-devices/trezor-fundamentals/trezor-bluetooth-connections)) | **Works with caveats:** whether a third-party app can pair over Trezor's Bluetooth protocol and make this call is **unconfirmed** |
 | **Trezor Model One, Model T, Safe 3, Safe 5** | (a), as above ([Model One](https://github.com/trezor/trezor-firmware/blob/main/legacy/firmware/fsm_msg_crypto.h)) | PIN | USB only: works on Android, not on iPhone | **Works with caveats:** Android only |
 | **Blockstream Jade / Jade Plus** | (c) `sign_message` without anti-exfil (RFC 6979); or BIP-85 entropy encrypted to the phone ([Jade API](https://github.com/Blockstream/Jade/blob/master/docs/index.rst)) | PIN; confirms | Bluetooth on iOS and Android; USB on Android | **Works with caveats:** unlocking a Jade goes through its blind PIN server (Blockstream's by default), so restore needs the network. Its ECDH call is P-256 for ssh/gpg identities only, so it doesn't fit. |
@@ -158,7 +158,7 @@ Verdicts are from vendor docs, specs and firmware source. **No hardware was test
 **Mechanism (c), a signature used as a key, carries risks that (a), (b) and (d) don't:**
 - **It's built to be published.** A Bitcoin signed message is meant for proving ownership, so anyone who ever sees that one signature can open the backup.
   - Use a path that's used for nothing else.
-  - Use an unmistakable message, e.g. "Twofold phone key backup unlock v1, wallet ‹id›", and never sign it for any other reason.
+  - Use an unmistakable message, e.g. "Satkeep phone key backup unlock v1, wallet ‹id›", and never sign it for any other reason.
 - **Malware with the unlocked device can ask for it.** On-device confirmation is the only defence, and the message text has to make the request obvious.
 - **Repeatability is today's firmware behaviour, not a promise.** A firmware update that randomises signatures would lock the backup for good. Mitigations:
   - At setup: sign twice and compare; verify the signature against the known public key and normalise it to low-S compact form before HKDF.
@@ -168,11 +168,11 @@ Verdicts are from vendor docs, specs and firmware source. **No hardware was test
 
 **What we do for devices that can't** (SATSCARD, Bitkey, and in practice TAPSIGNER if we judge it too weak):
 - The device can still be a Savings key. It just can't lock the backup.
-- At setup, the app says so and offers the options that can lock it: an old phone or tablet, or the Twofold card.
+- At setup, the app says so and offers the options that can lock it: an old phone or tablet, or the Satkeep card.
 - If the person has neither, the backup isn't made, as with no second key (R10).
 - Section 19 has the copy for this case since v3.8.
 
-### 3.3 The Twofold card
+### 3.3 The Satkeep card
 
 The survey points to two good options:
 - **FIDO CTAP2 `hmac-secret` (WebAuthn PRF).** The card keeps a per-credential secret and returns HMAC-SHA-256(secret, salt) only after user verification. It's repeatable, and it's a published standard with phone support ([Yubico on PRF](https://developers.yubico.com/WebAuthn/Concepts/PRF_Extension/); whether iOS exposes it for NFC keys is **unconfirmed**).
@@ -230,7 +230,7 @@ This is Bitkey's model ([recovery design](https://bitkey.world/blog/sharing-our-
 
 The backup is kept in **two places**, holding the same locked bytes:
 - **the app's own copy**, which the app reads for everyday restores;
-- **an exit kit**, a normal file in the owner's visible cloud drive, which works even if Twofold is gone.
+- **an exit kit**, a normal file in the owner's visible cloud drive, which works even if Satkeep is gone.
 
 ### 6.1 The app's own copy
 
@@ -246,12 +246,12 @@ The backup is kept in **two places**, holding the same locked bytes:
 **Why the app's copy isn't enough.**
 - **iPhone:** a CloudKit private database is read through the app's own CloudKit container, so only apps with that container's entitlement can read it ([Apple](https://developer.apple.com/documentation/cloudkit/ckcontainer)).
 - **Android:** Drive's `appDataFolder` is readable only by the app that created it ([Google](https://developers.google.com/workspace/drive/api/guides/appdata)).
-- **So if Twofold disappeared** (the app pulled from the stores, our developer accounts closed), no outside tool could fetch that copy, and the owner couldn't recover Spending. They'd also lose PHONE, one of their three Savings keys.
+- **So if Satkeep disappeared** (the app pulled from the stores, our developer accounts closed), no outside tool could fetch that copy, and the owner couldn't recover Spending. They'd also lose PHONE, one of their three Savings keys.
 
 **The exit kit**, following Bitkey's Emergency Exit Kit (a PDF saved to the person's personal iCloud or Google Drive, holding the app key encrypted by the hardware, plus a standalone way to use it; [Bitkey](https://support.bitkey.world/hc/en-us/articles/24395170222868)):
-- **A normal file in the owner's visible cloud drive.** On iPhone, iCloud Drive's Twofold folder, shown in the Files app (the app's iCloud container with its Documents folder made public, `NSUbiquitousContainerIsDocumentScopePublic`; [Apple](https://developer.apple.com/documentation/bundleresources/information-property-list/nsubiquitouscontainers)). On Android, a regular file in Google Drive, made through the `drive.file` permission, so the app can still update it. The owner can open, download or copy it with any device or browser.
+- **A normal file in the owner's visible cloud drive.** On iPhone, iCloud Drive's Satkeep folder, shown in the Files app (the app's iCloud container with its Documents folder made public, `NSUbiquitousContainerIsDocumentScopePublic`; [Apple](https://developer.apple.com/documentation/bundleresources/information-property-list/nsubiquitouscontainers)). On Android, a regular file in Google Drive, made through the `drive.file` permission, so the app can still update it. The owner can open, download or copy it with any device or browser.
 - **It holds a copy of the locked backup itself**: the exact bytes of section 2.1, the same lock entries, the same encryption. It also has plain instructions, and the public wallet setup the restore tool needs to rebuild the wallets.
-- **The restore tool needs only this file and the second key.** No Twofold app, account, server or helper, and no access to the app's private storage. That tool is the next research item, `research/restore-tool`.
+- **The restore tool needs only this file and the second key.** No Satkeep app, account, server or helper, and no access to the app's private storage. That tool is the next research item, `research/restore-tool`.
 
 **What that means for security and upkeep:**
 
@@ -337,7 +337,7 @@ This is decision D3, and v3.8 adopts it. A helper-held revocable share would hav
   - Marking views as sensitive to accessibility (API 34).
   - Play Integrity's app-access risk verdict, to warn when apps that capture the screen or misuse accessibility are running ([Android](https://developer.android.com/google/play/integrity/overview)).
 - **iOS:** App Attest, so the helper knows it's talking to a real copy of the app. Its keys don't survive reinstall or restore, which also signals a new install for the alert ([Apple](https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity)).
-- **Any device that shows its request on its own screen** (Trezor, Jade, Coldcard, BitBox02, Ledger) stops malware from quietly using it for something else. The message must say plainly that it's a Twofold backup unlock.
+- **Any device that shows its request on its own screen** (Trezor, Jade, Coldcard, BitBox02, Ledger) stops malware from quietly using it for something else. The message must say plainly that it's a Satkeep backup unlock.
 
 **What this can't do:** none of it stops malware that already controls the new phone. The written backup in Settings is the same risk: the copy already warns against typing or photographing the words.
 
@@ -360,7 +360,7 @@ All seven were approved as recommended, except **D2, which brief v3.8 superseded
 
 | # | Decision | Options | Recommendation (approved unless noted) |
 | --- | --- | --- | --- |
-| **D1** | Which devices to support at launch for locking the backup | Old phone/tablet and the Twofold card (works); Trezor and Ledger (works with caveats); Coldcard, Jade, BitBox02 (works with caveats, mechanism (c)); TAPSIGNER (weak) | Start with **old phone/tablet** and **Trezor (CipherKeyValue)**, the cleanest mechanisms. Then add message-signing devices with the setup and check-in tests in 3.2. Leave TAPSIGNER out of backup locking, and let the card be designed for it. |
+| **D1** | Which devices to support at launch for locking the backup | Old phone/tablet and the Satkeep card (works); Trezor and Ledger (works with caveats); Coldcard, Jade, BitBox02 (works with caveats, mechanism (c)); TAPSIGNER (weak) | Start with **old phone/tablet** and **Trezor (CipherKeyValue)**, the cleanest mechanisms. Then add message-signing devices with the setup and check-in tests in 3.2. Leave TAPSIGNER out of backup locking, and let the card be designed for it. |
 | **D2** | The rule that our servers hold neither the backup nor its unlock key (R3): may the helper hold **half** of a key, alone useless, for the lost-both path? | Yes, option A / no, option B or C | **Superseded by v3.8:** the contact unlocks right away, the helper holds no key part, and large Savings payments wait after a restore. *(Originally recommended: yes, option A.)* It's the only enforced wait. The helper still never holds the backup or anything that unlocks it alone. |
 | **D3** | What replacing a lost or stolen second key does | Re-encrypt only / re-encrypt + rotate the phone key in the same Savings move / helper-held revocable share | **Re-encrypt + rotate**, one transaction, one fee. Re-encrypt only for an upgrade with the old device in hand. |
 | **D4** | Copy: the backup onboarding screen says only the second key unlocks the cloud copy | Keep R9 (contact-assisted unlock) and adjust the copy / keep the copy and drop R9 for the backup (option C) | Keep R9 and adjust the copy. That's your edit in Section 19; I won't change product wording. |
@@ -370,7 +370,7 @@ All seven were approved as recommended, except **D2, which brief v3.8 superseded
 
 ## 9. Prototype
 
-Built as planned, as the `backup` module in [`twofold-savings`](../crates/twofold-savings/README.md#phone-key-backup-prototype), on test networks only. One addition: a fuzz target (`backup_file`), because the backup file is outside input once it comes back from the cloud.
+Built as planned, as the `backup` module in [`satkeep-savings`](../crates/satkeep-savings/README.md#phone-key-backup-prototype), on test networks only. One addition: a fuzz target (`backup_file`), because the backup file is outside input once it comes back from the cloud.
 
 The plan, as approved:
 

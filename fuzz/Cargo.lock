@@ -765,6 +765,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "satkeep-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bdk_bitcoind_rpc",
+ "bdk_wallet",
+ "clap",
+ "satkeep-savings",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "satkeep-fuzz"
+version = "0.0.0"
+dependencies = [
+ "bdk_wallet",
+ "libfuzzer-sys",
+ "satkeep-cli",
+ "satkeep-savings",
+ "serde_json",
+]
+
+[[package]]
+name = "satkeep-savings"
+version = "0.1.0"
+dependencies = [
+ "bdk_wallet",
+ "bip39",
+ "chacha20poly1305",
+ "hkdf",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "secp256k1"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,44 +948,6 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
-
-[[package]]
-name = "twofold-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bdk_bitcoind_rpc",
- "bdk_wallet",
- "clap",
- "serde",
- "serde_json",
- "twofold-savings",
- "zeroize",
-]
-
-[[package]]
-name = "twofold-fuzz"
-version = "0.0.0"
-dependencies = [
- "bdk_wallet",
- "libfuzzer-sys",
- "serde_json",
- "twofold-cli",
- "twofold-savings",
-]
-
-[[package]]
-name = "twofold-savings"
-version = "0.1.0"
-dependencies = [
- "bdk_wallet",
- "bip39",
- "chacha20poly1305",
- "hkdf",
- "sha2",
- "thiserror",
- "zeroize",
-]
 
 [[package]]
 name = "typenum"
