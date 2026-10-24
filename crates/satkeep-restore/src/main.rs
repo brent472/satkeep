@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand};
 use satkeep_backup::bip39::Language;
 use satkeep_backup::kit::Kit;
 use satkeep_backup::zeroize::Zeroizing;
-use satkeep_restore::{bitcoind, describe, read_kit, unlock, wallets};
+use satkeep_restore::{bitcoind, describe, is_taproot, read_kit, routes, unlock, wallets};
 
 #[derive(Parser)]
 #[command(name = "satkeep-restore", version, about = "Restore Satkeep Savings from an exit kit and the second key. Test networks only.")]
@@ -45,6 +45,20 @@ enum Command {
         /// importing it. The file holds the phone key: keep it safe.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Unlock the kit and write Savings with no beneficiary (the plain 2 of 3)
+    /// to a file Sparrow imports as a wallet (its output-descriptor import).
+    /// Savings with a beneficiary goes to Liana instead.
+    Sparrow {
+        #[command(flatten)]
+        unlock: UnlockArgs,
+        /// The new file for Sparrow. It holds only the public descriptor.
+        #[arg(long)]
+        out: PathBuf,
+        /// Also print the phone key's 12 words, to add in Sparrow as a
+        /// keystore. Anyone who sees them holds the phone key.
+        #[arg(long)]
+        show_phrase: bool,
     },
     /// The heir's route: with HEIR's key and the kit's plain wallet setup,
     /// and no second key, show the Savings wallets the heir can claim, for
@@ -144,9 +158,50 @@ fn run(cli: Cli) -> Result<()> {
                     bitcoind::import(&client, &url, &cookie, &name, &passphrase, &imports)?;
                     println!("Imported into a new Bitcoin Core wallet, {name:?}, which holds the phone key.");
                     println!("The wallet is encrypted: Bitcoin Core needs its passphrase (walletpassphrase) to sign as PHONE.");
-                    println!("Spending Savings still needs a second key: sign the PSBT with DEVICE, then broadcast.");
                 }
             }
+            print!("{}", routes(&unlocked.setup));
+            println!(
+                "\nNext: to spend, have Bitcoin Core sign as PHONE (after walletpassphrase), add DEVICE's signature, \
+                 then broadcast."
+            );
+        }
+        Command::Sparrow { unlock: args, out, show_phrase } => {
+            let kit = read_kit(&args.kit)?;
+            let unlocked = unlock_with(&kit, &args)?;
+            print!("Unlocked. The phone key is PHONE in every Savings wallet:\n{}", wallets(&unlocked.setup));
+            let plain: Vec<(usize, &str)> = unlocked
+                .setup
+                .savings
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| !is_taproot(&w.descriptor))
+                .map(|(i, w)| (i + 1, w.descriptor.as_str()))
+                .collect();
+            if plain.is_empty() {
+                bail!(
+                    "Sparrow is for Savings with no beneficiary, and this kit has none. Savings with a beneficiary goes \
+                     to Liana: `satkeep-restore liana`."
+                );
+            }
+            let mut written = Vec::new();
+            for (n, (number, descriptor)) in plain.iter().enumerate() {
+                let path = if plain.len() == 1 { out.clone() } else { numbered(&out, n + 1) };
+                satkeep_restore::write_new(&path, &format!("{descriptor}\n"))?;
+                println!("\nSavings wallet {number}: wrote its descriptor for Sparrow to {}.", path.display());
+                written.push(path);
+            }
+            for (i, wallet) in unlocked.setup.savings.iter().enumerate() {
+                if is_taproot(&wallet.descriptor) {
+                    println!("Savings wallet {}: it has a beneficiary, so it goes to Liana (`satkeep-restore liana`).", i + 1);
+                }
+            }
+            show_phrase_if(show_phrase, &unlocked, "for Sparrow, as a keystore");
+            print!("{}", routes(&unlocked.setup));
+            println!(
+                "\nNext: open Sparrow and import {} as a new wallet (Import Wallet, Output Descriptor).",
+                written[0].display()
+            );
         }
         Command::Heir { heir: args } => heir(&args)?,
         Command::Liana { unlock: args, show_phrase } => {
@@ -158,23 +213,50 @@ fn run(cli: Cli) -> Result<()> {
                     println!("\nSavings wallet {}: Liana's main descriptor:\n{}", i + 1, wallet.descriptor);
                 } else {
                     println!(
-                        "\nSavings wallet {}: Liana can't hold this shape (it needs a recovery path). Use Bitcoin Core \
-                         (`satkeep-restore core`) or Sparrow, with this descriptor:\n{}",
+                        "\nSavings wallet {}: Liana can't hold this shape (it needs a recovery path). Use Sparrow \
+                         (`satkeep-restore sparrow --out FILE`), or Bitcoin Core for experts, with this descriptor:\n{}",
                         i + 1,
                         wallet.descriptor
                     );
                 }
             }
-            if show_phrase {
-                eprintln!("warning: the phone key's 12 words follow. Anyone who sees them holds the phone key.");
-                let phrase = Zeroizing::new(unlocked.phrase.to_string());
-                println!("\nPhone key (12 words, for Liana's hot signer): {}", phrase.as_str());
+            show_phrase_if(show_phrase, &unlocked, "for Liana's hot signer");
+            print!("{}", routes(&unlocked.setup));
+            let newest = unlocked.setup.savings.last().expect("a setup has at least one Savings wallet");
+            if is_taproot(&newest.descriptor) {
+                println!(
+                    "\nNext: open Liana, create a new wallet from Savings wallet {}'s descriptor above, and add the \
+                     phone key as a hot signer.",
+                    unlocked.setup.savings.len()
+                );
             } else {
-                println!("\nFor Liana's hot signer, run again with --show-phrase to see the phone key's 12 words.");
+                println!("\nNext: run `satkeep-restore sparrow --kit FILE --out FILE` and import that file into Sparrow.");
             }
         }
     }
     Ok(())
+}
+
+/// The phone key's 12 words, only when asked for, after a warning on
+/// standard error; otherwise how to ask for them.
+fn show_phrase_if(show: bool, unlocked: &satkeep_restore::Unlocked, purpose: &str) {
+    if show {
+        eprintln!("warning: the phone key's 12 words follow. Anyone who sees them holds the phone key.");
+        let phrase = Zeroizing::new(unlocked.phrase.to_string());
+        println!("\nPhone key (12 words, {purpose}): {}", phrase.as_str());
+    } else {
+        println!("\nTo see the phone key's 12 words ({purpose}), run again with --show-phrase.");
+    }
+}
+
+/// `path` with `-n` before its extension: for more than one file.
+fn numbered(path: &std::path::Path, n: usize) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = match path.extension() {
+        Some(ext) => format!("{stem}-{n}.{}", ext.to_string_lossy()),
+        None => format!("{stem}-{n}"),
+    };
+    path.with_file_name(name)
 }
 
 /// The heir's route. Reads only the kit's plain setup: no second key, no
@@ -239,8 +321,9 @@ fn heir(args: &HeirArgs) -> Result<()> {
         println!("Liana's main descriptor (UNVERIFIED):\n{}", wallet.descriptor);
     }
     println!(
-        "\nNext: in Liana, create a wallet from that descriptor and add the heir's 12 words as a hot signer. Liana's \
-         recovery offers the coins once they're old enough."
+        "\nNext: in Liana, create a wallet from that descriptor and add the heir's 12 words as a hot signer. Once the \
+         coins are old enough, use Liana's recovery to send them to a wallet only you control, never to an address \
+         from this one: the setup is unverified."
     );
     Ok(())
 }

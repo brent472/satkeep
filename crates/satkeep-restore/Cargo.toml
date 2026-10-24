@@ -31,3 +31,8 @@ serde_json = "1.0.154"       # RPC parameters and the descriptor file
 satkeep-restore = { path = ".", features = ["simulated-device"] }
 satkeep-savings = { path = "../satkeep-savings", features = ["simulated-device"] }
 satkeep-testenv = { path = "../satkeep-testenv" }
+
+[[example]]
+# TEST ONLY: makes an exit kit for the exit drill (contrib/exit-drill).
+name = "make_test_kit"
+required-features = ["simulated-device"]

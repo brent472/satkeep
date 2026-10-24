@@ -28,6 +28,19 @@ From [run 40100414377](https://github.com/brent472/satkeep/actions/runs/40100414
 | HEIR alone at exactly 20 confirmations | ✅ | ✅ |
 | DEVICE alone, past every delay (21 confirmations) | — | ✅ refused: Core can't complete the spend. There is no card-only path. |
 
+**C. The restore tool (`satkeep-restore`)**, from [run 40127302040](https://github.com/brent472/satkeep/actions/runs/40127302040) on 2026-10-24, on a kit made by the test-only `make_test_kit` example with a simulated second key (standing in for the app):
+
+| Check | Result |
+| --- | --- |
+| `satkeep-restore liana` unlocks the kit and gives the descriptor with a beneficiary | ✅ the same as `satkeep export` |
+| A Liana on that output sees the same coins as Bitcoin Core | ✅ 4 coins |
+| `satkeep-restore sparrow` writes Savings with no beneficiary in the form Sparrow imports | ✅ the same as `satkeep export`, and it passes the Sparrow-parser check below. A format check only: Sparrow isn't run. |
+| The heir's route (`satkeep-restore heir`, HEIR's words and the kit's plain setup, no second key) | ✅ says UNVERIFIED and offers only the wallet with HEIR |
+| A Liana on the heir's route's output: HEIR alone one block early | ✅ refused: *"… is not recoverable with timelock '20'"* |
+| …and HEIR alone at exactly 20 confirmations, signed by Liana's own signer | ✅ |
+
+The coin the heir claims is made in the drill with 2 of 3, so its age starts in the drill; the claim itself uses only HEIR's key, through Liana.
+
 **B. No beneficiary yet (P2WSH)**
 
 | Check | Result |

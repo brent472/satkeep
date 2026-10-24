@@ -26,6 +26,16 @@ B. Savings with no beneficiary yet: plain 2 of 3 in the standard P2WSH
   5. Bitcoin Core alone derives the same addresses, spends with 2 of 3
      keys, and refuses any single key.
 
+C. The restore tool (satkeep-restore), on a kit made with a simulated second
+   key (the test-only make_test_kit, standing in for the app):
+  6. It unlocks the kit and gives Liana the descriptor with a beneficiary,
+     and a Liana on that output sees the same coins as Bitcoin Core.
+  7. Its file for Sparrow has the form Sparrow imports (as in 4).
+  8. The heir's route: with HEIR's 12 words and the kit's plain setup, and
+     no second key, it says UNVERIFIED and offers only the wallet with HEIR.
+     A Liana on that output refuses HEIR one block early and spends with
+     HEIR alone, signed by Liana's own signer, at the heir delay.
+
 Core can't read a recovery phrase, so
      this script turns each phrase into a master key (tprv) with Python's
      standard library: BIP39 seed, then BIP32 master key. That's written
@@ -40,7 +50,9 @@ output and the whole job log, and fails if either has anything key-like
 
 Environment: BITCOIN_BIN (folder with bitcoind and bitcoin-cli), LIANAD,
 LIANA_SIGN (satkeep_sign built from Liana's source), SATKEEP
-(the satkeep binary), WORK (an empty scratch folder).
+(the satkeep binary), RESTORE (satkeep-restore, with its test-only
+simulated second key), MAKE_KIT (its test-only make_test_kit example),
+WORK (an empty scratch folder).
 """
 
 import hashlib
@@ -59,6 +71,8 @@ BIN = os.environ["BITCOIN_BIN"]
 LIANAD = os.environ["LIANAD"]
 LIANA_SIGN = os.environ["LIANA_SIGN"]
 SATKEEP = os.environ["SATKEEP"]
+RESTORE = os.environ["RESTORE"]  # satkeep-restore, built with its test-only simulated second key
+MAKE_KIT = os.environ["MAKE_KIT"]  # the test-only make_test_kit example
 WORK = os.environ["WORK"]
 
 HEIR_DELAY = 20
@@ -621,6 +635,112 @@ def main():
               not core_complete(alone), "Bitcoin Core can't complete the spend")
     except BaseException:
         diagnostics()  # while lianad still runs
+        raise
+    finally:
+        stop(lianad)
+
+    # =========================== C. The restore tool ============================
+    # A kit as the app will make it (here by the test-only make_test_kit, with a
+    # simulated second key), restored with satkeep-restore and handed to Liana
+    # and to Sparrow's format; then the heir's route through Liana.
+    setup_file = os.path.join(WORK, "setup.txt")
+    with open(setup_file, "w", newline="\n") as f:
+        f.write(
+            "satkeep wallet setup 1\nnetwork regtest\n"
+            f"savings\ndescriptor {plain_descriptor}\nbirthday 0\n"
+            f"savings\ndescriptor {descriptor}\nbirthday 0\n"
+            f"heir-delay {HEIR_DELAY}\ncheckin-interval 10\ncheckin-margin 5\nrefresh-window {REFRESH_WINDOW}\n"
+        )
+    kit, device = os.path.join(WORK, "kit.txt"), os.path.join(WORK, "device.txt")
+    code, _, err = run("make_test_kit", [MAKE_KIT, key_file("phone"), setup_file, kit, device])
+    if code != 0:
+        raise RuntimeError(f"make_test_kit failed: {err}")
+
+    def restore(*args, stdin=None):
+        # satkeep-restore never puts key material in an error (its tests check).
+        name = f"satkeep-restore {args[0]}"
+        code, out, err = run(name, [RESTORE] + list(args), stdin)
+        if code != 0:
+            raise RuntimeError(f"{name} failed: {err}")
+        return out
+
+    def line_after(out, marker):
+        lines = out.splitlines()
+        return lines[lines.index(marker) + 1] if marker in lines else None
+
+    # The second key's PIN, typed on stdin as on the device.
+    out = restore("liana", "--kit", kit, "--simulated-device", device, stdin="2468\n")
+    restored = line_after(out, "Savings wallet 2: Liana's main descriptor:")
+    check("C. satkeep-restore unlocks the kit and gives Liana the descriptor with a beneficiary", restored == descriptor)
+    lianad, LIANA_SOCKET = start_liana("liana-restored", restored)
+    try:
+        wait_for_liana_sync()
+        liana_coins = {c["outpoint"] for c in liana("listcoins")["coins"]
+                       if c.get("spend_info") is None and c.get("block_height") is not None and not c.get("is_immature")}
+        core_coins = {f"{u['txid']}:{u['vout']}" for u in cli_json("listunspent", wallet="watch")}
+        check("C. A Liana on satkeep-restore's output sees the same coins as Bitcoin Core",
+              bool(liana_coins) and liana_coins == core_coins, f"{len(liana_coins)} coins")
+    except BaseException:
+        diagnostics()
+        raise
+    finally:
+        stop(lianad)
+
+    sparrow_file = os.path.join(WORK, "sparrow.txt")
+    restore("sparrow", "--kit", kit, "--simulated-device", device, "--out", sparrow_file, stdin="2468\n")
+    with open(sparrow_file) as f:
+        for_sparrow = f.read().strip()
+    check("C. satkeep-restore sparrow writes Savings with no beneficiary in the form Sparrow imports",
+          for_sparrow == plain_descriptor and sparrow_reads(for_sparrow))
+
+    # --- The heir's route: HEIR's 12 words and the kit's plain setup, no second key
+    out = restore("heir", "--kit", kit, "--key-file", key_file("heir"))
+    heir_descriptor = line_after(out, "Liana's main descriptor (UNVERIFIED):")
+    check("C. satkeep-restore heir, with no second key, says UNVERIFIED and offers only the wallet with HEIR",
+          out.startswith("UNVERIFIED") and heir_descriptor == descriptor and "Savings wallet 1 of 2" not in out)
+    lianad, LIANA_SOCKET = start_liana("liana-heir", heir_descriptor)
+    try:
+        wait_for_liana_sync()
+        # A fresh coin for the heir to claim, so its age starts now. (Made with 2
+        # of 3, which an heir wouldn't have; only the claim is the heir's.)
+        address = liana("getnewaddress")["address"]
+        created = liana("createspend", {address: SAT // 2}, [], 2)
+        if "psbt" not in created:
+            raise RuntimeError(f"Liana couldn't create the spend: {created}")
+        psbt = created["psbt"]
+        for holder in ("phone", "helper"):
+            psbt = liana_sign(psbt, holder)
+        liana("updatespend", psbt)
+        txid = txid_of(psbt)
+        liana("broadcastspend", txid)
+        mine(1, burn)
+        wait_for_liana_sync()
+        decoded = cli_json("getrawtransaction", txid, "true", cli("getbestblockhash"))
+        coin = f"{txid}:{next(o['n'] for o in decoded['vout'] if o['scriptPubKey'].get('address') == address)}"
+        born = height()
+
+        mine(HEIR_DELAY - 2, burn)  # the coin now has HEIR_DELAY - 1 confirmations
+        wait_for_liana_sync()
+        try:
+            liana("createrecovery", burn, 2, HEIR_DELAY, [coin])
+            check("C. On the heir's route, Liana refuses HEIR one block early", False, "it built the spend")
+        except LianaError as e:
+            check("C. On the heir's route, Liana refuses HEIR one block early", True, f'"{e}"')
+        mine(1, burn)
+        wait_for_liana_sync()
+        psbt = liana("createrecovery", burn, 2, HEIR_DELAY, [coin])["psbt"]
+        psbt = liana_sign(psbt, "heir")
+        liana("updatespend", psbt)
+        claim = txid_of(psbt)
+        liana("broadcastspend", claim)
+        mine(1, burn)
+        wait_for_liana_sync()
+        check(f"C. On the heir's route, Liana spends with HEIR alone at exactly {HEIR_DELAY} confirmations "
+              "(signed by Liana's HotSigner)",
+              height() - born == HEIR_DELAY and mined_in_tip(claim) and describe_spend(claim) == (HEIR_DELAY, 3),
+              f"txid {claim}")
+    except BaseException:
+        diagnostics()
         raise
     finally:
         stop(lianad)
