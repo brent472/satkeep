@@ -98,9 +98,10 @@ Every pull request runs [CI](.github/workflows/ci.yml):
 - `cargo deny check`
 - a 60-second run of each fuzz target in [`fuzz/`](fuzz/)
 
-Three checks run by hand:
+The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core. It runs every week, and on every pull request that touches the Savings library, the CLI, the drill or the dependencies.
+
+Two checks run by hand:
 - [Fuzz (long)](.github/workflows/fuzz-long.yml) fuzzes each target for longer.
-- The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core.
 - The [signet demo](docs/signet-demo.md) spends every allowed path on signet ([`contrib/signet-demo/demo.ps1`](contrib/signet-demo/demo.ps1)).
 
 The full-length 61,320-block test runs locally: `cargo test -- --include-ignored`.

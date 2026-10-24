@@ -5,6 +5,28 @@ name: Exit drill
 
 on:
   workflow_dispatch:
+  # Weekly, so a change elsewhere (or a new runner image) can't leave it
+  # broken unnoticed, as happened after the minimum heir delay and the
+  # refresh window were added.
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  # Any PR that changes what the drill runs: the wallet rules, the CLI that
+  # makes the keys and descriptors, the drill itself, or the dependencies.
+  # No secrets are used, and fork PRs get a read-only token.
+  pull_request:
+    paths:
+      - "crates/satkeep-savings/**"
+      - "crates/satkeep-cli/**"
+      - "contrib/exit-drill/**"
+      - ".github/exit-drill/**"
+      - ".github/workflows/exit-drill.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+# A newer push to the same PR replaces a drill still running.
+concurrency:
+  group: exit-drill-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
