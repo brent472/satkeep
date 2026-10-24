@@ -8,6 +8,8 @@ You use your phone for everyday spending. For savings, moving money takes two of
 
 You can replace the helper anytime, and if Satkeep ever disappeared you could still get your bitcoin out with free, open-source tools. Down the road, Satkeep also lets you plan who inherits your bitcoin, so your family isn't locked out if something happens to you.
 
+![Satkeep brand sheet: the visual master](docs/brand/SATKEEP_brand_sheet.png)
+
 ## Status
 
 Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on test bitcoin (regtest and signet) before any app work. Nothing here touches real bitcoin.
@@ -77,7 +79,7 @@ The exact descriptors, and the tests for every path, are in [`crates/satkeep-sav
 | [`crates/satkeep-backup`](crates/satkeep-backup/README.md) | Those formats in code, shared by the app side and the restore tool |
 | [`crates/satkeep-savings`](crates/satkeep-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/satkeep-cli`](crates/satkeep-cli/README.md) | `satkeep`, a developer command-line tool for Savings on test networks |
-| [`docs/design.md`](docs/design.md) | Design references: screens, type and color |
+| [`docs/design.md`](docs/design.md) | Design references: the brand sheet (the visual master), screens, type and color |
 | [`CLAUDE.md`](CLAUDE.md) | Ground rules for anyone (or any AI assistant) working in this repo |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability (privately, through GitHub) |
 
