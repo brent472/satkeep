@@ -74,7 +74,9 @@ struct UnlockArgs {
 fn main() -> ExitCode {
     // Before parsing: an argument holding a key or a phrase is refused and
     // never repeated (the parser would quote an unexpected argument).
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // args_os, not args: args() panics on an argument that isn't valid
+    // text, and the panic message would print it whole.
+    let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if looks_like_a_key(&args) {
         eprintln!(
             "error: an argument looks like a private key or a recovery phrase. This tool never takes keys on the \
@@ -169,7 +171,12 @@ fn simulated_device(path: &std::path::Path) -> Result<satkeep_backup::SimulatedD
     let secret_hex = lines.next().context("the simulated device file has no secret")?.trim();
     let pin = lines.next().context("the simulated device file has no PIN")?.trim();
     let mut secret = [0u8; 32];
-    anyhow::ensure!(secret_hex.len() == 64, "the simulated device's secret isn't 64 hex digits");
+    // Checked before slicing: a non-ASCII character would make the slice
+    // panic, and the panic message would print the secret.
+    anyhow::ensure!(
+        secret_hex.len() == 64 && secret_hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "the simulated device's secret isn't 64 hex digits"
+    );
     for (i, byte) in secret.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&secret_hex[2 * i..2 * i + 2], 16).context("the simulated device's secret isn't hex")?;
     }
@@ -183,8 +190,13 @@ fn simulated_device(path: &std::path::Path) -> Result<satkeep_backup::SimulatedD
     Ok(device)
 }
 
-/// An argument holding an extended private key, or 12 BIP39 words in a row
-/// across the arguments.
+/// BIP39 words in a row that count as (part of) a phrase. Lower than 12 so a
+/// phrase with a typo, or cut short, is still caught; no path or option this
+/// tool takes has six BIP39 words in a row.
+const PHRASE_RUN: usize = 6;
+
+/// An argument holding an extended private key, or PHRASE_RUN BIP39 words
+/// in a row across the arguments.
 fn looks_like_a_key(args: &[String]) -> bool {
     if args.iter().any(|a| a.contains("tprv") || a.contains("xprv")) {
         return true;
@@ -192,7 +204,7 @@ fn looks_like_a_key(args: &[String]) -> bool {
     let mut run = 0;
     for word in args.join(" ").split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty()) {
         run = if Language::English.find_word(&word.to_ascii_lowercase()).is_some() { run + 1 } else { 0 };
-        if run == 12 {
+        if run == PHRASE_RUN {
             return true;
         }
     }

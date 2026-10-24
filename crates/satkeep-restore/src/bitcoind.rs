@@ -53,6 +53,7 @@ pub fn default_cookie(network: Network) -> PathBuf {
 /// Connects to the node at `url` and checks it's on `network`. Refuses
 /// mainnet outright.
 pub fn connect(url: &str, cookie: &Path, network: Network) -> Result<Client> {
+    ensure_local(url)?;
     let client = client(url, cookie)?;
     let info: Value = client.call("getblockchaininfo", &[]).with_context(|| format!("asking the node at {url} which chain it's on"))?;
     let chain = info["chain"].as_str().unwrap_or("unknown");
@@ -63,6 +64,21 @@ pub fn connect(url: &str, cookie: &Path, network: Network) -> Result<Client> {
         bail!("the node at {url} is on {chain}, but this wallet is on {}", network.as_str());
     }
     Ok(client)
+}
+
+/// The import sends PHONE's private key over plain HTTP, so only to a node
+/// on this machine: `http://127.0.0.1`, `http://localhost` or `http://[::1]`,
+/// with any port.
+pub fn ensure_local(url: &str) -> Result<()> {
+    let rest = url.strip_prefix("http://").unwrap_or("");
+    let host = if rest.starts_with("[::1]") { "[::1]" } else { rest.split([':', '/']).next().unwrap_or("") };
+    let after = &rest[host.len()..];
+    ensure!(
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]") && (after.is_empty() || after.starts_with(':') || after.starts_with('/')),
+        "--rpc-url must be a node on this machine (http://127.0.0.1, http://localhost or http://[::1]): the import sends the \
+         phone key over plain HTTP"
+    );
+    Ok(())
 }
 
 fn client(url: &str, cookie: &Path) -> Result<Client> {
@@ -130,8 +146,13 @@ pub fn write_file(path: &Path, imports: &[Import]) -> Result<()> {
         .open(path)
         .with_context(|| format!("creating {} (it must not exist yet)", path.display()))?;
     let text = Zeroizing::new(serde_json::to_string_pretty(&requests(imports)).expect("JSON"));
-    file.write_all(text.as_bytes())?;
-    file.write_all(b"\n")?;
+    let written = file.write_all(text.as_bytes()).and_then(|()| file.write_all(b"\n")).and_then(|()| file.sync_all());
+    if let Err(e) = written {
+        // Don't leave part of a file holding the key behind.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(e).with_context(|| format!("writing {}", path.display()));
+    }
     Ok(())
 }
 
@@ -149,4 +170,25 @@ fn requests(imports: &[Import]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_node_on_this_machine() {
+        for ok in ["http://127.0.0.1", "http://127.0.0.1:18443", "http://localhost:38332/", "http://[::1]:18443"] {
+            assert!(super::ensure_local(ok).is_ok(), "{ok}");
+        }
+        for refused in [
+            "http://example.com:18443",
+            "http://127.0.0.1.example.com:18443",
+            "http://localhost@example.com:18443",
+            "http://10.0.0.5:18443",
+            "https://127.0.0.1:18443",
+            "127.0.0.1:18443",
+            "",
+        ] {
+            assert!(super::ensure_local(refused).is_err(), "{refused}");
+        }
+    }
 }

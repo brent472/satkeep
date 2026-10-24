@@ -24,7 +24,7 @@ It's a developer tool: its wording isn't product copy.
 2. **The unlock:** the second key must be the one the backup is locked to, after its own PIN. It's only ever asked for this wallet's label.
 3. **The setup:** the kit's plain wallet setup must match the copy locked inside the backup, or the kit has been changed. Only the locked copy is used.
 4. **The phone key is PHONE in every Savings wallet** (T5). The tool derives the phone key's public key from its 12 words, exactly as Satkeep does: BIP39 seed with no passphrase, BIP32 test-network master key, account m/87'/1'/0' ([derivation](../satkeep-savings/README.md#recovery-phrases-and-derivation)). Then it looks for that key, with its fingerprint and path, in each descriptor. A backup and a setup that don't belong together export nothing.
-5. **The node** is on the setup's network, and never mainnet.
+5. **The node** is on this machine, on the setup's network, and never mainnet.
 
 ## What Bitcoin Core gets
 
@@ -40,10 +40,11 @@ It's a developer tool: its wording isn't product copy.
 
 ## Rules for anything secret
 
-- **The command line:** no key or phrase is ever taken on it. An argument that looks like one (`tprv`, `xprv`, or 12 BIP39 words in a row) is refused before parsing and never repeated.
+- **The command line:** no key or phrase is ever taken on it. An argument that looks like one is refused before parsing and never repeated, even when it isn't valid text. That's `tprv`, `xprv`, or 6 BIP39 words in a row, so a phrase that's mistyped or cut short is caught too.
 - **Output:** nothing secret goes to standard output except the 12 words with `--show-phrase`, and nothing secret ever goes to standard error. The tests check every command's output for `tprv`, `xprv` and runs of the phrase.
 - **Errors:** an error from Bitcoin Core's import is never repeated, since its message could quote the request. Only its position and error code are shown.
-- **The file from `--out`** is created new, never overwritten, and readable only by its owner on Unix.
+- **The file from `--out`** is created new, never overwritten, and readable only by its owner on Unix. On Windows it takes its folder's permissions. If writing it fails partway, it's removed.
+- **Only a node on this machine:** the import sends PHONE's key over plain HTTP, so `--rpc-url` must be `http://127.0.0.1`, `http://localhost` or `http://[::1]`.
 - **Memory:**
   - the phrase, its seed and the descriptors with PHONE's key are wiped from memory after use;
   - the JSON request sent to Core isn't, because `serde_json` can't wipe its strings. It lives only until the call returns.
@@ -82,6 +83,6 @@ Each was already in `Cargo.lock` at this version and was approved for this crate
 **Forbidden:**
 - the wrong second key, a wrong PIN, and no second key;
 - a changed plain setup, and another phone key's backup (T5);
-- a node on another network, and an existing Core wallet;
-- a key on the command line;
+- a node on another network, a node on another machine, and an existing Core wallet;
+- a key on the command line: the phrase whole, split over several arguments, 7 of its words, or a `tprv`;
 - PHONE alone finalizing a spend.

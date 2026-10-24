@@ -334,8 +334,21 @@ fn a_changed_kit_or_a_backup_from_another_phone_exports_nothing() {
     // PHONE check (T5) refuses it.
     let stranger = HolderKey::generate();
     let kit = owner.kit_for("stranger.pdf", &stranger, &owner.setup, &owner.setup, owner.secret);
-    let err = owner.fails(&["liana", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key)]);
+    let out = owner.run(&["liana", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key)]);
+    owner.check_no_secrets(&out, false);
+    assert_no_part_of(&out, &stranger);
+    assert!(!out.status.success(), "another phone's backup was exported");
+    let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("isn't in Savings wallet 1"), "{err}");
+}
+
+/// No three words in a row of `key`'s phrase in either output stream.
+fn assert_no_part_of(out: &Output, key: &HolderKey) {
+    let words: Vec<String> = key.to_secret_string().split(' ').map(str::to_owned).collect();
+    for stream in [&out.stdout, &out.stderr] {
+        let text = String::from_utf8_lossy(stream);
+        assert!(!words.windows(3).any(|three| text.contains(&three.join(" "))), "the output repeats part of a phrase");
+    }
 }
 
 #[test]
@@ -349,6 +362,12 @@ fn a_node_on_another_network_or_an_existing_core_wallet_is_refused() {
     args.extend(owner.rpc_args());
     let err = owner.fails(&args.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(err.contains("is on regtest, but this wallet is on signet"), "{err}");
+
+    // Only a node on this machine: the import sends the phone key over HTTP.
+    let kit = owner.kit();
+    let remote = ["core", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--rpc-url", "http://example.com:18443"];
+    let err = owner.fails(&remote);
+    assert!(err.contains("must be a node on this machine"), "{err}");
 
     let kit = owner.kit();
     let mut args: Vec<String> =
@@ -364,7 +383,14 @@ fn a_node_on_another_network_or_an_existing_core_wallet_is_refused() {
 fn a_key_on_the_command_line_is_refused_and_never_repeated() {
     let owner = Owner::new();
     let phrase = owner.phone.to_secret_string();
-    for args in [vec!["show", "--kit", phrase.as_str()], phrase.split(' ').chain(["show"]).collect(), vec!["show", "--kit", "tprv8ZgxMBicQKsPdNotARealKey"]] {
+    // A partial phrase too: 7 of its words, as if cut short or mistyped.
+    let partial = phrase.split(' ').take(7).collect::<Vec<_>>().join(" ");
+    for args in [
+        vec!["show", "--kit", phrase.as_str()],
+        phrase.split(' ').chain(["show"]).collect(),
+        vec!["show", "--kit", partial.as_str()],
+        vec!["show", "--kit", "tprv8ZgxMBicQKsPdNotARealKey"],
+    ] {
         let out = owner.run(&args);
         owner.check_no_secrets(&out, false);
         assert_eq!(out.status.code(), Some(2));
