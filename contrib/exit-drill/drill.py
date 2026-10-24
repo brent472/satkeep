@@ -70,11 +70,23 @@ COOKIE = os.path.join(DATADIR, "regtest", ".cookie")
 LIANA_CONF = os.path.join(WORK, "lianad.toml")
 NUMS_XONLY = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"
 SAT = 100_000_000
+# Every command the drill runs gets this long, in seconds, before it's killed
+# and the drill fails naming it. So a hang fails in a minute with a reason,
+# instead of sitting until GitHub's 45-minute limit. The waits for the node
+# and for Liana to catch up get the same deadline. DRILL_COMMAND_TIMEOUT
+# overrides it.
+TIMEOUT = int(os.environ.get("DRILL_COMMAND_TIMEOUT", "60"))
+# The satkeep subcommands the drill runs, for naming a command in an error.
+SATKEEP_COMMANDS = ("keygen", "create", "export", "address")
 
 results = []  # (check, passed, detail) for the job summary
 
 
 class Failed(Exception):
+    pass
+
+
+class CommandTimeout(RuntimeError):
     pass
 
 
@@ -85,8 +97,16 @@ def check(name, passed, detail=""):
         raise Failed(name)
 
 
-def run(args, stdin=None):
-    p = subprocess.run(args, input=stdin, capture_output=True, text=True)
+def run(name, args, stdin=None):
+    """Runs a command for at most TIMEOUT seconds. `name` is all an error
+    says about it: the program and its subcommand, never its other arguments
+    or its input, which can hold key material or a key file's path. A
+    command that times out is killed, and its partial output dropped."""
+    try:
+        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # `from None`: TimeoutExpired carries the arguments and output.
+        raise CommandTimeout(f"{name} didn't finish within {TIMEOUT} s") from None
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
@@ -99,7 +119,8 @@ def cli(*args, wallet=None, stdin_args=None):
         cmd.append(f"-rpcwallet={wallet}")
     if stdin_args is not None:
         cmd.append("-stdin")
-    code, out, err = run(cmd + list(args), "\n".join(stdin_args) + "\n" if stdin_args is not None else None)
+    name = f"bitcoin-cli {args[0]}" if args else "bitcoin-cli"
+    code, out, err = run(name, cmd + list(args), "\n".join(stdin_args) + "\n" if stdin_args is not None else None)
     if code != 0:
         if stdin_args is not None:
             raise RuntimeError(f"bitcoin-cli {args[0]} failed (no detail: its input holds a key)")
@@ -113,7 +134,7 @@ def cli_json(*args, **kw):
 
 def liana(method, *params):
     """liana-cli. Returns the result, or raises LianaError with Liana's message."""
-    code, out, err = run([LIANA_CLI, "--conf", LIANA_CONF, method] + [p if isinstance(p, str) else json.dumps(p) for p in params])
+    code, out, err = run(f"liana-cli {method}", [LIANA_CLI, "--conf", LIANA_CONF, method] +[p if isinstance(p, str) else json.dumps(p) for p in params])
     if code != 0:
         raise RuntimeError(f"liana-cli {method} failed: {err}")
     response = json.loads(out)
@@ -127,11 +148,12 @@ class LianaError(Exception):
 
 
 def satkeep(*args):
-    code, out, err = run([SATKEEP] + list(args))
+    name = " ".join(["satkeep"] + [a for a in args if a in SATKEEP_COMMANDS][:1])
+    code, out, err = run(name, [SATKEEP] + list(args))
     if code != 0:
-        if args[0] == "keygen":
+        if "keygen" in args:
             raise RuntimeError("satkeep keygen failed (no detail: it handles a new key)")
-        raise RuntimeError(f"satkeep {args[0]} failed: {err}")
+        raise RuntimeError(f"{name} failed: {err}")
     return out
 
 
@@ -145,14 +167,17 @@ def mine(n, address):
 
 def wait_for_liana_sync():
     tip = height()
-    for _ in range(120):
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
         try:
             if liana("getinfo")["block_height"] >= tip:
                 return
+        except CommandTimeout:
+            raise
         except (RuntimeError, LianaError):
             pass
         time.sleep(0.5)
-    raise RuntimeError("Liana didn't catch up with the node")
+    raise RuntimeError(f"Liana didn't catch up with the node within {TIMEOUT} s")
 
 
 def mined_in_tip(txid):
@@ -239,7 +264,7 @@ def liana_sign(psbt, holder):
     """Liana's HotSigner signs with one holder's recovery phrase. The phrase
     stays in the key file; only its path is passed."""
     before = signature_count(psbt)
-    code, out, _ = run([LIANA_SIGN, key_file(holder)], psbt)
+    code, out, _ = run("Liana's signer", [LIANA_SIGN, key_file(holder)], psbt)
     if code != 0:
         raise RuntimeError(f"Liana's signer failed for {holder} (no detail: it reads the key)")
     if signature_count(out) <= before:
@@ -316,17 +341,22 @@ def start_liana(name, descriptor):
 def stop(process):
     if process.poll() is None:
         process.terminate()
-        process.wait(timeout=30)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 def main():
     global LIANA_CONF
     os.makedirs(DATADIR, exist_ok=True)
-    code, _, err = run([os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001"])
+    code, _, err = run("bitcoind", [os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001"])
     if code != 0:
         raise RuntimeError(f"bitcoind didn't start: {err}")
-    for _ in range(60):
-        if os.path.exists(COOKIE) and run([os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "getblockcount"])[0] == 0:
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        if os.path.exists(COOKIE) and run("bitcoin-cli getblockcount", [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "getblockcount"])[0] == 0:
             break
         time.sleep(0.5)
     print(f"Bitcoin Core {cli_json('getnetworkinfo')['subversion']} on regtest, height {height()}")
@@ -515,7 +545,10 @@ def main():
         check("B. Bitcoin Core alone spends it with 2 of 3 keys (PHONE + DEVICE)",
               mined_in_tip(txid) and witness == 4 and sequence >= 0xFFFFFFFD, f"txid {txid}")
     finally:
-        run([os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "stop"])
+        try:
+            run("bitcoin-cli stop", [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "stop"])
+        except CommandTimeout as e:  # don't hide the drill's own result
+            print(f"WARNING: {e}", flush=True)
 
 
 def summary():

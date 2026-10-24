@@ -126,6 +126,9 @@ jobs:
 
       - name: Run the drill
         id: drill
+        # Each command inside has a 60 s timeout (drill.py); this is the
+        # backstop for anything else. A good run takes about 4 minutes.
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           export WORK="$RUNNER_TEMP/drill"

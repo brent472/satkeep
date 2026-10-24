@@ -80,6 +80,13 @@ gh workflow run exit-drill.yml
 
 It runs on a GitHub-hosted Ubuntu machine with a fresh regtest node. Keys are generated inside the run and thrown away with the machine.
 
+**Hangs fail fast:**
+- **Each command** the drill runs (`bitcoin-cli`, `bitcoind`, `liana-cli`, Liana's signer, `satkeep`) gets 60 seconds. Then it's killed, and the drill fails with a message naming the command, such as "liana-cli createspend didn't finish within 60 s".
+- **The message never includes** the command's other arguments, its input or its output, any of which could hold key material.
+- **The waits** for the node to start and for Liana to catch up have the same deadline.
+- **The workflow step** has a 15-minute backstop. A good run takes about 4 minutes.
+- **`DRILL_COMMAND_TIMEOUT`** sets the timeout in seconds.
+
 **Downloads, and how they're verified. Any mismatch fails the job.**
 
 | What | From | Verified against |
