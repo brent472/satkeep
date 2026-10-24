@@ -137,6 +137,7 @@ A second phone is an old phone or tablet with the Satkeep app (decision D4 in [`
 - **The answer's check covers the request,** so an old answer, or one to another request, is caught like a typo.
 - **No elliptic-curve code in the tool.** It only hashes, and checks `E` has a compressed point's shape. Only the phone checks `E` is on the curve.
 - **`S` and the backup file together open the backup,** so the tool wipes `K` and `S` once used and never prints the answer.
+- **`S` stays the same for the life of a backup,** because `E` does. Anyone who saw both a request and its answer, on the computer's screen or in its scrollback, can work out `S` and keep opening that backup. A new backup gets a new `e`, so after any such exposure the app should make a new backup.
 
 ## 4. The wallet setup
 
