@@ -117,7 +117,11 @@ birthday <height>
 - **Descriptors** are 1 to 4,096 bytes of printable ASCII with no spaces. Satkeep writes them as `satkeep export` does, with the checksum.
 - **Limits:** at most 16 Savings wallets, and 16 KiB in all.
 - **Networks:** only `regtest` and `signet`. Mainnet is refused until the launch review. Adding it later needs no new version, and older readers will refuse it, which is the safe way round.
-- **Only the form is checked here.** Whether a descriptor parses, holds the phone key, or has delays the Savings rules accept is checked by whatever uses it. The restore tool checks the phone key (restore-tool.md, T5), and the library builds the policy.
+- **No private keys.** The wallet setup never holds private keys; a setup with one is refused, so the kit's plain copy is always safe to keep in the cloud.
+  - **How it's checked,** both when a setup is written and when it's read: each descriptor is split on `( ) , [ ] / # *`, and any piece that starts with `xprv` or `tprv`, or is 51 or 52 base58 characters (a WIF key), is refused.
+  - **Why pieces:** a real `tpub` can contain the letters `prv` by chance, so the whole string isn't searched.
+  - **No false alarms:** no public part of a descriptor is 51 or 52 base58 characters. Extended public keys are 111, and hex keys and hashes are 40, 64 or 66.
+- **Otherwise only the form is checked here.** Whether a descriptor parses, holds the phone key, or has delays the Savings rules accept is checked by whatever uses it. The restore tool checks the phone key (restore-tool.md, T5), and the library builds the policy.
 - **Earlier Savings wallets stay listed after a move,** because coins sent to them later stay there.
 - **The pocket's descriptor isn't designed yet** (brief 3.11). The format has its place, and nothing makes one yet.
 

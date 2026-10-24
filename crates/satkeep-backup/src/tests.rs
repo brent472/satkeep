@@ -300,6 +300,75 @@ fn a_setup_that_wouldnt_read_back_the_same_is_never_written() {
     assert_eq!(make_backup(&phrase(), &empty, new_wallet_id(), CREATED, &mut device).err(), Some(BackupError::BadSetup));
 }
 
+// ------------------------------------------- no private keys, ever ----
+
+/// Made-up keys in the shape of private keys, never real ones.
+const FAKE_TPRV: &str = "tprv8ZgxMBicQKsPdNotARealKeyJustTheShapeOfOneForTheTestNotARealKeyJustTheShapeOfOneForTheTestNotARealKeyJustT";
+const FAKE_XPRV: &str = "xprv9s21ZrQH143KNotARealKeyJustTheShapeOfOneForTheTestNotARealKeyJustTheShapeOfOneForTheTestNotARealKeyJustT";
+
+fn fake_wif(len: usize) -> String {
+    format!("c{}", "N".repeat(len - 1))
+}
+
+fn with_descriptor(descriptor: &str) -> WalletSetup {
+    let mut s = setup();
+    s.savings[0].descriptor = descriptor.to_owned();
+    s
+}
+
+#[test]
+fn public_descriptors_are_accepted_even_when_a_tpub_happens_to_contain_prv() {
+    // The spec's real descriptors (also checked by the vector test).
+    let spec = include_str!("../../../docs/backup-format.md");
+    let vectors = WalletSetup::from_text(&vector(spec, "setup")).unwrap();
+    assert!(vectors.to_text().is_ok());
+    // "prv" inside a public key's piece, and 51 or 52 characters that aren't
+    // all base58 (here a 0, and a _), are fine.
+    let tpub_with_prv = "tpubDCChhoz5Qdrkn7Z7KXawq6Ad6r3A4MUkCoVTqeWxfTkA6bHNJ3CHUEtALQdkNeixNz4446PcAmw4WKcj3mV2vb29H7sgprvPzbyCU1y2merw";
+    for descriptor in [
+        format!("wsh(sortedmulti(2,[73c5da0a/87'/1'/0']{tpub_with_prv}/<0;1>/*,a,b))#2pv7mn6z"),
+        format!("wsh(pk({}0))", "N".repeat(51)),
+        format!("wsh(multi_a{})", "N".repeat(44)),
+    ] {
+        let s = with_descriptor(&descriptor);
+        assert_eq!(WalletSetup::from_text(&s.to_text().unwrap()), Ok(s), "{descriptor}");
+    }
+}
+
+#[test]
+fn a_setup_holding_a_private_key_is_refused_when_written_and_when_read() {
+    let keyed = [
+        format!("wsh(sortedmulti(2,[73c5da0a/87'/1'/0']{FAKE_TPRV}/<0;1>/*,a,b))#00000000"),
+        format!("tr({FAKE_XPRV}/<0;1>/*)"),
+        format!("wsh(pk({}))", fake_wif(52)),
+        format!("sh(wpkh({}))", fake_wif(51)),
+        format!("wsh(multi(2,a,{}))", fake_wif(52)),
+    ];
+    let mut device = device();
+    for descriptor in &keyed {
+        let s = with_descriptor(descriptor);
+        assert!(s.to_text() == Err(BackupError::PrivateKeyInSetup), "written: a private key was accepted");
+        let pocket = WalletSetup { pocket: Some(setup::PocketWallet { descriptor: descriptor.clone(), birthday: 0 }), ..setup() };
+        assert!(pocket.to_text() == Err(BackupError::PrivateKeyInSetup), "written: a private key in the pocket");
+        let text = setup().to_text().unwrap().replace("wsh(sortedmulti(2,a,b,c))#00000000", descriptor);
+        assert!(WalletSetup::from_text(&text) == Err(BackupError::PrivateKeyInSetup), "read: a private key was accepted");
+        device.enter_pin(PIN).unwrap();
+        assert!(make_backup(&phrase(), &s, new_wallet_id(), CREATED, &mut device).err() == Some(BackupError::PrivateKeyInSetup));
+    }
+    // A kit whose plain copy holds one, made by hand, is refused on reading.
+    let (_, _, _, file) = backed_up();
+    let text = setup().to_text().unwrap().replace("wsh(sortedmulti(2,a,b,c))#00000000", &keyed[0]);
+    let mut data = kit::MAGIC.to_vec();
+    data.push(kit::VERSION);
+    data.extend_from_slice(&u32::try_from(file.len()).unwrap().to_be_bytes());
+    data.extend_from_slice(&file);
+    data.extend_from_slice(&u32::try_from(text.len()).unwrap().to_be_bytes());
+    data.extend_from_slice(text.as_bytes());
+    assert!(kit::read(kit::armour(&data).as_bytes()) == Err(BackupError::PrivateKeyInSetup), "a kit with a private key");
+    // And the error never repeats the key.
+    assert!(!BackupError::PrivateKeyInSetup.to_string().contains("prv"));
+}
+
 // ------------------------------------------------------ the exit kit ----
 
 fn kit_text() -> (Mnemonic, SimulatedDevice, Vec<u8>, String) {

@@ -21,7 +21,12 @@
 //! refresh-window 2
 //! ```
 //!
-//! Only the form is checked here. Whether a descriptor parses, holds the
+//! **It never holds private keys.** A setup with an extended private key
+//! (`xprv`, `tprv`) or a WIF key in any descriptor is refused, both when
+//! it's written and when it's read, so the kit's plain copy is always safe
+//! to keep in the cloud.
+//!
+//! Apart from that, only the form is checked here. Whether a descriptor parses, holds the
 //! phone key, or has delays the Savings rules accept is for the code that
 //! uses it (the restore tool checks the phone key; `satkeep-savings` builds
 //! the policy).
@@ -100,6 +105,9 @@ impl WalletSetup {
     /// the same: no Savings wallet, too many, a descriptor with a space or
     /// other character outside printable ASCII, a zero delay.
     pub fn to_text(&self) -> Result<String, BackupError> {
+        if self.descriptors().any(holds_private_key) {
+            return Err(BackupError::PrivateKeyInSetup);
+        }
         let text = self.write();
         match Self::from_text(&text) {
             Ok(back) if back == *self => Ok(text),
@@ -111,7 +119,15 @@ impl WalletSetup {
     /// a stray space, a Windows line ending or a missing final newline, is
     /// refused.
     pub fn from_text(text: &str) -> Result<Self, BackupError> {
-        parse(text).ok_or(BackupError::BadSetup)
+        let setup = parse(text).ok_or(BackupError::BadSetup)?;
+        if setup.descriptors().any(holds_private_key) {
+            return Err(BackupError::PrivateKeyInSetup);
+        }
+        Ok(setup)
+    }
+
+    fn descriptors(&self) -> impl Iterator<Item = &str> {
+        self.pocket.iter().map(|p| p.descriptor.as_str()).chain(self.savings.iter().map(|s| s.descriptor.as_str()))
     }
 
     fn write(&self) -> String {
@@ -213,4 +229,19 @@ fn decimal(text: &str) -> Option<u32> {
 fn descriptor(text: &str) -> Option<String> {
     let ok = !text.is_empty() && text.len() <= MAX_DESCRIPTOR && text.bytes().all(|b| (0x21..=0x7e).contains(&b));
     ok.then(|| text.to_owned())
+}
+
+/// Whether a descriptor holds a private key: a piece (between `( ) , [ ] /
+/// # *`) that starts with `xprv` or `tprv`, or is 51 or 52 base58
+/// characters, the length of a WIF key. Pieces, not the whole string: a
+/// real `tpub` can contain the letters "prv" by chance. No public part of a
+/// descriptor has a 51- or 52-character base58 piece: extended public keys
+/// are 111 characters, and hex keys and hashes are 40, 64 or 66.
+pub fn holds_private_key(descriptor: &str) -> bool {
+    const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    descriptor.split(['(', ')', ',', '[', ']', '/', '#', '*']).any(|piece| {
+        piece.starts_with("xprv")
+            || piece.starts_with("tprv")
+            || ((51..=52).contains(&piece.len()) && piece.bytes().all(|b| BASE58.contains(&b)))
+    })
 }

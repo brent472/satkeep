@@ -33,6 +33,7 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 
 - **Not reviewed** by an outside cryptographer yet. The construction is in the spec's section 3.
 - **Mainnet is refused** in the wallet setup until the launch review.
+- **No private keys.** The wallet setup never holds private keys; a setup with one is refused, so the kit's plain copy is always safe to keep in the cloud. Each descriptor is split on `( ) , [ ] / # *`. A piece starting with `xprv` or `tprv`, or of 51 or 52 base58 characters (a WIF key), is refused when the setup is written and when it's read.
 - **The kit's line check** finds typos when the kit is typed back in. It isn't a signature. A changed kit is caught by the backup's own authentication and by comparing the plain setup with the locked one.
 - **The wallet setup checks only its form.** Whether a descriptor parses and holds the phone key is the restore tool's check (restore-tool.md, T5).
 - **The `simulated-device` feature** is for tests, the prototype and fuzzing. `satkeep-savings` passes it on only through its own `simulated-device` feature, which its tests turn on. The CLI (`cargo build -p satkeep-cli`), and the restore tool to come, build without it.
@@ -48,6 +49,7 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 - a wrong device is refused before it's asked anything;
 - wrong PINs block the device;
 - the wallet setup has exactly one text form, and 22 near-misses are refused;
+- a setup holding a private key (`tprv`, `xprv` or WIF) is refused, written or read, and a `tpub` that happens to contain `prv` isn't;
 - the kit reads from a PDF, from retyped text (other line endings, capitals, spaces) or from the raw backup;
 - in a kit, a typo or missing line is named by its number, the missing end is reported, two different kits are refused, and a changed plain setup or a swapped backup is refused.
 

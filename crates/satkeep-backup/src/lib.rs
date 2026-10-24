@@ -67,6 +67,8 @@ pub enum BackupError {
     OldCopyRemains,
     #[error("that wallet setup isn't in the Satkeep wallet setup format")]
     BadSetup,
+    #[error("a wallet setup must never hold a private key, and this one does")]
+    PrivateKeyInSetup,
     #[error("no Satkeep exit kit found")]
     NotAKit,
     #[error("line {line} of the exit kit is missing or has a typo")]

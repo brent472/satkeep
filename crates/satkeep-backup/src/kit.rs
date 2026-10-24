@@ -20,6 +20,8 @@
 //! is typed back in; it's not a signature. What protects the kit is the
 //! backup's own authentication, and [`restore_kit`] refusing a plain setup
 //! that differs from the locked one (docs/restore-tool.md, threat 7.2).
+//! That check needs the second key: on the heir's route, with no second
+//! key, the plain setup is unverified (restore-tool.md section 3).
 
 use sha2::{Digest, Sha256};
 
@@ -61,7 +63,11 @@ pub fn encode(backup: &[u8], setup: &WalletSetup) -> Result<String, BackupError>
     data.extend_from_slice(backup);
     data.extend_from_slice(&u32::try_from(setup_text.len()).expect("at most MAX_SETUP").to_be_bytes());
     data.extend_from_slice(setup_text.as_bytes());
+    Ok(armour(&data))
+}
 
+/// The armoured text for kit data.
+pub(crate) fn armour(data: &[u8]) -> String {
     let mut out = format!("{BEGIN}\n");
     for (i, chunk) in data.chunks(BYTES_PER_LINE).enumerate() {
         let number = u32::try_from(i + 1).expect("a few thousand lines at most");
@@ -70,7 +76,7 @@ pub fn encode(backup: &[u8], setup: &WalletSetup) -> Result<String, BackupError>
     }
     out += END;
     out.push('\n');
-    Ok(out)
+    out
 }
 
 /// Finds the kit in `input`: a PDF or any text holding the armoured block,

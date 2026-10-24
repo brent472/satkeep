@@ -18,6 +18,19 @@ The restore tool's step 2 (`docs/restore-tool.md`): the backup format moves into
 - **Two different kits in one input are refused.** Blocks that don't decode are skipped if another one decodes, since a PDF may draw the same markers in its page text.
 - **The line check is for typos, not a signature.** Anyone can compute it. A miss (about one in 4 billion) is still caught by the backup's authentication and the setup comparison.
 
+## Added in review
+
+- **No private keys in a wallet setup.** "The wallet setup never holds private keys; a setup with one is refused, so the kit's plain copy is always safe to keep in the cloud." That line is now in the spec and the crate README.
+  - **How it's checked:** each descriptor is split on `( ) , [ ] / # *`. Any piece that starts with `xprv` or `tprv`, or is 51 or 52 base58 characters (a WIF key), is refused with `PrivateKeyInSetup`.
+  - **When:** when a setup is written (`to_text`, so also `make_backup` and `kit::encode`) and when it's read (`from_text`, so also the kit's plain copy and the locked copy).
+  - **Works test:** the spec's real descriptors pass, and so does a `tpub` that contains `prv` by chance. So do 51- and 52-character pieces that aren't all base58.
+  - **Forbidden tests:** `tprv`, `xprv` and WIF keys of both lengths are refused, in Savings and in the pocket, written and read, by `make_backup`, and in a hand-made kit. The test fails with the check turned off.
+  - **The test keys are made up,** and contain an `l`, which isn't base58, so they can't be real keys.
+- **The heir's route** is written down in `docs/restore-tool.md` (sections 3 and 7.2, and step 3's tests).
+  - The kit's plain setup is checked against the locked copy only when the second key is used.
+  - With HEIR's key and the plain setup alone, the setup is unverified: the tool must say so, and exports for the heir only the wallets that contain HEIR's key, since that key can only sign for those.
+- **Remotes:** `origin` is now `brent472/satkeep`, and `private` is `brent472/satkeep-private`.
+
 ## Test vectors
 
 - **Keys:** PHONE is BIP39's published test phrase "abandon … about". DEVICE, HELPER and HEIR are its other published test phrases, so the vector setup holds real descriptors (plain 2 of 3, then Taproot with the placeholder delays). The restore tool's PHONE check can use the same vectors next.
@@ -32,13 +45,14 @@ Each property has a "works" test and a "forbidden" test:
 - the wrong device is refused before it's asked anything;
 - wrong PINs block the device;
 - the setup reads back as itself, and 22 near-misses are refused (Windows line endings, a leading zero, mainnet, fields out of order, and so on);
+- a setup holding a private key is refused, written or read;
 - a kit reads from a PDF, retyped text and the raw backup;
 - a typo on any line is named by that line's number;
 - a missing middle line, a missing end, two different kits, a changed plain setup and a swapped backup are each refused;
 - the regtest test still shows a restored phone key approving a 2-of-3 spend.
 
 **Results:**
-- `cargo test --workspace` passes: 21 in the new crate, the library's 50, and all the regtest suites.
+- `cargo test --workspace` passes: 23 in the new crate, the library's 50, and all the regtest suites.
 - `cargo clippy --workspace --all-targets -D warnings` is clean, and so is clippy on the fuzz crate.
 - `cargo deny check` passes.
 
