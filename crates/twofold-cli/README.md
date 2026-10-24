@@ -115,6 +115,8 @@ Global options:
 
 If you pass both `--wallet-dir` and `--network`, they must agree.
 
+**A pruned node works.** A wallet reads blocks from its birthday (the node's height at `create` or `add-heir`) on, starting from the block before it, and later from where it last synced. The node must still have those blocks: a wallet left unsynced for longer than the node keeps blocks gets a "pruned data" error. (Bitcoin Core always keeps at least the last 288 blocks, about two days; on signet with `-prune=550` it currently keeps about a week.)
+
 ## Demo on your own regtest node (PowerShell)
 
 This walks through every Savings path on a regtest node you run yourself:
@@ -253,6 +255,6 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 | `tests/wallet.rs` | create, address, balance and export work in both shapes; with no beneficiary, nothing opens with time and `savings.json` holds no heir fields. The tool refuses: check-in settings without `--heir`, the old `--device-r` and `--device-delay`, a node on another network, a mainnet `--network`, creating over an existing wallet, any policy the library refuses, and an old wallet with DEVICE_R (with a clear error). |
 | `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. HEIR alone is refused one block early and works on time. DEVICE alone can never send: there's no such path, and its signature alone never satisfies 2 of 3. Without a beneficiary there's no heir path. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
 
-## Not here yet
+## On signet
 
-- The signet demo
+The [signet demo](../../docs/signet-demo.md) runs every allowed path with this tool on the public signet network, in both shapes, and lists the transactions. Its script is [`contrib/signet-demo/demo.ps1`](../../contrib/signet-demo/demo.ps1).
