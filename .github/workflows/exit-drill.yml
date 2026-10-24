@@ -110,7 +110,6 @@ jobs:
           tar xzf "$tarball"
           lianad=$(find "$PWD" -name lianad -type f | head -1)
           echo "LIANAD=$lianad" >> "$GITHUB_ENV"
-          echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
 
       - name: Build Liana's signer from the signed v15.0 source
         # satkeep_sign.rs is a few lines around liana::signer::HotSigner. It's

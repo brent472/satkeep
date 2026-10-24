@@ -2,8 +2,9 @@
 """Exit drill: recover and spend a Satkeep Savings wallet with no Satkeep code.
 
 Satkeep is used only to make fresh test keys and export the wallet
-descriptor. Everything after that is done by Liana (lianad + liana-cli) and
-Bitcoin Core (bitcoind + bitcoin-cli) on a fresh regtest node:
+descriptor. Everything after that is done by Liana (lianad, through its
+JSON-RPC socket) and Bitcoin Core (bitcoind + bitcoin-cli) on a fresh
+regtest node:
 
 Savings comes in two shapes, and the drill covers both, with the same keys:
 
@@ -38,15 +39,17 @@ output and the whole job log, and fails if either has anything key-like
 (scan_log.py). Run on a throwaway machine only.
 
 Environment: BITCOIN_BIN (folder with bitcoind and bitcoin-cli), LIANAD,
-LIANA_CLI, LIANA_SIGN (satkeep_sign built from Liana's source), SATKEEP
+LIANA_SIGN (satkeep_sign built from Liana's source), SATKEEP
 (the satkeep binary), WORK (an empty scratch folder).
 """
 
 import hashlib
 import hmac
+import itertools
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -54,7 +57,6 @@ import unicodedata
 
 BIN = os.environ["BITCOIN_BIN"]
 LIANAD = os.environ["LIANAD"]
-LIANA_CLI = os.environ["LIANA_CLI"]
 LIANA_SIGN = os.environ["LIANA_SIGN"]
 SATKEEP = os.environ["SATKEEP"]
 WORK = os.environ["WORK"]
@@ -67,7 +69,8 @@ MIN_HEIR_DELAY = HEIR_DELAY
 REFRESH_WINDOW = 2
 DATADIR = os.path.join(WORK, "bitcoind")
 COOKIE = os.path.join(DATADIR, "regtest", ".cookie")
-LIANA_CONF = os.path.join(WORK, "lianad.toml")
+LIANA_SOCKET = None  # set by start_liana
+LIANA_IDS = itertools.count(1)
 NUMS_XONLY = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"
 SAT = 100_000_000
 # Every command the drill runs gets this long, in seconds, before it's killed
@@ -104,36 +107,13 @@ def run(name, args, stdin=None, timeout=None):
     file's path. A command that times out is killed, and its partial output
     dropped."""
     limit = timeout or TIMEOUT
-    p = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else None,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        out, err = p.communicate(stdin, timeout=limit)
+        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=limit)
     except subprocess.TimeoutExpired:
-        # TEMPORARY (PR #16): how the command was stuck, before killing it.
-        state = process_state(p.pid)
-        p.kill()
-        p.communicate()
-        if state:
-            print(f"{name} at the timeout: {state}", flush=True)
         # `from None`: TimeoutExpired carries the arguments and output.
         raise CommandTimeout(f"{name} didn't finish within {limit} s") from None
-    return p.returncode, out.strip(), err.strip()
+    return p.returncode, p.stdout.strip(), p.stderr.strip()
 
-
-def process_state(pid):
-    """TEMPORARY (PR #16): a stuck process's state from /proc (Linux): R
-    running or S sleeping, the kernel function it waits in, and the CPU
-    time it used, which tells a busy loop from a blocked read. Nothing of
-    its arguments or memory."""
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().rsplit(")", 1)[1].split()
-        with open(f"/proc/{pid}/wchan") as f:
-            wchan = f.read().strip() or "-"
-        cpu = (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
-        return f"state {fields[0]}, waiting in {wchan}, {cpu:.2f} s of CPU"
-    except (OSError, IndexError, ValueError):
-        return None
 
 
 diagnosed = False
@@ -142,7 +122,7 @@ diagnosed = False
 def diagnostics():
     """When the drill fails: what lianad and bitcoind were doing, while they
     still run. Prints the end of each lianad log and of Bitcoin Core's
-    debug.log, `liana-cli getinfo`, `bitcoin-cli getrpcinfo` (the RPCs in
+    debug.log, lianad's `getinfo`, `bitcoin-cli getrpcinfo` (the RPCs in
     progress), and whether each Core wallet is still scanning.
 
     Nothing here can hold key material: lianad is watch-only and holds no
@@ -163,7 +143,11 @@ def diagnostics():
         except (CommandTimeout, OSError) as e:
             print(f"$ {name}: {e}", flush=True)
 
-    show("liana-cli getinfo", [LIANA_CLI, "--conf", LIANA_CONF, "getinfo"])
+    try:
+        info = json.dumps(liana("getinfo", timeout=10), indent=2)
+        print(f"$ lianad getinfo\n{info}", flush=True)
+    except (RuntimeError, LianaError) as e:
+        print(f"$ lianad getinfo: {e}", flush=True)
     show("bitcoin-cli getrpcinfo", core + ["getrpcinfo"])
     try:
         code, out, _ = run("bitcoin-cli listwallets", core + ["listwallets"], timeout=10)
@@ -180,11 +164,6 @@ def diagnostics():
                 lines = f.readlines()
             tail = lines[-60:]
             print(f"--- last {len(tail)} lines of {os.path.relpath(path, WORK)} ---\n{''.join(tail)}", end="", flush=True)
-            # TEMPORARY (PR #16): lianad's JSON-RPC requests, responses and
-            # connections, which the poller's trace lines would crowd out.
-            rpc = [line for line in lines if "jsonrpc" in line][-40:]
-            if rpc:
-                print(f"--- last {len(rpc)} jsonrpc lines of {os.path.relpath(path, WORK)} ---\n{''.join(rpc)}", end="", flush=True)
         except OSError as e:
             print(f"--- {path}: {e}", flush=True)
     print("--- end of diagnostics ------------------------------------------\n", flush=True)
@@ -212,12 +191,44 @@ def cli_json(*args, **kw):
     return json.loads(cli(*args, **kw))
 
 
-def liana(method, *params):
-    """liana-cli. Returns the result, or raises LianaError with Liana's message."""
-    code, out, err = run(f"liana-cli {method}", [LIANA_CLI, "--conf", LIANA_CONF, method] +[p if isinstance(p, str) else json.dumps(p) for p in params])
-    if code != 0:
-        raise RuntimeError(f"liana-cli {method} failed: {err}")
-    response = json.loads(out)
+def liana(method, *params, timeout=None):
+    """Calls lianad's JSON-RPC interface on its Unix socket, as the Liana app
+    does. Returns the result, or raises LianaError with Liana's message.
+
+    Not through liana-cli: v15.0's read loop can wait forever on a reply
+    that has fully arrived (docs/exit-drill.md, "Talking to Liana"). One
+    connection per call: send the request and a newline, then read until
+    what has arrived decodes as one complete JSON object with our id.
+    lianad ends a reply with no newline and keeps the connection open, so
+    the only end marker is a complete object. Errors name the method,
+    never the parameters."""
+    name = f"lianad {method}"
+    limit = timeout or TIMEOUT
+    request = {"jsonrpc": "2.0", "id": f"drill-{next(LIANA_IDS)}", "method": method, "params": list(params)}
+    deadline = time.monotonic() + limit
+    data = b""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(limit)
+            s.connect(LIANA_SOCKET)
+            s.sendall(json.dumps(request).encode() + b"\n")
+            while True:
+                s.settimeout(max(deadline - time.monotonic(), 0.001))
+                chunk = s.recv(65536)
+                if not chunk:
+                    raise RuntimeError(f"{name}: lianad closed the connection without a complete reply")
+                data += chunk
+                try:
+                    response, _ = json.JSONDecoder().raw_decode(data.decode())
+                except ValueError:  # not complete yet (UnicodeDecodeError is a ValueError too)
+                    continue
+                if not isinstance(response, dict) or response.get("id") != request["id"]:
+                    raise RuntimeError(f"{name}: lianad replied to a different request")
+                break
+    except socket.timeout:
+        raise CommandTimeout(f"{name} didn't finish within {limit} s") from None
+    except OSError as e:
+        raise RuntimeError(f"{name}: can't reach lianad ({e.strerror or type(e).__name__})") from None
     if "error" in response:
         raise LianaError(response["error"].get("message", str(response["error"])))
     return response.get("result")
@@ -246,11 +257,17 @@ def mine(n, address):
 
 
 def wait_for_liana_sync():
+    """Until Liana reports it's fully synced (`sync` 1.0, which it reports
+    only once the node's blocks reach its headers) and has reached the
+    node's tip. On a chain still at block 0, bitcoind is in initial block
+    download and Liana's sync stays 0, so mine a block before the first
+    wait."""
     tip = height()
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         try:
-            if liana("getinfo")["block_height"] >= tip:
+            info = liana("getinfo")
+            if info["sync"] == 1.0 and info["block_height"] >= tip:
                 return
         except CommandTimeout:
             raise
@@ -406,16 +423,18 @@ def descriptor_halves(descriptor):
 
 
 def start_liana(name, descriptor):
-    """Starts lianad on `descriptor`. Returns the process and its config path."""
+    """Starts lianad on `descriptor`. Returns the process and its JSON-RPC
+    socket (`<data_dir>/regtest/lianad_rpc`)."""
     conf = os.path.join(WORK, f"{name}.toml")
+    data_dir = os.path.join(WORK, name)
     with open(conf, "w") as f:
         f.write(
-            f'data_dir = "{os.path.join(WORK, name)}"\nlog_level = "trace"\nmain_descriptor = "{descriptor}"\n\n'
+            f'data_dir = "{data_dir}"\nlog_level = "info"\nmain_descriptor = "{descriptor}"\n\n'
             f'[bitcoin_config]\nnetwork = "regtest"\npoll_interval_secs = 1\n\n'
             f'[bitcoind_config]\naddr = "127.0.0.1:18443"\ncookie_path = "{COOKIE}"\n'
         )
     log = open(os.path.join(WORK, f"{name}.log"), "w")
-    return subprocess.Popen([LIANAD, "--conf", conf], stdout=log, stderr=subprocess.STDOUT), conf
+    return subprocess.Popen([LIANAD, "--conf", conf], stdout=log, stderr=subprocess.STDOUT), os.path.join(data_dir, "regtest", "lianad_rpc")
 
 
 def stop(process):
@@ -429,7 +448,7 @@ def stop(process):
 
 
 def main():
-    global LIANA_CONF
+    global LIANA_SOCKET
     os.makedirs(DATADIR, exist_ok=True)
     code, _, err = run("bitcoind", [os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001", "-debug=rpc"])
     if code != 0:
@@ -501,7 +520,10 @@ def main():
         return r["allowed"], r.get("reject-reason", "")
 
     # =========================== A. With a beneficiary ==========================
-    lianad, LIANA_CONF = start_liana("liana", descriptor)
+    # A block first, so the node leaves initial block download and Liana's
+    # sync check has something real to wait for.
+    mine(1, burn)
+    lianad, LIANA_SOCKET = start_liana("liana", descriptor)
     try:
         wait_for_liana_sync()
         print(f"Liana {liana('getinfo')['version']} running on the exported descriptor")
