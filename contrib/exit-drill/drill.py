@@ -104,12 +104,36 @@ def run(name, args, stdin=None, timeout=None):
     file's path. A command that times out is killed, and its partial output
     dropped."""
     limit = timeout or TIMEOUT
+    p = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else None,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=limit)
+        out, err = p.communicate(stdin, timeout=limit)
     except subprocess.TimeoutExpired:
+        # TEMPORARY (PR #16): how the command was stuck, before killing it.
+        state = process_state(p.pid)
+        p.kill()
+        p.communicate()
+        if state:
+            print(f"{name} at the timeout: {state}", flush=True)
         # `from None`: TimeoutExpired carries the arguments and output.
         raise CommandTimeout(f"{name} didn't finish within {limit} s") from None
-    return p.returncode, p.stdout.strip(), p.stderr.strip()
+    return p.returncode, out.strip(), err.strip()
+
+
+def process_state(pid):
+    """TEMPORARY (PR #16): a stuck process's state from /proc (Linux): R
+    running or S sleeping, the kernel function it waits in, and the CPU
+    time it used, which tells a busy loop from a blocked read. Nothing of
+    its arguments or memory."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        with open(f"/proc/{pid}/wchan") as f:
+            wchan = f.read().strip() or "-"
+        cpu = (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+        return f"state {fields[0]}, waiting in {wchan}, {cpu:.2f} s of CPU"
+    except (OSError, IndexError, ValueError):
+        return None
 
 
 diagnosed = False
@@ -153,8 +177,14 @@ def diagnostics():
     for path in [os.path.join(WORK, f) for f in logs] + [os.path.join(DATADIR, "regtest", "debug.log")]:
         try:
             with open(path, errors="replace") as f:
-                tail = f.readlines()[-60:]
+                lines = f.readlines()
+            tail = lines[-60:]
             print(f"--- last {len(tail)} lines of {os.path.relpath(path, WORK)} ---\n{''.join(tail)}", end="", flush=True)
+            # TEMPORARY (PR #16): lianad's JSON-RPC requests, responses and
+            # connections, which the poller's trace lines would crowd out.
+            rpc = [line for line in lines if "jsonrpc" in line][-40:]
+            if rpc:
+                print(f"--- last {len(rpc)} jsonrpc lines of {os.path.relpath(path, WORK)} ---\n{''.join(rpc)}", end="", flush=True)
         except OSError as e:
             print(f"--- {path}: {e}", flush=True)
     print("--- end of diagnostics ------------------------------------------\n", flush=True)
@@ -380,7 +410,7 @@ def start_liana(name, descriptor):
     conf = os.path.join(WORK, f"{name}.toml")
     with open(conf, "w") as f:
         f.write(
-            f'data_dir = "{os.path.join(WORK, name)}"\nlog_level = "info"\nmain_descriptor = "{descriptor}"\n\n'
+            f'data_dir = "{os.path.join(WORK, name)}"\nlog_level = "trace"\nmain_descriptor = "{descriptor}"\n\n'
             f'[bitcoin_config]\nnetwork = "regtest"\npoll_interval_secs = 1\n\n'
             f'[bitcoind_config]\naddr = "127.0.0.1:18443"\ncookie_path = "{COOKIE}"\n'
         )
