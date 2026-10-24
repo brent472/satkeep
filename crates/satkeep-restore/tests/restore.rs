@@ -627,3 +627,65 @@ fn a_changed_setup_that_only_mentions_the_heir_key_offers_nothing() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("too large to be a key file"));
 }
+
+// ------------------------------------------------------- the easy routes ----
+
+/// The output names an app for each wallet, always offers Bitcoin Core, and
+/// ends with one "Next:" step.
+fn assert_routes(out: &str, next: &str) {
+    assert!(out.contains("Which app to use:"), "{out}");
+    assert!(out.contains("Savings wallet 1: Sparrow (`satkeep-restore sparrow --out FILE`): it has no beneficiary"), "{out}");
+    assert!(out.contains("Savings wallet 2: Liana (`satkeep-restore liana`): it has a beneficiary"), "{out}");
+    assert!(out.contains("For experts, Bitcoin Core works for every wallet (`satkeep-restore core`)."), "{out}");
+    let last = out.trim_end().lines().last().unwrap();
+    assert!(last.starts_with("Next: ") && last.contains(next), "the last line is one next step: {last}");
+    assert_eq!(out.matches("\nNext: ").count(), 1, "one next step: {out}");
+}
+
+#[test]
+fn sparrow_gets_the_wallet_without_a_beneficiary_and_liana_the_one_with() {
+    let owner = Owner::new();
+    let (kit, key, file) = (owner.kit(), owner.second_key(), owner.dir.file("sparrow.txt"));
+    let args = ["sparrow", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--out", &kit_s(&file)];
+    let out = owner.ok(&args);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{}\n", owner.plain.export_descriptor()), "the plain wallet's descriptor");
+    assert!(out.contains("Savings wallet 2: it has a beneficiary, so it goes to Liana"), "{out}");
+    assert!(out.contains("--show-phrase"), "{out}");
+    assert_routes(&out, "open Sparrow and import");
+
+    // Never overwritten.
+    let err = owner.fails(&args);
+    assert!(err.contains("must not exist"), "{err}");
+
+    // The 12 words only when asked for, after the warning.
+    let second = owner.dir.file("sparrow2.txt");
+    let shown = owner.run(&["sparrow", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--out", &kit_s(&second), "--show-phrase"]);
+    owner.check_no_secrets(&shown, true);
+    assert!(String::from_utf8_lossy(&shown.stdout).contains(&owner.phone.to_secret_string()), "the 12 words when asked for");
+    assert!(String::from_utf8_lossy(&shown.stderr).contains("warning"));
+}
+
+#[test]
+fn sparrow_refuses_savings_with_a_beneficiary_and_points_to_liana() {
+    let owner = Owner::new();
+    let taproot_only = WalletSetup { savings: owner.setup.savings[1..].to_vec(), ..owner.setup.clone() };
+    let kit = owner.kit_for("taproot.pdf", &owner.phone, &taproot_only, &taproot_only, owner.secret);
+    let (key, file) = (owner.second_key(), owner.dir.file("sparrow.txt"));
+    let err = owner.fails(&["sparrow", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--out", &kit_s(&file)]);
+    assert!(err.contains("goes to Liana: `satkeep-restore liana`"), "{err}");
+    assert!(!file.exists(), "nothing written");
+}
+
+#[test]
+fn liana_and_core_say_which_app_and_end_with_one_next_step() {
+    let owner = Owner::new();
+    let (kit, key) = (owner.kit(), owner.second_key());
+    let out = owner.ok(&["liana", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key)]);
+    assert_routes(&out, "open Liana");
+
+    let mut args: Vec<String> =
+        ["core", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--core-wallet", "routes"].map(str::to_owned).to_vec();
+    args.extend(owner.rpc_args());
+    let out = owner.ok(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_routes(&out, "Bitcoin Core sign as PHONE");
+}

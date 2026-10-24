@@ -15,6 +15,7 @@ It's a developer tool: its wording isn't product copy.
 | `core --kit FILE … --out FILE` | The same, but write Bitcoin Core's `importdescriptors` request to a new file instead |
 | `liana --kit FILE …` | Unlock, check the phone key, and print each Savings wallet's public descriptor for Liana. Liana can't hold Savings with no beneficiary, so that one is marked for Bitcoin Core or Sparrow. |
 | `liana … --show-phrase` | Also print the phone key's 12 words, after a warning, for Liana's hot signer |
+| `sparrow --kit FILE … --out FILE` | Unlock, check the phone key, and write Savings with no beneficiary (the plain 2 of 3) to a new file that Sparrow imports as a wallet (its output-descriptor import). It refuses a kit with no such wallet and points to Liana. The 12 words only with `--show-phrase`, after the warning. |
 | `heir --kit FILE --key-file FILE` (or `--key-stdin`) | **The heir's route:** with HEIR's 12 words and the kit's plain setup, and no second key, show the Savings wallets the heir can claim, for Liana. Marked **UNVERIFIED**. |
 
 `--kit` takes the kit PDF, its armoured text (pasted or typed back in), or the raw backup file.
@@ -68,9 +69,19 @@ An heir has their own key (HEIR) and the kit, but not the second key. So `heir` 
   - `heir` doesn't accept a second key.
 - **Every heir run** is checked to show none of the heir's words, nor the phone key's.
 
+## Which app
+
+After unlocking, `core`, `liana` and `sparrow` all say which app suits each Savings wallet:
+- **Liana** for the wallet with a beneficiary (the Taproot shape);
+- **Sparrow** for the one without (the plain 2 of 3);
+- **Bitcoin Core** (`core`), always offered for experts, works for both.
+
+Each ends with one line starting "Next:", a single plain step. The step-by-step for a family member or helper is the draft [`docs/exit-guide.md`](../../docs/exit-guide.md).
+
 ## The second key
 
 - **Release builds** don't talk to any second key yet. Trezor and the second phone come in later steps (restore-tool.md, section 9). `show` works without one.
+- **The exit drill** also builds `examples/make_test_kit` (test-only, `required-features = ["simulated-device"]`). It makes a kit the way the app will, from a phone key file and a wallet setup, locked to a fresh simulated second key, and uses no new dependency (`satkeep-savings` is a dev-dependency).
 - **Test builds** (`--features simulated-device`) add `--simulated-device FILE`. The file holds a simulated device's state, its secret and its PIN, and the PIN to try is typed on standard input, as if on the device.
 
 ## Rules for anything secret
@@ -114,11 +125,16 @@ Each was already in `Cargo.lock` at this version and was approved for this crate
 - `show` describes a kit without unlocking it;
 - `core` imports both shapes, Core finds 3 BTC from the birthday on, and PHONE from Core plus DEVICE spends each coin;
 - `core --out` writes a file that imports as it is, and only once;
-- `liana` prints the descriptors, and the 12 words only on request.
+- `liana` prints the descriptors, and the 12 words only on request;
+- `sparrow` writes the plain wallet's descriptor to a new file (once), and the 12 words only on request;
+- `core`, `liana` and `sparrow` name Liana, Sparrow and Bitcoin Core per wallet and end with one "Next:" step.
 
 **Forbidden:**
 - the wrong second key, a wrong PIN, and no second key;
 - a changed plain setup, and another phone key's backup (T5);
 - a node on another network, a node on another machine, and an existing Core wallet;
 - a key on the command line: the phrase whole, split over several arguments, 7 of its words, or a `tprv`;
-- PHONE alone finalizing a spend.
+- PHONE alone finalizing a spend;
+- `sparrow` on a kit with only Savings with a beneficiary (it points to Liana and writes nothing).
+
+**In the exit drill, on the runner:** a `lianad` on `liana`'s output sees the same coins as Bitcoin Core, `sparrow`'s file passes the drill's port of Sparrow's descriptor parser, and the heir's route goes through Liana. A real Sparrow import stays a manual check, because Sparrow is a desktop app.

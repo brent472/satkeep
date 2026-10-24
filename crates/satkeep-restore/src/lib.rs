@@ -188,6 +188,39 @@ pub fn about(blocks: u32) -> String {
     }
 }
 
+/// Whether a Savings descriptor is the Taproot shape (with a beneficiary,
+/// for Liana) rather than the plain 2 of 3 (for Sparrow).
+pub fn is_taproot(descriptor: &str) -> bool {
+    descriptor.starts_with("tr(")
+}
+
+/// Which app to use for each Savings wallet: Liana with a beneficiary,
+/// Sparrow without one, and Bitcoin Core for experts, always.
+pub fn routes(setup: &WalletSetup) -> String {
+    let mut out = String::from("\nWhich app to use:\n");
+    for (i, wallet) in setup.savings.iter().enumerate() {
+        let app = if is_taproot(&wallet.descriptor) {
+            "Liana (`satkeep-restore liana`): it has a beneficiary"
+        } else {
+            "Sparrow (`satkeep-restore sparrow --out FILE`): it has no beneficiary"
+        };
+        out += &format!("  Savings wallet {}: {app}\n", i + 1);
+    }
+    out += "  For experts, Bitcoin Core works for every wallet (`satkeep-restore core`).\n";
+    out
+}
+
+/// Writes `text` to `path`, a new file. Never overwrites.
+pub fn write_new(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("creating {} (it must not exist yet)", path.display()))?;
+    file.write_all(text.as_bytes()).with_context(|| format!("writing {}", path.display()))
+}
+
 /// The Savings wallets, one per line, with nothing secret.
 pub fn wallets(setup: &WalletSetup) -> String {
     let mut out = String::new();

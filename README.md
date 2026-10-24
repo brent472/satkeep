@@ -73,6 +73,7 @@ The exact descriptors, and the tests for every path, are in [`crates/satkeep-sav
 | --- | --- |
 | [`docs/milestone-1.md`](docs/milestone-1.md) | Builder brief for the current milestone |
 | [`docs/phone-key-backup.md`](docs/phone-key-backup.md) | Phone key backup: the design, which security devices can unlock it, threats and decisions. A prototype is in `satkeep-savings`. |
+| [`docs/exit-guide.md`](docs/exit-guide.md) | **Draft:** the step-by-step for a family member, helper or heir to get Savings out with Liana or Sparrow (Bitcoin Core for experts), using `satkeep-restore` |
 | [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Satkeep: both shapes of Savings with Bitcoin Core alone, the P2WSH shape in Sparrow's format, and the Taproot shape with Liana |
 | [`docs/signet-demo.md`](docs/signet-demo.md) | One transaction for each allowed Savings path, in both shapes, on signet, with links to each |
 | [`docs/backup-format.md`](docs/backup-format.md) | The phone key backup, wallet setup and exit kit formats, byte by byte, with test vectors |
