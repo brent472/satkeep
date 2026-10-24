@@ -10,9 +10,8 @@ license.workspace = true
 [dependencies]
 bdk_wallet.workspace = true
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
-chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
-hkdf = "0.12.4"
-sha2 = "0.10.9"
+# The backup format; the simulated device for the prototype and its tests.
+satkeep-backup = { path = "../satkeep-backup", features = ["simulated-device"] }
 thiserror.workspace = true
 zeroize = "1.9.1"
 

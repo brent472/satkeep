@@ -64,6 +64,20 @@ impl HolderKey {
         Ok(Self::from_phrase(phrase))
     }
 
+    /// A key from a phrase restored from the phone key backup, which has
+    /// already checked it's 12 English words.
+    pub(crate) fn from_mnemonic(phrase: Mnemonic) -> Result<Self, Error> {
+        if phrase.word_count() != PHRASE_WORDS || phrase.language() != Language::English {
+            return Err(Error::BadHolderKey);
+        }
+        Ok(Self::from_phrase(phrase))
+    }
+
+    /// The phrase itself, for the phone key backup.
+    pub(crate) fn mnemonic(&self) -> &Mnemonic {
+        &self.phrase
+    }
+
     fn from_phrase(phrase: Mnemonic) -> Self {
         // BIP39 seed with an empty passphrase, then the BIP32 master key.
         let mut seed = phrase.to_seed("");

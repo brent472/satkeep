@@ -15,6 +15,7 @@ on:
   # No secrets are used, and fork PRs get a read-only token.
   pull_request:
     paths:
+      - "crates/satkeep-backup/**"
       - "crates/satkeep-savings/**"
       - "crates/satkeep-cli/**"
       - "contrib/exit-drill/**"

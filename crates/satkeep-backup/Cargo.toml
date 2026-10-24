@@ -1,0 +1,26 @@
+[package]
+name = "satkeep-backup"
+version = "0.1.0"
+description = "The Satkeep phone key backup and exit kit formats: parse, unlock and make. Test networks only."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# The software security device, for tests and the prototype. Release builds
+# of the restore tool leave it out.
+simulated-device = []
+
+[dependencies]
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
+# getrandom: the operating system's generator for data keys, nonces and
+# wallet ids (aead's OsRng). It adds no crate to the build.
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "getrandom"] }
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+thiserror.workspace = true
+zeroize = "1.9.1"
+
+[dev-dependencies]
+satkeep-backup = { path = ".", features = ["simulated-device"] }

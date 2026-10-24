@@ -1,7 +1,7 @@
-//! Phone key backup files, which come from the owner's cloud, through
-//! `backup::read_header` and `backup::restore`: either raw bytes, or a real
-//! backup (made inside the target with a simulated device) edited by the
-//! input.
+//! Phone key backup files, which come from the owner's cloud or an exit kit,
+//! through `satkeep_backup::read_header` and `restore`: either raw bytes, or
+//! a real backup (made inside the target with a simulated device) edited by
+//! the input.
 //!
 //! Besides never panicking: an edited backup must never open, and a backup
 //! that opens must give back the original phrase. Nothing is ever printed.
@@ -10,8 +10,9 @@
 
 use libfuzzer_sys::arbitrary::{Result as ArbResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
+use satkeep_backup::setup::{Network, SavingsWallet};
+use satkeep_backup::{self as backup, SimulatedDevice, WalletSetup};
 use satkeep_savings::HolderKey;
-use satkeep_savings::backup::{self, SimulatedDevice};
 
 const PIN: &str = "2468";
 
@@ -26,7 +27,12 @@ thread_local! {
         let phone = HolderKey::generate();
         let mut device = d.borrow_mut();
         device.enter_pin(PIN).expect("right PIN");
-        let file = backup::make_backup(&phone, "setup", backup::new_wallet_id(), 1_792_713_600, &mut *device)
+        let setup = WalletSetup {
+            network: Network::Regtest,
+            pocket: None,
+            savings: vec![SavingsWallet { descriptor: "wsh(setup)".into(), birthday: 0, heir: None }],
+        };
+        let file = satkeep_savings::backup::make_backup(&phone, &setup, backup::new_wallet_id(), 1_792_713_600, &mut *device)
             .expect("a backup");
         Fixture { phrase: phone.to_secret_string(), file }
     })));
@@ -73,7 +79,7 @@ fuzz_target!(|data: &[u8]| {
         device.enter_pin(PIN).expect("right PIN");
         if let Ok(restored) = backup::restore(&file, &mut *device) {
             // assert!, not assert_eq!: a failure must not print a phrase.
-            assert!(restored.phone.to_secret_string() == fixture.phrase, "a backup opened to a different key");
+            assert!(restored.phrase.to_string() == fixture.phrase, "a backup opened to a different key");
             assert!(!edited || file == fixture.file, "an edited backup opened");
         }
     });

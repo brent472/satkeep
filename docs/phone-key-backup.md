@@ -59,6 +59,8 @@ The first version of this document raised four questions. v3.8 of the brief sett
 
 ### 2.1 What's in the backup
 
+The exact format, with test vectors, is now [`backup-format.md`](backup-format.md); this section is the design it came from.
+
 One file, under 1 KB:
 
 ```text

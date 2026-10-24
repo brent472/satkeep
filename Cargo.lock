@@ -465,6 +465,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core",
  "typenum",
 ]
 
@@ -839,6 +840,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "satkeep-backup"
+version = "0.1.0"
+dependencies = [
+ "bip39",
+ "chacha20poly1305",
+ "hkdf",
+ "satkeep-backup",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "satkeep-cli"
 version = "0.1.0"
 dependencies = [
@@ -861,12 +875,10 @@ dependencies = [
  "bdk_bitcoind_rpc",
  "bdk_wallet",
  "bip39",
- "chacha20poly1305",
- "hkdf",
  "rand",
+ "satkeep-backup",
  "satkeep-testenv",
  "serde_json",
- "sha2",
  "thiserror",
  "zeroize",
 ]

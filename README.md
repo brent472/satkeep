@@ -73,6 +73,8 @@ The exact descriptors, and the tests for every path, are in [`crates/satkeep-sav
 | [`docs/phone-key-backup.md`](docs/phone-key-backup.md) | Phone key backup: the design, which security devices can unlock it, threats and decisions. A prototype is in `satkeep-savings`. |
 | [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Satkeep: both shapes of Savings with Bitcoin Core alone, the P2WSH shape in Sparrow's format, and the Taproot shape with Liana |
 | [`docs/signet-demo.md`](docs/signet-demo.md) | One transaction for each allowed Savings path, in both shapes, on signet, with links to each |
+| [`docs/backup-format.md`](docs/backup-format.md) | The phone key backup, wallet setup and exit kit formats, byte by byte, with test vectors |
+| [`crates/satkeep-backup`](crates/satkeep-backup/README.md) | Those formats in code, shared by the app side and the restore tool |
 | [`crates/satkeep-savings`](crates/satkeep-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/satkeep-cli`](crates/satkeep-cli/README.md) | `satkeep`, a developer command-line tool for Savings on test networks |
 | [`docs/design.md`](docs/design.md) | Design references: screens, type and color |

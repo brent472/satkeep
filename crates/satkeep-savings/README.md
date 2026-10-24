@@ -120,6 +120,8 @@ Brief 3.12: every Savings payment and pocket refill also spends the coins close 
 
 `backup` is a prototype of the phone key backup: the phone key, encrypted on the phone, kept in the owner's own cloud, and unlocked only with their security device. The design, the device survey, the threats and the decisions behind it are in [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md).
 
+The format itself is in its own crate, [`satkeep-backup`](../satkeep-backup/README.md), specified in [`docs/backup-format.md`](../../docs/backup-format.md), so the restore tool can share it without BDK. That covers the file, the device trait, the wallet setup and the exit kit, with its own tests. This module re-exports it and adds the phone key as a `HolderKey` and the cloud folder.
+
 ```rust
 device.enter_pin(pin)?;                                   // on the device itself
 let file = backup::make_backup(&phone, &setup, wallet_id, created, &mut device)?;
@@ -127,14 +129,18 @@ backup::save(&mut cloud, file)?;                          // the only visible co
 let header = backup::read_header(&file)?;                 // date and devices, no unlocking
 let restored = backup::restore(&file, &mut device)?;      // needs the right device and its PIN
 backup::replace_device(&mut cloud, &phone, &setup, wallet_id, created, &mut new_device)?;
+let restored = backup::restore_kit(&backup::kit::read(&kit_pdf)?, &mut device)?; // from the exit kit
 ```
 
-- **Format.** A fresh random data key per backup encrypts the phrase and the wallet's public setup with XChaCha20-Poly1305. The whole header (the date, the device ids) is authenticated, so changing any of it stops the backup opening.
+`setup` is a `WalletSetup`: the network and each Savings wallet's descriptor, birthday and delays, in one versioned text form.
+
+- **Format** ([spec](../../docs/backup-format.md)). A fresh random data key per backup encrypts the phrase and the wallet's setup with XChaCha20-Poly1305. The whole header (the date, the device ids) is authenticated, so changing any of it stops the backup opening.
 - **Lock entries.** Each one wraps the data key under a key derived (HKDF-SHA256) from one device's secret, bound to the wallet id, the device id, the unlock method and the format version.
 - **Devices.** A `SecurityDevice` gives a 32-byte secret for a request, the same every time, only after its own PIN, the way Trezor's SLIP-0011 CipherKeyValue works. `SimulatedDevice` does that in software, with a retry limit. Real devices aren't connected yet.
 - **The recovery contact's lock entry** is reserved in the format, and never opened by a device. Nothing makes or opens one yet.
 - **The cloud.** `MemoryCloud` stands in for iCloud and Google Drive and, like them, never truly forgets: deleted and replaced files stay retrievable. A test pins the consequence: replacing the device doesn't stop the old device opening an *old* copy, which is why a lost or stolen device also means a new phone key (decision D3 in the research).
 - **Nothing secret is printed or put in an error.** `Restored` and `SimulatedDevice` aren't `Debug`, and the phrase, data key, device secret and key-encryption key are wiped from memory after use. The cipher wipes its own copy of the key too; HKDF's working state isn't wiped (the `hkdf` crate doesn't support it).
+- **Tests here** cover the app-side parts: a `HolderKey` round trip, restoring from a kit, replacing the device and the cloud's old copies. `tests/backup.rs` shows a restored key approving a regtest 2-of-3 spend.
 - **The device is only ever asked for this wallet's own label.** A changed file can't make it derive a key for anything else.
 
 ## Finding for the reviewer: BDK alone finalizes delayed spends wrongly, both ways

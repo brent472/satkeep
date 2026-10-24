@@ -214,7 +214,7 @@ All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.
 Each item is its own branch and PR, stopping for review after each, as usual.
 
 1. **This plan** (`research/restore-tool`). Stop for your OK.
-2. **The format crate and spec.** Move the backup code into `satkeep-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected.
+2. **The format crate and spec.** Move the backup code into `satkeep-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected. **Done:** [`satkeep-backup`](../crates/satkeep-backup/README.md) and [`backup-format.md`](backup-format.md); no new crates.
    - **Tests:** today's backup tests move with the code. New ones: the kit parser refuses changed, truncated or mismatched kits (plain setup ≠ locked setup); the vectors decode. A fuzz target for the kit parser.
 3. **The tool**, with the simulated device: unlock, the PHONE check, Bitcoin Core RPC import and file export, the Liana descriptor and the `--show-phrase` export.
    - **Works / forbidden tests:** the right kit and device restore and spend on regtest. The wrong device, a wrong PIN, a changed kit, a swapped backup, mainnet, and a key on the command line are each refused. No key material appears in the output (the CLI's existing output checks).

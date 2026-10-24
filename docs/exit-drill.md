@@ -68,7 +68,7 @@ The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py
 
 [`.github/workflows/exit-drill.yml`](../.github/workflows/exit-drill.yml) runs on its own:
 - **every week** (Mondays, 06:17 UTC);
-- **on any pull request** that touches `crates/satkeep-savings`, `crates/satkeep-cli`, `contrib/exit-drill`, the workflow and its pinned keys, or `Cargo.toml` / `Cargo.lock`.
+- **on any pull request** that touches `crates/satkeep-backup`, `crates/satkeep-savings`, `crates/satkeep-cli`, `contrib/exit-drill`, the workflow and its pinned keys, or `Cargo.toml` / `Cargo.lock`.
 
 It was manual-only at first, and broke unnoticed when the minimum heir delay and the refresh window were added (PRs #7 and #9); it was fixed in PR #12. GitHub emails the workflow's owner when a scheduled run fails, and turns off schedules in a repo with no activity for 60 days.
 
