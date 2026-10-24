@@ -84,8 +84,14 @@ The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py
 ## How it's run
 
 [`.github/workflows/exit-drill.yml`](../.github/workflows/exit-drill.yml) runs on its own:
-- **every week** (Mondays, 06:17 UTC);
-- **on any pull request** that touches `crates/satkeep-backup`, `crates/satkeep-savings`, `crates/satkeep-cli`, `contrib/exit-drill`, the workflow and its pinned keys, or `Cargo.toml` / `Cargo.lock`.
+- **every week** (Mondays, 06:17 UTC), **on every push to `main`**, and **by hand**: always the full drill;
+- **on every pull request**, so its `drill` job always reports and can be a required check.
+
+**On a pull request, the first step decides whether the full drill runs.**
+- **How it decides:** from `git diff --name-only` against the merge base with the PR's base branch. It doesn't use the API's file list, which is capped.
+- **What counts:** the full drill runs if anything changed under `crates/`, `contrib/exit-drill/`, `.github/exit-drill/` (the pinned keys) or `.github/scripts/` (the Bitcoin Core download it uses), or in `Cargo.toml`, `Cargo.lock`, `rust-toolchain*` or the workflow itself.
+- **Otherwise** the job passes in seconds, and its summary says "No drill paths changed: skipped". The scan-log job is skipped too, since nothing ran.
+- **When in doubt, it runs:** if the merge base or the file list can't be found, or the list is empty, it runs the full drill.
 
 It was manual-only at first, and broke unnoticed when the minimum heir delay and the refresh window were added (PRs #7 and #9); it was fixed in PR #12. GitHub emails the workflow's owner when a scheduled run fails, and turns off schedules in a repo with no activity for 60 days.
 

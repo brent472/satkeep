@@ -102,7 +102,7 @@ Every pull request runs [CI](.github/workflows/ci.yml):
 - `cargo deny check`
 - a 60-second run of each fuzz target in [`fuzz/`](fuzz/)
 
-The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core. It runs every week, and on every pull request that touches the Savings library, the CLI, the drill or the dependencies.
+The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core. It runs every week, on every push to main, and on every pull request; a PR that changes nothing the drill uses (no crate, drill file, toolchain or dependency) passes it in seconds.
 
 Two checks run by hand:
 - [Fuzz (long)](.github/workflows/fuzz-long.yml) fuzzes each target for longer.
