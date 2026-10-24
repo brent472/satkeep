@@ -19,10 +19,11 @@ on:
   push:
     branches: [main]
 
-# A newer push to the same PR replaces a drill still running.
+# A newer push to the same PR replaces a drill still running. On main, a
+# drill already running is never cancelled: the next one waits for it.
 concurrency:
   group: exit-drill-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -76,9 +77,10 @@ jobs:
           run_it() { echo "run=true" >> "$GITHUB_OUTPUT"; echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
           [ "$EVENT" = "pull_request" ] || run_it "Full drill: a $EVENT run always runs it."
           base=$(git merge-base "origin/$BASE_REF" "$HEAD_SHA") || run_it "Full drill: couldn't find the merge base with $BASE_REF."
-          changed=$(git -c core.quotePath=false diff --name-only "$base" "$HEAD_SHA") || run_it "Full drill: couldn't list the changed files."
+          # --no-renames: a file moved out of a drill path lists its old path too.
+          changed=$(git -c core.quotePath=false diff --no-renames --name-only "$base" "$HEAD_SHA") || run_it "Full drill: couldn't list the changed files."
           [ -n "$changed" ] || run_it "Full drill: the PR lists no changed files."
-          drill_paths='^(crates/|contrib/exit-drill/|\.github/exit-drill/|\.github/scripts/|rust-toolchain)|^(Cargo\.toml|Cargo\.lock|\.github/workflows/exit-drill\.yml)$'
+          drill_paths='^(crates/|contrib/exit-drill/|\.github/exit-drill/|\.github/scripts/|\.cargo/|rust-toolchain)|^(Cargo\.toml|Cargo\.lock|\.github/workflows/exit-drill\.yml)$'
           hits=$(grep -E "$drill_paths" <<< "$changed" || true)
           if [ -n "$hits" ]; then
             run_it "Full drill: drill paths changed: $(head -5 <<< "$hits" | paste -sd ' ')$( [ "$(wc -l <<< "$hits")" -gt 5 ] && echo ' …')"

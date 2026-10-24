@@ -9,12 +9,15 @@ The exit drill's `drill` job now reports on every pull request, so it can be mad
   - every push to `main` (new);
   - the weekly run and manual runs, as before.
 - **A first step, "Decide whether the drill runs", on pull requests only:**
-  - **How:** it lists the PR's changes with `git diff --name-only` against the merge base with the PR's base branch, so it isn't limited by the capped API file list. The checkout now fetches the full history for this.
+  - **How:** it lists the PR's changes with `git diff --no-renames --name-only` against the merge base with the PR's base branch, so it isn't limited by the capped API file list. `--no-renames` means a file moved out of a drill path still counts by its old path. The checkout now fetches the full history for this.
   - **Full drill** if anything changed under `crates/`, `contrib/exit-drill/` or `.github/exit-drill/`, or in `Cargo.toml`, `Cargo.lock`, `rust-toolchain*` or `.github/workflows/exit-drill.yml`.
-  - **Also counted:** `.github/scripts/`, because the drill downloads Bitcoin Core with `.github/scripts/fetch-bitcoin-core.sh` (when in doubt, run it).
+  - **Also counted:**
+    - `.github/scripts/`, because the drill downloads Bitcoin Core with `.github/scripts/fetch-bitcoin-core.sh` (when in doubt, run it);
+    - `.cargo/` (Cargo settings), added in review.
   - **Otherwise:** every later step is skipped, the job passes, and its summary says "No drill paths changed: skipped (changed files: N, none used by the drill)".
   - **When in doubt it runs:** a missing merge base, a file list it can't get, or an empty list all run the full drill.
 - **Pushes to `main`, the weekly run and manual runs** never take the skip. The step writes why the drill ran into the job summary, for example "Full drill: a push run always runs it" or "Full drill: drill paths changed: …".
+- **Concurrency** (added in review): a newer push to the same PR still cancels that PR's drill in progress, but on `main` a running drill is never cancelled (`cancel-in-progress` only for `pull_request`).
 - **The scan-log job** is skipped when the drill was, since nothing ran to scan. If the drill job fails before deciding, scan-log still runs.
 - `docs/exit-drill.md` and the README say how it decides.
 

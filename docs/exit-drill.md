@@ -88,9 +88,10 @@ The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py
 - **on every pull request**, so its `drill` job always reports and can be a required check.
 
 **On a pull request, the first step decides whether the full drill runs.**
-- **How it decides:** from `git diff --name-only` against the merge base with the PR's base branch. It doesn't use the API's file list, which is capped.
-- **What counts:** the full drill runs if anything changed under `crates/`, `contrib/exit-drill/`, `.github/exit-drill/` (the pinned keys) or `.github/scripts/` (the Bitcoin Core download it uses), or in `Cargo.toml`, `Cargo.lock`, `rust-toolchain*` or the workflow itself.
+- **How it decides:** from `git diff --no-renames --name-only` against the merge base with the PR's base branch, so a file moved out of a drill path still counts by its old path. It doesn't use the API's file list, which is capped.
+- **What counts:** the full drill runs if anything changed under `crates/`, `contrib/exit-drill/`, `.github/exit-drill/` (the pinned keys), `.github/scripts/` (the Bitcoin Core download it uses) or `.cargo/` (Cargo settings), or in `Cargo.toml`, `Cargo.lock`, `rust-toolchain*` or the workflow itself.
 - **Otherwise** the job passes in seconds, and its summary says "No drill paths changed: skipped". The scan-log job is skipped too, since nothing ran.
+- **Concurrency:** a newer push to the same PR cancels that PR's drill still running. On main, a running drill is never cancelled, and the next one waits.
 - **When in doubt, it runs:** if the merge base or the file list can't be found, or the list is empty, it runs the full drill.
 
 It was manual-only at first, and broke unnoticed when the minimum heir delay and the refresh window were added (PRs #7 and #9); it was fixed in PR #12. GitHub emails the workflow's owner when a scheduled run fails, and turns off schedules in a repo with no activity for 60 days.
