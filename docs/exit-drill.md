@@ -152,7 +152,7 @@ Sparrow 2.5.5's descriptor parser, `drongo` (at the commit Sparrow 2.5.5 uses), 
   - do a 2-of-3 spend and a recovery spend, signing with an external signer or an imported PSBT
 
   This is the route Windows users have, and nobody has tried it yet.
-- **The signet run** of this drill (Milestone 1's "signet demo transaction for each allowed path").
+- **The signet run** of this drill. The [signet demo](signet-demo.md) spends every allowed path on signet with Twofold's own tool; leaving through Liana and Bitcoin Core on signet is still to do.
 - **Hardware and app signers.** The drill signs with Liana's hot signer and with Bitcoin Core. Signing through the Liana desktop app, and through any hardware device Twofold supports, is still to do.
 - **Real delays.** The drill uses a 20-block heir delay. The 61,320-block placeholder is covered by Twofold's own full-length test, not by Liana.
 - **Sparrow, Electrum and Nunchuk by hand** for the P2WSH shape: importing the export into each app and spending 2 of 3.

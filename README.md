@@ -72,6 +72,7 @@ The exact descriptors, and the tests for every path, are in [`crates/twofold-sav
 | [`docs/milestone-1.md`](docs/milestone-1.md) | Builder brief for the current milestone |
 | [`docs/phone-key-backup.md`](docs/phone-key-backup.md) | Phone key backup: the design, which security devices can unlock it, threats and decisions. A prototype is in `twofold-savings`. |
 | [`docs/exit-drill.md`](docs/exit-drill.md) | Leaving without Twofold: both shapes of Savings with Bitcoin Core alone, the P2WSH shape in Sparrow's format, and the Taproot shape with Liana |
+| [`docs/signet-demo.md`](docs/signet-demo.md) | One transaction for each allowed Savings path, in both shapes, on signet, with links to each |
 | [`crates/twofold-savings`](crates/twofold-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/twofold-cli`](crates/twofold-cli/README.md) | `twofold`, a developer command-line tool for Savings on test networks |
 | [`docs/design.md`](docs/design.md) | Design references: brand sheet, screens, type and color |
@@ -100,6 +101,7 @@ Every pull request runs [CI](.github/workflows/ci.yml):
 Two checks run by hand:
 - [Fuzz (long)](.github/workflows/fuzz-long.yml) fuzzes each target for longer.
 - The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core.
+- The [signet demo](docs/signet-demo.md) spends every allowed path on signet ([`contrib/signet-demo/demo.ps1`](contrib/signet-demo/demo.ps1)).
 
 The full-length 61,320-block test runs locally: `cargo test -- --include-ignored`.
 

@@ -289,10 +289,9 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 
 Keys are generated in memory for each test and never printed, logged or written to disk. While mining, the harness moves each throwaway node's clock forward 10 minutes per block (`setmocktime`). Without that, a node refuses blocks mined thousands per second once their timestamps run 2 hours ahead.
 
-The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this.
+The [`twofold` command-line tool](../twofold-cli/README.md) wraps all of this. The [signet demo](../../docs/signet-demo.md) uses it to spend every allowed path on signet.
 
 ## Not here yet
 
-- The signet demo
 - The recovery contact's lock entry in the phone key backup
 - Real security devices and real cloud storage for the backup

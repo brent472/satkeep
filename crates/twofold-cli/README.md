@@ -255,6 +255,6 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -p 
 | `tests/wallet.rs` | create, address, balance and export work in both shapes; with no beneficiary, nothing opens with time and `savings.json` holds no heir fields. The tool refuses: check-in settings without `--heir`, the old `--device-r` and `--device-delay`, a node on another network, a mainnet `--network`, creating over an existing wallet, any policy the library refuses, and an old wallet with DEVICE_R (with a clear error). |
 | `tests/payments.rs` | The 2-of-3 flow: one approval is refused, two are sent, and change comes back. HEIR alone is refused one block early and works on time. DEVICE alone can never send: there's no such path, and its signature alone never satisfies 2 of 3. Without a beneficiary there's no heir path. HELPER alone, a stranger's key and bad input are all refused. Keys from `keygen` work end to end. |
 
-## Not here yet
+## On signet
 
-- The signet demo
+The [signet demo](../../docs/signet-demo.md) runs every allowed path with this tool on the public signet network, in both shapes, and lists the transactions. Its script is [`contrib/signet-demo/demo.ps1`](../../contrib/signet-demo/demo.ps1).
