@@ -1,4 +1,5 @@
-//! The backup file's byte layout. Every integer is big-endian.
+//! The backup file's byte layout, as specified in docs/backup-format.md.
+//! Every integer is big-endian.
 //!
 //! ```text
 //! header (authenticated as associated data of the body):
@@ -46,7 +47,7 @@ pub enum LockKind {
 }
 
 impl LockKind {
-    fn code(self) -> u8 {
+    pub(crate) fn code(self) -> u8 {
         match self {
             Self::Device => 1,
             Self::Contact => 2,
@@ -85,7 +86,7 @@ pub struct Header {
     pub entries: Vec<LockEntry>,
 }
 
-pub struct ParsedFile<'a> {
+pub(crate) struct ParsedFile<'a> {
     pub header: Header,
     /// The header's exact bytes, which the body authenticates.
     pub header_bytes: &'a [u8],
@@ -93,7 +94,7 @@ pub struct ParsedFile<'a> {
     pub body: &'a [u8],
 }
 
-pub fn encode_header(header: &Header) -> Vec<u8> {
+pub(crate) fn encode_header(header: &Header) -> Vec<u8> {
     let mut out = Vec::with_capacity(64 + header.entries.len() * 128);
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
@@ -112,7 +113,7 @@ pub fn encode_header(header: &Header) -> Vec<u8> {
     out
 }
 
-pub fn encode_body(header_bytes: &[u8], body_nonce: &[u8; NONCE_LEN], body: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_body(header_bytes: &[u8], body_nonce: &[u8; NONCE_LEN], body: &[u8]) -> Vec<u8> {
     let mut out = header_bytes.to_vec();
     out.extend_from_slice(body_nonce);
     out.extend_from_slice(&u32::try_from(body.len()).expect("a small body").to_be_bytes());
@@ -121,7 +122,7 @@ pub fn encode_body(header_bytes: &[u8], body_nonce: &[u8; NONCE_LEN], body: &[u8
 }
 
 /// Reads a backup file's structure without decrypting anything.
-pub fn parse(file: &[u8]) -> Result<ParsedFile<'_>, BackupError> {
+pub(crate) fn parse(file: &[u8]) -> Result<ParsedFile<'_>, BackupError> {
     if file.len() > MAX_FILE {
         return Err(BackupError::NotABackup);
     }

@@ -18,6 +18,7 @@ members = ["."]
 libfuzzer-sys = "0.4.13"
 bdk_wallet = "3.2.0"
 serde_json = "1.0"
+satkeep-backup = { path = "../crates/satkeep-backup", features = ["simulated-device"] }
 satkeep-cli = { path = "../crates/satkeep-cli" }
 satkeep-savings = { path = "../crates/satkeep-savings" }
 
@@ -45,6 +46,13 @@ bench = false
 [[bin]]
 name = "backup_file"
 path = "fuzz_targets/backup_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kit"
+path = "fuzz_targets/kit.rs"
 test = false
 doc = false
 bench = false

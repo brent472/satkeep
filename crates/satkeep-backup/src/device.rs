@@ -7,8 +7,6 @@
 //! from a label); see docs/phone-key-backup.md section 3 for which real
 //! devices can do it.
 
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 /// The device's public identity at the backup-unlock path. It's stored in
@@ -67,6 +65,7 @@ pub trait SecurityDevice {
 }
 
 /// Wrong PINs allowed before a [`SimulatedDevice`] blocks for good.
+#[cfg(feature = "simulated-device")]
 pub const MAX_PIN_TRIES: u8 = 5;
 
 /// A security device simulated in software, for tests and the prototype.
@@ -74,7 +73,9 @@ pub const MAX_PIN_TRIES: u8 = 5;
 /// It holds a random 32-byte secret made when it's created, behaves like a
 /// SLIP-0011 device (secret = HKDF of its own secret and the request), needs
 /// its PIN entered before each unlock, and blocks after [`MAX_PIN_TRIES`]
-/// wrong PINs. Deliberately not `Debug`. Test networks only.
+/// wrong PINs. Deliberately not `Debug`. Test networks only, and only with
+/// the `simulated-device` feature.
+#[cfg(feature = "simulated-device")]
 pub struct SimulatedDevice {
     secret: Zeroizing<[u8; 32]>,
     pin: Zeroizing<String>,
@@ -83,13 +84,13 @@ pub struct SimulatedDevice {
     requests: u32,
 }
 
+#[cfg(feature = "simulated-device")]
 impl SimulatedDevice {
     /// A fresh device with a random secret from the operating system's
     /// random source, and this PIN.
     pub fn new(pin: &str) -> Self {
-        use crate::bitcoin::secp256k1::rand::{RngCore, thread_rng};
-        let mut secret = Zeroizing::new([0u8; 32]);
-        thread_rng().fill_bytes(secret.as_mut());
+        use chacha20poly1305::aead::{KeyInit, OsRng};
+        let secret = Zeroizing::new(chacha20poly1305::XChaCha20Poly1305::generate_key(&mut OsRng).into());
         Self { secret, pin: Zeroizing::new(pin.to_owned()), unlocked: false, wrong_tries: 0, requests: 0 }
     }
 
@@ -121,13 +122,14 @@ impl SimulatedDevice {
 
     fn derive(&self, info: &[&[u8]]) -> [u8; 32] {
         let mut out = [0u8; 32];
-        Hkdf::<Sha256>::new(None, self.secret.as_ref())
+        hkdf::Hkdf::<sha2::Sha256>::new(None, self.secret.as_ref())
             .expand_multi_info(info, &mut out)
             .expect("32 bytes is a valid HKDF-SHA256 length");
         out
     }
 }
 
+#[cfg(feature = "simulated-device")]
 impl SecurityDevice for SimulatedDevice {
     fn id(&self) -> DeviceId {
         DeviceId(self.derive(&[b"satkeep/simulated-device/v1/id"]))

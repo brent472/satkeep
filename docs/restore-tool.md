@@ -68,6 +68,11 @@ A small command-line program, `satkeep-restore`, in this repo as its own crate.
 - **Exporting needs descriptors and keys.** That's `miniscript` and `bitcoin` (already dependencies), not `bdk_wallet`.
 - **Device access** is behind one trait, like `SecurityDevice` today, with one module per kind of device (section 5).
 
+**The heir's route.** An heir can use the kit too, with their own key (HEIR) and the kit's plain wallet setup, and no second key.
+- **That plain setup is unverified.** It's checked against the locked copy only when the second key unlocks the backup. On the heir's route nothing unlocks it, so anyone with the cloud account could have changed it.
+- **The tool says so** whenever it shows or exports a setup it hasn't checked.
+- **What limits the harm:** the heir's key can only ever sign for wallets that contain it. The tool exports for the heir only the wallets whose descriptors hold HEIR's key. A changed setup can hide a wallet or show wrong details, but it can't get the heir's key to approve anything else.
+
 **What it won't do:**
 - **Talk to the network to unlock.** Unlocking is offline.
 - **Build or broadcast transactions.** Liana and Bitcoin Core do that.
@@ -168,6 +173,8 @@ Anyone with the cloud account can edit the kit, for example to point the instruc
 **Mitigations:**
 - **The locked backup is authenticated** (its header is AEAD associated data), so it can't be changed undetected. A swapped backup fails the PHONE check (T5).
 - **The plain wallet setup in the kit isn't authenticated.** The tool uses the copy inside the locked payload, and refuses if the plain copy differs from it.
+- **That check needs the second key.** On the heir's route (HEIR's key plus the plain setup, no second key), the plain setup is unverified. The tool says so, and the heir's key only signs for wallets that contain it (section 3).
+- **The plain setup never holds private keys** (`backup-format.md` section 4), so it's safe for the kit to keep it in the cloud.
 - **The instructions themselves can't be protected by the tool.** Hence the published fingerprint and digests in 7.1, which the owner can also find outside the kit.
 
 ### 7.3 The computer the restore runs on
@@ -214,10 +221,11 @@ All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.
 Each item is its own branch and PR, stopping for review after each, as usual.
 
 1. **This plan** (`research/restore-tool`). Stop for your OK.
-2. **The format crate and spec.** Move the backup code into `satkeep-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected.
+2. **The format crate and spec.** Move the backup code into `satkeep-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected. **Done:** [`satkeep-backup`](../crates/satkeep-backup/README.md) and [`backup-format.md`](backup-format.md); no new crates.
    - **Tests:** today's backup tests move with the code. New ones: the kit parser refuses changed, truncated or mismatched kits (plain setup ≠ locked setup); the vectors decode. A fuzz target for the kit parser.
 3. **The tool**, with the simulated device: unlock, the PHONE check, Bitcoin Core RPC import and file export, the Liana descriptor and the `--show-phrase` export.
    - **Works / forbidden tests:** the right kit and device restore and spend on regtest. The wrong device, a wrong PIN, a changed kit, a swapped backup, mainnet, and a key on the command line are each refused. No key material appears in the output (the CLI's existing output checks).
+   - **The heir's route:** with HEIR's key and the kit's plain setup, the tool marks the setup as unverified, and exports only the wallets that contain HEIR's key.
    - **Dependencies:** reading the kit needs no PDF library (section 4). The Core import can use the RPC client the CLI already has. Anything new gets its reason and a `cargo deny` pass in that PR.
 4. **The exit drill.** Make a kit with the prototype, restore it with the tool, import into Liana and Bitcoin Core, and spend 2 of 3 with PHONE (from the tool) and DEVICE, in both Savings shapes. Then run the key-material scan.
 5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
