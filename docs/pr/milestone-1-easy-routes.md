@@ -42,4 +42,8 @@ The easy routes: the restore tool says which app to use, a `sparrow` command, a 
 - **The workflow** adds one `cargo build --locked` of in-repo code and two env vars with fixed paths. There's no untrusted input, and permissions are unchanged.
 - **The guide's commands** match the CLI, and its Liana key fingerprint matches the pinned key.
 
+**CodeQL:** two `rust/cleartext-logging` alerts, dismissed as false positives with your approval (the same class as #5–#7 on #22):
+- **#8, `main.rs:172`:** `sparrow` prints the wallet list: each wallet's shape, heir delay and birthday block. All public.
+- **#9, `main.rs:228`:** `liana`'s "Next:" line prints how many Savings wallets there are.
+
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
