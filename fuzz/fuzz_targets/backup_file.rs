@@ -10,8 +10,8 @@
 
 use libfuzzer_sys::arbitrary::{Result as ArbResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use twofold_savings::HolderKey;
-use twofold_savings::backup::{self, SimulatedDevice};
+use satkeep_savings::HolderKey;
+use satkeep_savings::backup::{self, SimulatedDevice};
 
 const PIN: &str = "2468";
 

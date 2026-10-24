@@ -1,12 +1,14 @@
 # Signet demo
 
-One transaction for each allowed Savings path, in both shapes, on the public signet test network, made with the `twofold` command-line tool. It ticks the Milestone 1 box "Signet demo transaction for each allowed path". Regtest covers the same paths and every forbidden case in the test suites; this run shows them on a public network with real block times.
+One transaction for each allowed Savings path, in both shapes, on the public signet test network, made with the project's command-line tool. It ticks the Milestone 1 box "Signet demo transaction for each allowed path". Regtest covers the same paths and every forbidden case in the test suites; this run shows them on a public network with real block times.
 
 **Test bitcoin only.** Signet coins have no value. The four keys were fresh test keys made by `twofold keygen` for this run, kept outside the repo, and never printed.
 
 ## What ran
 
 Run on 23–24 October 2026, blocks 327,707 to 327,726, with Bitcoin Core on signet, pruned (`-prune=550`). Payments went to an address nobody can spend from (a Taproot output to the NUMS point), so the coins are gone afterwards.
+
+This was before the rename, so the tool was still called `twofold` (now `satkeep`) and kept its files under `%USERPROFILE%\.twofold`. The commands below are as they ran.
 
 | # | Path | Approved by | Block | Transaction |
 | --- | --- | --- | --- | --- |
@@ -53,11 +55,11 @@ The keys are PHONE, DEVICE, HELPER and HEIR, in that order (fingerprints `db6fe0
 
 ## Assumptions and limits
 
-- **Short test delays.** Heir delay 12 blocks (about 2 hours), check-in every 6 blocks with a 3-block margin, refresh window 2 blocks, minimum heir delay lowered to 10. The placeholders (61,320, 52,560 and 8,760 blocks; minimum 26,280) would take over a year on signet. Twofold's regtest tests cover the full-length heir delay.
+- **Short test delays.** Heir delay 12 blocks (about 2 hours), check-in every 6 blocks with a 3-block margin, refresh window 2 blocks, minimum heir delay lowered to 10. The placeholders (61,320, 52,560 and 8,760 blocks; minimum 26,280) would take over a year on signet. Satkeep's regtest tests cover the full-length heir delay.
 - **Network fee:** the CLI's default, 2 sat/vB.
 - **The payment rule didn't fire.** Payments 5 and 6 spent a coin with one confirmation, below the 4-confirmation refresh age, so nothing extra was refreshed. The rule is covered by the regtest tests.
 - **Forbidden cases ran on regtest, not here,** apart from HEIR before the delay. One key alone, HELPER alone and a stranger's key are refused by the CLI and library tests. A refused transaction can't be put on a public chain anyway.
-- **Signed by Twofold's own tool.** Leaving through Liana or Bitcoin Core on signet is still listed in the [exit drill](exit-drill.md).
+- **Signed by the project's own tool** (then `twofold`). Leaving through Liana or Bitcoin Core on signet is still listed in the [exit drill](exit-drill.md).
 - **A pruned node.** Running this found that a new wallet couldn't sync from a pruned node; fixed on the same branch (see the CLI README).
 
 ## Running it again
@@ -72,4 +74,4 @@ From the repo root, with a signet node running and synced, in Windows PowerShell
 .\contrib\signet-demo\demo.ps1 heir      # HEIR alone, once the heir delay has passed
 ```
 
-`setup` prints an address to fund from a signet faucet (about 0.0005 signet BTC is plenty). Each step waits for its transactions to confirm. The whole run takes about three hours, mostly waiting out the heir delay. Wallets and keys go under `%USERPROFILE%\.twofold` (`signet`, `signet-heir`), and the transaction IDs into `signet-demo-txids.txt` there. `setup` refuses to run twice, so remove those to start over.
+`setup` prints an address to fund from a signet faucet (about 0.0005 signet BTC is plenty). Each step waits for its transactions to confirm. The whole run takes about three hours, mostly waiting out the heir delay. Wallets and keys go under `%USERPROFILE%\.satkeep` (`signet`, `signet-heir`), and the transaction IDs into `signet-demo-txids.txt` there. `setup` refuses to run twice, so remove those to start over.

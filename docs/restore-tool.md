@@ -2,7 +2,7 @@
 
 **Status: plan only, for review. No code yet.** D1–D3 and D5–D7 are approved as recommended; D4 is decided by brief v3.12 (section 8). Test networks only, like everything else in this repo.
 
-The brief promises that if Twofold disappears, the owner can still get their bitcoin out. They need the exit kit in their own cloud drive, their second key, and Twofold's open-source restore tool. The brief lists that tool as an open item that must exist and pass the exit drill before launch.
+The brief promises that if Satkeep disappears, the owner can still get their bitcoin out. They need the exit kit in their own cloud drive, their second key, and Satkeep's open-source restore tool. The brief lists that tool as an open item that must exist and pass the exit drill before launch.
 
 This document covers:
 - what the tool does, and what it can't do;
@@ -15,7 +15,7 @@ This document covers:
 ## Contents
 
 1. [What the tool has to do](#1-what-the-tool-has-to-do)
-2. [What getting out needs, once Twofold is gone](#2-what-getting-out-needs-once-twofold-is-gone)
+2. [What getting out needs, once Satkeep is gone](#2-what-getting-out-needs-once-satkeep-is-gone)
 3. [Proposed design](#3-proposed-design)
 4. [The exit kit file](#4-the-exit-kit-file)
 5. [Second keys the tool can talk to](#5-second-keys-the-tool-can-talk-to)
@@ -28,30 +28,30 @@ This document covers:
 
 | # | Requirement | Comes from |
 | --- | --- | --- |
-| T1 | **Inputs.** Unlocks the phone key backup from the exit kit file and the second key, and needs nothing else: no Twofold app, account, server or helper, and no app-only cloud storage. | Brief (exit kit, open decisions); `docs/phone-key-backup.md` 6.2 |
+| T1 | **Inputs.** Unlocks the phone key backup from the exit kit file and the second key, and needs nothing else: no Satkeep app, account, server or helper, and no app-only cloud storage. | Brief (exit kit, open decisions); `docs/phone-key-backup.md` 6.2 |
 | T2 | **Outputs.** Exports what Liana or Bitcoin Core need to spend: Savings in both shapes, and the everyday pocket. | Brief; owner's instruction |
 | T3 | **Open source.** Small, reproducible to build, and usable by someone who isn't us. | Brief |
 | T4 | **Before unlocking**, shows the backup's date, and which second key locks it. | R5 and R6 in `phone-key-backup.md` |
 | T5 | **Checks the result.** The unlocked phone key must be the PHONE key in the wallet setup, so a swapped or mismatched backup is caught. | New |
 | T6 | **No key material on screen, in logs or in errors** by default. Keys never go on the command line. | CLAUDE.md |
-| T7 | **Passes the exit drill:** the drill restores with the tool, imports into Liana and Bitcoin Core, and spends, with no Twofold code in the spend. | Brief |
+| T7 | **Passes the exit drill:** the drill restores with the tool, imports into Liana and Bitcoin Core, and spends, with no Satkeep code in the spend. | Brief |
 | T8 | **Treats the kit as untrusted input.** The kit is a file anyone with the cloud account can edit. | Threat 7.2 |
 
-## 2. What getting out needs, once Twofold is gone
+## 2. What getting out needs, once Satkeep is gone
 
-When Twofold is gone, so is the helper. That changes what each part of the wallet needs:
+When Satkeep is gone, so is the helper. That changes what each part of the wallet needs:
 
-| Part | Who can spend, without Twofold | What the owner needs |
+| Part | Who can spend, without Satkeep | What the owner needs |
 | --- | --- | --- |
 | **Everyday pocket** | PHONE alone | The phone key: the restore tool gives it back |
 | **Savings** (either shape) | 2 of 3, but HELPER is gone, so **PHONE + DEVICE** | The phone key (from the tool) **and** the second key, signing in Liana or another wallet |
 | **Savings with a beneficiary** | Also HEIR alone, after the heir delay | Unchanged: HEIR's own key in Liana |
 
-**So the second key matters twice.** It unlocks the backup, and it's one of the two keys Savings still needs. A second key that only works inside the Twofold app fails both jobs once the app is gone. Section 5 looks at which second keys pass. This is the most important finding of this plan. The case that would fail, an old phone or tablet, is settled by **D4** (brief v3.12): that phone's app must work fully offline and be able to export its key.
+**So the second key matters twice.** It unlocks the backup, and it's one of the two keys Savings still needs. A second key that only works inside the Satkeep app fails both jobs once the app is gone. Section 5 looks at which second keys pass. This is the most important finding of this plan. The case that would fail, an old phone or tablet, is settled by **D4** (brief v3.12): that phone's app must work fully offline and be able to export its key.
 
 ## 3. Proposed design
 
-A small command-line program, `twofold-restore`, in this repo as its own crate.
+A small command-line program, `satkeep-restore`, in this repo as its own crate.
 
 **Steps:**
 1. **Read the kit.** Find the locked backup and the wallet setup inside the kit file (section 4), and refuse anything malformed.
@@ -62,7 +62,7 @@ A small command-line program, `twofold-restore`, in this repo as its own crate.
 6. **Export** to Bitcoin Core or Liana (section 6), without putting key material on screen by default.
 
 **Code:**
-- **The backup format moves into its own small crate.** It holds the parser and the unlock (today in `twofold-savings::backup`), and depends only on `chacha20poly1305`, `hkdf`, `sha2`, `bip39` and `zeroize`, all already approved. Both the app-side library and the tool use it, so there's one format implementation. The tool doesn't pull in BDK's whole wallet.
+- **The backup format moves into its own small crate.** It holds the parser and the unlock (today in `satkeep-savings::backup`), and depends only on `chacha20poly1305`, `hkdf`, `sha2`, `bip39` and `zeroize`, all already approved. Both the app-side library and the tool use it, so there's one format implementation. The tool doesn't pull in BDK's whole wallet.
   - *Alternative:* a second, independent implementation, as the exit drill uses Liana's own signer. That's more code to keep in step, for a format we own. See **D5**.
 - **A written format spec** (`docs/backup-format.md`) with fixed test vectors. If the tool's own code is ever lost, anyone can rebuild it from the spec. Section 2.1 of `phone-key-backup.md` is its start.
 - **Exporting needs descriptors and keys.** That's `miniscript` and `bitcoin` (already dependencies), not `bdk_wallet`.
@@ -110,13 +110,13 @@ Making the PDF is app work. The plan here only fixes where the data sits, so the
 
 ## 5. Second keys the tool can talk to
 
-From the survey in `phone-key-backup.md` 3.2 and decision D1 there, the second key at launch is an **old phone or tablet** or a **Trezor**, and later the **Twofold card**. Here's how each one works with the tool:
+From the survey in `phone-key-backup.md` 3.2 and decision D1 there, the second key at launch is an **old phone or tablet** or a **Trezor**, and later the **Satkeep card**. Here's how each one works with the tool:
 
-| Second key | Unlocks the backup without Twofold? | Signs Savings without Twofold? | Verdict for the exit |
+| Second key | Unlocks the backup without Satkeep? | Signs Savings without Satkeep? | Verdict for the exit |
 | --- | --- | --- | --- |
 | **Trezor** (SLIP-0011 CipherKeyValue) | **Yes.** It's a public protocol, and the tool asks for the same path and label the app used. Over USB from a computer, with the PIN on the device. Code: the `trezor-client` Rust crate, or calling Trezor's own `trezorctl` (`crypto encrypt-keyvalue`). Which one, and its upkeep, is **unconfirmed**. | Liana and Sparrow sign with hardware wallets. Whether Liana v15 supports Trezor is **unconfirmed**; Sparrow does. | **Works**, if the label and path are written down in the format spec |
-| **Twofold card** (FIDO `hmac-secret` / PRF, if built that way) | **Yes in principle.** It's a public standard, so desktop FIDO tools (libfido2's `fido2-assert` with `-h`) can ask for the same secret, given the credential id and salt stored in the lock entry. Untested. | Only if the card also speaks a signing protocol other wallets know. Its design isn't decided. | **Works by design,** if the card is built for it. Add this to the card's requirements. |
-| **Old phone or tablet** with the Twofold app (Secure Enclave or Keystore key, ECDH) | **Through that phone's app, offline (D4).** The unlock key can't leave the phone, by design, and only our app can use it. So the app answers the tool's unlock request with no Twofold servers: the tool shows the request, the phone's app shows the answer, by QR code or text. Its exact wire format goes in the format spec. If the app is no longer on that phone and can't be installed again, the backup can't be opened. | **Yes, through the export (D4):** the app's Advanced option exports DEVICE's key as 12 words, or straight to Liana or Bitcoin Core. It also signs offline. | **Works while that phone's app is still installed,** with the kit explaining the step. The app recommends, never requires, a hardware second key once Savings is large. |
+| **Satkeep card** (FIDO `hmac-secret` / PRF, if built that way) | **Yes in principle.** It's a public standard, so desktop FIDO tools (libfido2's `fido2-assert` with `-h`) can ask for the same secret, given the credential id and salt stored in the lock entry. Untested. | Only if the card also speaks a signing protocol other wallets know. Its design isn't decided. | **Works by design,** if the card is built for it. Add this to the card's requirements. |
+| **Old phone or tablet** with the Satkeep app (Secure Enclave or Keystore key, ECDH) | **Through that phone's app, offline (D4).** The unlock key can't leave the phone, by design, and only our app can use it. So the app answers the tool's unlock request with no Satkeep servers: the tool shows the request, the phone's app shows the answer, by QR code or text. Its exact wire format goes in the format spec. If the app is no longer on that phone and can't be installed again, the backup can't be opened. | **Yes, through the export (D4):** the app's Advanced option exports DEVICE's key as 12 words, or straight to Liana or Bitcoin Core. It also signs offline. | **Works while that phone's app is still installed,** with the kit explaining the step. The app recommends, never requires, a hardware second key once Savings is large. |
 | **Message-signing devices** (Coldcard, Jade, BitBox02, Ledger; not at launch) | **Yes,** by signing the same fixed message. These have the repeatability caveats in 3.2. | Yes, in Liana and Sparrow | **Works with caveats** |
 
 **The old-phone case** depends on that phone's app still being installed. Brief v3.12 accepts that and makes the app as independent as it can be (D4). For the tool, it means one more kind of device: a **second phone**, reached by an offline request and answer, not over USB.
@@ -187,7 +187,7 @@ A tool, real or fake, could ask the device to derive a key for another label.
 
 **Mitigations:**
 - **The device shows the label on screen** (Trezor CipherKeyValue with `ask_on_decrypt`).
-- **The label is fixed** in the format spec and names Twofold and the wallet id.
+- **The label is fixed** in the format spec and names Satkeep and the wallet id.
 
 **Residual risk:** an owner who doesn't read the screen.
 
@@ -201,10 +201,10 @@ All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.
 
 | # | Decision | Options | Outcome |
 | --- | --- | --- | --- |
-| **D1** | Where the tool lives | A crate in this repo / its own repo | **A crate in this repo** (`crates/twofold-restore`), with signed reproducible releases and a Software Heritage mirror. Splitting it out later is easy; keeping the format in step across repos isn't. |
+| **D1** | Where the tool lives | A crate in this repo / its own repo | **A crate in this repo** (`crates/satkeep-restore`), with signed reproducible releases and a Software Heritage mirror. Splitting it out later is easy; keeping the format in step across repos isn't. |
 | **D2** | The exit kit's file type | PDF with an embedded attachment plus printed armoured text / HTML / guide plus a data file | **PDF**, as in section 4. The tool reads the PDF, the armoured text or the raw bytes. |
 | **D3** | How PHONE's key reaches Liana and Core | Core: RPC import / key file. Liana: show the 12 words on request / write into Liana's data folder. | **Core: RPC import by default, file on request. Liana: show the 12 words only with `--show-phrase`, after a warning.** Never Liana's internal files. |
-| **D4** | The old-phone second key, which fails once the app is gone (section 5) | (a) Accept it and say so in the kit. (b) The app recommends a hardware second key when the second key is an old phone. (c) An old phone can't be the only second key for Savings above some amount. | **Decided (owner, brief v3.12): an old phone still counts as a second key**, with three requirements: (1) the second-phone app signs and unlocks fully offline, with no Twofold servers, and has an Advanced option to export its key (12 words, or straight to Liana or Bitcoin Core); (2) the exit kit covers that step for owners whose second key is a phone; (3) the app recommends, never requires, a hardware second key once Savings is large. The wording is the brief's (Section 04 *Inheritance*, Section 19 *Settings*). (1) and (3) are app work; for the tool, (1) means the second-phone request-and-answer above, and (2) means the kit's structure leaves room for that step. |
+| **D4** | The old-phone second key, which fails once the app is gone (section 5) | (a) Accept it and say so in the kit. (b) The app recommends a hardware second key when the second key is an old phone. (c) An old phone can't be the only second key for Savings above some amount. | **Decided (owner, brief v3.12): an old phone still counts as a second key**, with three requirements: (1) the second-phone app signs and unlocks fully offline, with no Satkeep servers, and has an Advanced option to export its key (12 words, or straight to Liana or Bitcoin Core); (2) the exit kit covers that step for owners whose second key is a phone; (3) the app recommends, never requires, a hardware second key once Savings is large. The wording is the brief's (Section 04 *Inheritance*, Section 19 *Settings*). (1) and (3) are app work; for the tool, (1) means the second-phone request-and-answer above, and (2) means the kit's structure leaves room for that step. |
 | **D5** | One backup implementation or two | Shared small crate / an independent second implementation | **Shared crate, plus the written spec and fixed test vectors.** The exit drill still restores through the tool and spends with Liana's and Core's own code, so the parts that matter are checked independently. |
 | **D6** | Testing with a real device protocol | Simulated device only / plus the Trezor emulator in CI | **Simulated device first. The Trezor emulator (`trezor-user-env`, a download, on GitHub runners only) when Trezor support is built,** after your OK. |
 | **D7** | The wallet setup format | Keep a free string / a versioned format | **A versioned format** (section 4), with room for the pocket's descriptor and for earlier Savings wallets. It's also the kit's plain copy. |
@@ -214,7 +214,7 @@ All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.
 Each item is its own branch and PR, stopping for review after each, as usual.
 
 1. **This plan** (`research/restore-tool`). Stop for your OK.
-2. **The format crate and spec.** Move the backup code into `twofold-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected.
+2. **The format crate and spec.** Move the backup code into `satkeep-backup`, write `docs/backup-format.md` with fixed test vectors, and add the versioned wallet setup (D7) and the kit structure (D2: the markers and the armoured text). No new dependencies are expected.
    - **Tests:** today's backup tests move with the code. New ones: the kit parser refuses changed, truncated or mismatched kits (plain setup ≠ locked setup); the vectors decode. A fuzz target for the kit parser.
 3. **The tool**, with the simulated device: unlock, the PHONE check, Bitcoin Core RPC import and file export, the Liana descriptor and the `--show-phrase` export.
    - **Works / forbidden tests:** the right kit and device restore and spend on regtest. The wrong device, a wrong PIN, a changed kit, a swapped backup, mainnet, and a key on the command line are each refused. No key material appears in the output (the CLI's existing output checks).
@@ -223,4 +223,4 @@ Each item is its own branch and PR, stopping for review after each, as usual.
 5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
 6. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.
 
-The Twofold card's unlock (FIDO `hmac-secret`) waits for the card's design. The everyday pocket's export waits for its descriptor. The format leaves room for both.
+The Satkeep card's unlock (FIDO `hmac-secret`) waits for the card's design. The everyday pocket's export waits for its descriptor. The format leaves room for both.

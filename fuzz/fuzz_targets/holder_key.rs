@@ -11,7 +11,7 @@
 
 use libfuzzer_sys::arbitrary::{Result as ArbResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use twofold_savings::HolderKey;
+use satkeep_savings::HolderKey;
 
 thread_local! {
     static GENERATED: &'static str = Box::leak(HolderKey::generate().to_secret_string().into_boxed_str());

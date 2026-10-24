@@ -1,11 +1,13 @@
 # Design references
 
-- **Brand sheet (visual master):** [`brand/TWOFOLD_brand_sheet.png`](brand/TWOFOLD_brand_sheet.png). Where anything else disagrees with this image, the image wins.
-- **Editable screens:** the "Twofold App Screens" design canvas on claude.ai (private to the owner; share it from the canvas's Share menu). It holds Welcome, Home, Protection, Family, Move money and Desktop.
-- **Typography:** Inter throughout (SIL Open Font License). Sizes and weights: Section 18 of the master brief (`docs/master-brief.md` in the private repo `brent472/twofold-private`).
+- **Identity:** the Satkeep concept image (brief v3.14), in the private repo's `docs/brand/`. It isn't in this repo yet: its screens predate the current product and still need patching into a brand sheet, so Section 19 of the brief wins on content. The old Twofold brand sheet was removed with the rename.
+- **Editable screens:** the "Twofold App Screens" design canvas (still under the old name) on claude.ai (private to the owner; share it from the canvas's Share menu). It holds Welcome, Home, Protection, Family, Move money and Desktop.
+- **Typography:** Inter throughout (SIL Open Font License). Sizes and weights: Section 18 of the master brief (`docs/master-brief.md` in the private repo `brent472/satkeep-private`).
 - **Copy:** Section 19 of the master brief. Use it verbatim.
 
-## Colors (sampled from the brand sheet)
+## Colors (sampled from the old Twofold brand sheet)
+
+These predate the rename. Where they differ from the tokens in Section 02 of the brief, the brief wins.
 
 | Token | Hex | Use |
 | --- | --- | --- |

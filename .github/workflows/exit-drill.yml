@@ -1,5 +1,5 @@
 # Exit drill: recover and spend a Savings wallet with Liana and with Bitcoin
-# Core alone, no Twofold code after setup. Regtest only; keys are generated
+# Core alone, no Satkeep code after setup. Regtest only; keys are generated
 # inside the run and never printed. See docs/exit-drill.md.
 name: Exit drill
 
@@ -64,7 +64,7 @@ jobs:
           echo "LIANA_CLI=$(dirname "$lianad")/liana-cli" >> "$GITHUB_ENV"
 
       - name: Build Liana's signer from the signed v15.0 source
-        # twofold_sign.rs is a few lines around liana::signer::HotSigner. It's
+        # satkeep_sign.rs is a few lines around liana::signer::HotSigner. It's
         # built inside Liana's tree as an example of the `liana` crate, so it
         # uses Liana's code and Liana's Cargo.lock (--locked). It's built with
         # the runner's stable Rust rather than Liana's pinned 1.88.0, which
@@ -89,17 +89,17 @@ jobs:
           git checkout -q "$commit"
           rm -f tag-status
           mkdir -p liana/examples
-          cp "$GITHUB_WORKSPACE/contrib/exit-drill/twofold_sign.rs" liana/examples/twofold_sign.rs
-          RUSTUP_TOOLCHAIN=stable cargo build --release --locked -p liana --example twofold_sign
-          echo "LIANA_SIGN=$src/target/release/examples/twofold_sign" >> "$GITHUB_ENV"
+          cp "$GITHUB_WORKSPACE/contrib/exit-drill/satkeep_sign.rs" liana/examples/satkeep_sign.rs
+          RUSTUP_TOOLCHAIN=stable cargo build --release --locked -p liana --example satkeep_sign
+          echo "LIANA_SIGN=$src/target/release/examples/satkeep_sign" >> "$GITHUB_ENV"
 
       - name: Download Bitcoin Core and verify it against its signed checksums
         run: .github/scripts/fetch-bitcoin-core.sh
 
-      - name: Build twofold (used only to make keys and export the descriptor)
+      - name: Build satkeep (used only to make keys and export the descriptor)
         run: |
-          cargo build --release --locked -p twofold-cli
-          echo "TWOFOLD=$GITHUB_WORKSPACE/target/release/twofold" >> "$GITHUB_ENV"
+          cargo build --release --locked -p satkeep-cli
+          echo "SATKEEP=$GITHUB_WORKSPACE/target/release/satkeep" >> "$GITHUB_ENV"
 
       - name: Run the drill
         id: drill
@@ -118,7 +118,7 @@ jobs:
           set -euo pipefail
           words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
           python3 -I contrib/exit-drill/scan_log.py "$RUNNER_TEMP/drill-output.log" \
-            --words "$words" --keys "$RUNNER_TEMP/drill/twofold/regtest/keys"
+            --words "$words" --keys "$RUNNER_TEMP/drill/satkeep/regtest/keys"
 
   scan-log:
     # Reads the drill job's full log once it has finished, and fails the run

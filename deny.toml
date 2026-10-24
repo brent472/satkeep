@@ -1,4 +1,4 @@
-# cargo-deny policy for Twofold. Run `cargo deny check`; CI runs it on every
+# cargo-deny policy for Satkeep. Run `cargo deny check`; CI runs it on every
 # PR. A new dependency needs a reason in its PR (see the README).
 
 [graph]
@@ -35,7 +35,7 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [licenses]
-# Permissive licences only, compatible with Twofold's MIT licence.
+# Permissive licences only, compatible with Satkeep's MIT licence.
 allow = [
     "MIT",
     "Apache-2.0",
