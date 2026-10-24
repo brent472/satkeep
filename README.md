@@ -113,3 +113,7 @@ The full-length 61,320-block test runs locally: `cargo test -- --include-ignored
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+## Trademark
+
+The code is MIT-licensed. The Satkeep™ name, logo and brand sheet are not covered by that license, and may not be used to imply endorsement or for another product. Satkeep is a working name pending trademark clearance.
