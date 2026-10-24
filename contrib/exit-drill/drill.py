@@ -359,6 +359,8 @@ def main():
         if os.path.exists(COOKIE) and run("bitcoin-cli getblockcount", [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "getblockcount"])[0] == 0:
             break
         time.sleep(0.5)
+    else:
+        raise RuntimeError(f"bitcoind didn't answer within {TIMEOUT} s")
     print(f"Bitcoin Core {cli_json('getnetworkinfo')['subversion']} on regtest, height {height()}")
 
     burn = cli_json("deriveaddresses", cli_json("getdescriptorinfo", f"rawtr({NUMS_XONLY})")["descriptor"])[0]
