@@ -97,17 +97,67 @@ def check(name, passed, detail=""):
         raise Failed(name)
 
 
-def run(name, args, stdin=None):
-    """Runs a command for at most TIMEOUT seconds. `name` is all an error
-    says about it: the program and its subcommand, never its other arguments
-    or its input, which can hold key material or a key file's path. A
-    command that times out is killed, and its partial output dropped."""
+def run(name, args, stdin=None, timeout=None):
+    """Runs a command for at most `timeout` (default TIMEOUT) seconds. `name`
+    is all an error says about it: the program and its subcommand, never its
+    other arguments or its input, which can hold key material or a key
+    file's path. A command that times out is killed, and its partial output
+    dropped."""
+    limit = timeout or TIMEOUT
     try:
-        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=TIMEOUT)
+        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=limit)
     except subprocess.TimeoutExpired:
         # `from None`: TimeoutExpired carries the arguments and output.
-        raise CommandTimeout(f"{name} didn't finish within {TIMEOUT} s") from None
+        raise CommandTimeout(f"{name} didn't finish within {limit} s") from None
     return p.returncode, p.stdout.strip(), p.stderr.strip()
+
+
+diagnosed = False
+
+
+def diagnostics():
+    """When the drill fails: what lianad and bitcoind were doing, while they
+    still run. Prints the end of each lianad log and of Bitcoin Core's
+    debug.log, `liana-cli getinfo`, `bitcoin-cli getrpcinfo` (the RPCs in
+    progress), and whether each Core wallet is still scanning.
+
+    Nothing here can hold key material: lianad is watch-only and holds no
+    private keys, debug.log names RPC methods but never their parameters
+    (-debug=rpc), and the wallet lines are only names and scan progress. The
+    scan-log job still checks the whole output."""
+    global diagnosed
+    if diagnosed:
+        return
+    diagnosed = True
+    print("\n--- Diagnostics -------------------------------------------------", flush=True)
+    core = [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}"]
+
+    def show(name, args):
+        try:
+            code, out, err = run(name, args, timeout=10)
+            print(f"$ {name} (exit {code})\n{out or err}", flush=True)
+        except (CommandTimeout, OSError) as e:
+            print(f"$ {name}: {e}", flush=True)
+
+    show("liana-cli getinfo", [LIANA_CLI, "--conf", LIANA_CONF, "getinfo"])
+    show("bitcoin-cli getrpcinfo", core + ["getrpcinfo"])
+    try:
+        code, out, _ = run("bitcoin-cli listwallets", core + ["listwallets"], timeout=10)
+        for wallet in json.loads(out) if code == 0 else []:
+            c, info, _ = run("bitcoin-cli getwalletinfo", core + [f"-rpcwallet={wallet}", "getwalletinfo"], timeout=10)
+            scanning = json.loads(info).get("scanning") if c == 0 else "no answer"
+            print(f"wallet {wallet!r}: scanning {scanning}", flush=True)
+    except (CommandTimeout, OSError, ValueError) as e:
+        print(f"wallets: {e}", flush=True)
+    logs = sorted(f for f in os.listdir(WORK) if f.endswith(".log")) if os.path.isdir(WORK) else []
+    for path in [os.path.join(WORK, f) for f in logs] + [os.path.join(DATADIR, "regtest", "debug.log")]:
+        try:
+            with open(path, errors="replace") as f:
+                tail = f.readlines()[-60:]
+            print(f"--- last {len(tail)} lines of {os.path.relpath(path, WORK)} ---\n{''.join(tail)}", end="", flush=True)
+        except OSError as e:
+            print(f"--- {path}: {e}", flush=True)
+    print("--- end of diagnostics ------------------------------------------\n", flush=True)
 
 
 def cli(*args, wallet=None, stdin_args=None):
@@ -351,7 +401,7 @@ def stop(process):
 def main():
     global LIANA_CONF
     os.makedirs(DATADIR, exist_ok=True)
-    code, _, err = run("bitcoind", [os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001"])
+    code, _, err = run("bitcoind", [os.path.join(BIN, "bitcoind"), "-regtest", f"-datadir={DATADIR}", "-daemon", "-listen=0", "-fallbackfee=0.0001", "-debug=rpc"])
     if code != 0:
         raise RuntimeError(f"bitcoind didn't start: {err}")
     deadline = time.monotonic() + TIMEOUT
@@ -517,6 +567,9 @@ def main():
         alone = sign(core_psbt("watch", outpoint["core-device"]), signers["device"])
         check(f"A. DEVICE alone is refused at {age()} confirmations: there is no card-only path",
               not core_complete(alone), "Bitcoin Core can't complete the spend")
+    except BaseException:
+        diagnostics()  # while lianad still runs
+        raise
     finally:
         stop(lianad)
 
@@ -546,6 +599,9 @@ def main():
         # P2WSH 2-of-3: CHECKMULTISIG's empty item, two signatures, the script.
         check("B. Bitcoin Core alone spends it with 2 of 3 keys (PHONE + DEVICE)",
               mined_in_tip(txid) and witness == 4 and sequence >= 0xFFFFFFFD, f"txid {txid}")
+    except BaseException:
+        diagnostics()  # while bitcoind still runs
+        raise
     finally:
         try:
             run("bitcoin-cli stop", [os.path.join(BIN, "bitcoin-cli"), "-regtest", f"-datadir={DATADIR}", "stop"])
@@ -572,5 +628,7 @@ if __name__ == "__main__":
     except Exception as e:  # report, but never with a traceback that could carry key text
         print(f"ERROR: {e}", flush=True)
         status = 1
+    if status:
+        diagnostics()  # if no section printed them already
     summary()
     sys.exit(status)

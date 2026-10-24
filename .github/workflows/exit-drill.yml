@@ -5,6 +5,13 @@ name: Exit drill
 
 on:
   workflow_dispatch:
+    # TEMPORARY, for finding the intermittent liana-cli hang (PR #16):
+    # run this many copies of the drill at once. Removed before merging.
+    inputs:
+      repeat:
+        description: "How many copies of the drill to run (1-20)"
+        type: number
+        default: 1
   # Weekly, so a change elsewhere (or a new runner image) can't leave it
   # broken unnoticed, as happened after the minimum heir delay and the
   # refresh window were added.
@@ -53,7 +60,26 @@ env:
   CORE_MIN_SIGNATURES: "3"
 
 jobs:
+  # TEMPORARY (PR #16): the list of copies for the drill's matrix, from the
+  # `repeat` input (1 on every other trigger).
+  copies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - id: list
+        env:
+          REPEAT: ${{ inputs.repeat || 1 }}
+        run: |
+          python3 -I -c 'import json, os; n = int(os.environ["REPEAT"]); assert 1 <= n <= 20, "repeat must be 1-20"; print("list=" + json.dumps(list(range(1, n + 1))))' >> "$GITHUB_OUTPUT"
+
   drill:
+    needs: copies
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: ${{ fromJSON(needs.copies.outputs.list) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -167,13 +193,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.name == "drill") | .id')
-          log="$RUNNER_TEMP/drill-job.log"
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
-            sleep 15
-          done
-          [ -s "$log" ] || { echo "::error::Couldn't fetch the drill job's log"; exit 1; }
-          echo "Fetched the drill job's log: $(wc -l < "$log") lines"
+          # Every drill job: "drill", or "drill (1)", "drill (2)", … as a matrix.
+          jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "drill" or (.name | startswith("drill ("))) | .id')
+          [ -n "$jobs" ] || { echo "::error::No drill job found"; exit 1; }
           words=$(ls ~/.cargo/registry/src/*/bip39-2.2.2/src/language/english.rs | head -1)
-          python3 -I contrib/exit-drill/scan_log.py "$log" --words "$words"
+          for job in $jobs; do
+            log="$RUNNER_TEMP/drill-job-$job.log"
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$log" 2>/dev/null && [ -s "$log" ]; then break; fi
+              sleep 15
+            done
+            [ -s "$log" ] || { echo "::error::Couldn't fetch drill job $job's log"; exit 1; }
+            echo "Fetched drill job $job's log: $(wc -l < "$log") lines"
+            python3 -I contrib/exit-drill/scan_log.py "$log" --words "$words"
+          done
