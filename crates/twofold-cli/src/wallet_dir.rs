@@ -9,7 +9,9 @@ use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
 use twofold_savings::bitcoin::Network;
-use twofold_savings::checkin::{CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN};
+use twofold_savings::checkin::{
+    CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, PaymentRule,
+};
 use twofold_savings::miniscript::descriptor::DescriptorPublicKey;
 use twofold_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, SavingsKeys, SavingsPolicy, migrate};
 
@@ -64,6 +66,16 @@ pub struct Config {
     /// Blocks the interval must leave before the heir delay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkin_margin: Option<u16>,
+    /// The payment rule, with a beneficiary: whether 2-of-3 payments also
+    /// spend the coins close to needing a check-in. Missing means on. Set it
+    /// to `false` to keep coins separate, for privacy; only check-ins then
+    /// refresh coins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_with_payments: Option<bool>,
+    /// Blocks before a coin's check-in is due that a payment refreshes it.
+    /// Missing means [`DEFAULT_REFRESH_WINDOW`], a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_window: Option<u16>,
     /// The shortest heir delay this wallet accepts, here and in any move.
     /// Missing means [`DEFAULT_MIN_HEIR_DELAY`], a placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +116,23 @@ impl Config {
         let delays = self.delays()?;
         delays.require_heir_at_least(self.min_heir_delay())?;
         Ok(SavingsPolicy::new(keys, delays, self.network.network())?)
+    }
+
+    /// The payment rule, or `None` with no beneficiary or with the setting
+    /// off.
+    pub fn payment_rule(&self) -> Result<Option<PaymentRule>> {
+        let Some(checkin) = self.checkin_rule()? else { return Ok(None) };
+        if self.refresh_with_payments == Some(false) {
+            return Ok(None);
+        }
+        let window = self.refresh_window.unwrap_or(DEFAULT_REFRESH_WINDOW);
+        PaymentRule::new(window, checkin).map(Some).map_err(|e| {
+            if self.refresh_window.is_none() {
+                anyhow::anyhow!("this wallet has no refresh window set and the default doesn't fit it ({e})")
+            } else {
+                e.into()
+            }
+        })
     }
 
     /// The shortest heir delay this wallet accepts.

@@ -177,6 +177,15 @@ struct HeirArgs {
     /// (placeholder default, about 2 months)
     #[arg(long, requires = "heir")]
     checkin_margin: Option<u16>,
+    /// Payments also spend every coin within this many blocks of needing a
+    /// check-in, so they count as its check-in (placeholder default, about
+    /// 2 months: coins older than about 10 months)
+    #[arg(long, requires = "heir")]
+    refresh_window: Option<u16>,
+    /// Don't refresh coins with payments. Keeps coins separate, for
+    /// privacy; only check-ins then restart the heir delay.
+    #[arg(long, requires = "heir", conflicts_with = "refresh_window")]
+    no_refresh_with_payments: bool,
 }
 
 impl HeirArgs {
@@ -188,6 +197,12 @@ impl HeirArgs {
             config.heir_delay = Some(self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY));
             config.checkin_interval = Some(self.checkin_interval.unwrap_or(checkin::DEFAULT_CHECKIN_INTERVAL));
             config.checkin_margin = Some(self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN));
+            if self.no_refresh_with_payments {
+                config.refresh_with_payments = Some(false);
+            } else {
+                config.refresh_with_payments = Some(true);
+                config.refresh_window = Some(self.refresh_window.unwrap_or(checkin::DEFAULT_REFRESH_WINDOW));
+            }
         }
     }
 }
@@ -315,7 +330,8 @@ fn run(cli: Cli) -> Result<()> {
                 .context("the fee rate must be at least 1 sat/vB")?;
             let delays = opened.policy.delays();
             let script = to.script_pubkey();
-            let psbt = spend::build_spend(&mut opened.wallet, delays, path.path(), |b| {
+            let rule = opened.config.payment_rule()?;
+            let psbt = spend::build_payment(&mut opened.wallet, delays, path.path(), rule.as_ref(), |b| {
                 match amount {
                     Some(amount) => b.add_recipient(script.clone(), amount),
                     None => b.drain_wallet().drain_to(script.clone()),
@@ -328,6 +344,9 @@ fn run(cli: Cli) -> Result<()> {
                 psbt.unsigned_tx.output.iter().filter(|o| o.script_pubkey == script).map(|o| o.value).sum();
             println!("Prepared a payment of {} to {to}.", btc(paid));
             println!("Network fee: {}", btc(psbt.fee()?));
+            if let Some(rule) = rule.filter(|_| matches!(path, PathArg::TwoOfThree)) {
+                print_refresh(&opened, &psbt, &rule, "");
+            }
             println!("Saved, unsigned, to {}.", out.display());
             println!("Needs approval from {}: run `twofold sign`, then `twofold broadcast`.", path.who_approves());
         }
@@ -441,6 +460,8 @@ fn run(cli: Cli) -> Result<()> {
                 birthday: node::height(&client)?,
                 checkin_interval: None,
                 checkin_margin: None,
+                refresh_with_payments: None,
+                refresh_window: None,
                 min_heir_delay,
                 moving_to: None,
                 device_r: None,
@@ -448,6 +469,7 @@ fn run(cli: Cli) -> Result<()> {
             heir.apply(&mut config);
             config.policy()?;
             config.checkin_rule()?;
+            config.payment_rule()?;
             let mut opened = wallet_dir::create(&dir, config)?;
             opened.persist()?;
             println!("Created a Savings wallet on {} in {}.", network.core_name(), dir.display());
@@ -472,6 +494,8 @@ fn run(cli: Cli) -> Result<()> {
                 birthday: node::height(&client)?,
                 checkin_interval: None,
                 checkin_margin: None,
+                refresh_with_payments: None,
+                refresh_window: None,
                 min_heir_delay: opened.config.min_heir_delay,
                 moving_to: None,
                 device_r: None,
@@ -479,6 +503,7 @@ fn run(cli: Cli) -> Result<()> {
             heir.apply(&mut config);
             let to = config.policy()?;
             config.checkin_rule()?;
+            config.payment_rule()?;
             let min_heir_delay = opened.config.min_heir_delay();
             let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate)?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
@@ -648,6 +673,10 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
         }
     }
     println!("  Network fee: {}", btc(payment.fee()?));
+    let plain_payment = !checkin::is_checkin(payment) && !migrate::is_move(payment);
+    if let (true, SpendPath::TwoOfThree, Some(rule)) = (plain_payment, path, opened.config.payment_rule()?) {
+        print_refresh(opened, payment, &rule, "  ");
+    }
     let who = match path {
         SpendPath::TwoOfThree => PathArg::TwoOfThree,
         SpendPath::Heir => PathArg::Heir,
@@ -675,6 +704,34 @@ fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>
     Ok(Some(to))
 }
 
+/// What a 2-of-3 payment does under the payment rule: which coins due for a
+/// refresh it also spends, restarting their heir delay, and any it leaves
+/// out (a payment someone else prepared, or a coin that aged since).
+fn print_refresh(opened: &Opened, payment: &Psbt, rule: &checkin::PaymentRule, indent: &str) {
+    let refresh = checkin::refresh_of(&opened.wallet, payment, rule);
+    let amount = |coins: &[twofold_savings::bitcoin::OutPoint]| -> Amount {
+        coins.iter().filter_map(|c| opened.wallet.get_utxo(*c)).map(|u| u.txout.value).sum()
+    };
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    if !refresh.refreshed.is_empty() {
+        let n = refresh.refreshed.len();
+        println!(
+            "{indent}Also refreshes {n} coin{} ({}) close to needing a check-in: their heir delay restarts \
+             once this confirms. Change comes back to Savings.",
+            plural(n),
+            btc(amount(&refresh.refreshed))
+        );
+    }
+    if !refresh.left_out.is_empty() {
+        let n = refresh.left_out.len();
+        println!(
+            "{indent}Leaves out {n} coin{} ({}) due for a refresh: they still need a check-in or a later payment.",
+            plural(n),
+            btc(amount(&refresh.left_out))
+        );
+    }
+}
+
 fn open_and_sync(cli: &Cli) -> Result<(Opened, Client)> {
     let mut opened = cli.open()?;
     let client = connect(&cli.rpc_url, &cli.rpc_cookie, opened.network())?;
@@ -694,6 +751,17 @@ fn print_rules(config: &Config) {
             );
             if let Some(interval) = interval {
                 println!("Check in every {interval} blocks: each check-in restarts the heir delay (`twofold checkin`).");
+            }
+            match (config.refresh_with_payments, config.payment_rule()) {
+                (Some(false), _) => println!(
+                    "Payments don't refresh coins (turned off, for privacy): only check-ins restart the heir delay."
+                ),
+                (_, Ok(Some(rule))) => println!(
+                    "Payments also refresh coins with {} or more confirmations ({}), so they count as check-ins.",
+                    rule.refresh_age(),
+                    about(rule.refresh_age().into())
+                ),
+                _ => {}
             }
         }
         (None, _) => {

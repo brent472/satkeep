@@ -98,6 +98,22 @@ Each coin's delay clock starts when that coin confirms. A **check-in** spends ev
   - The CLI runs the check again at `sign` and at `broadcast`, so a coin that confirmed after the check-in was built gets it refused.
 - **Why it can't be the heir path.** The check-in's sequence carries no delay, so the heir leaf can't be satisfied. HEIR alone can't approve it even when its path is open, and the network agrees (CSV fails). The tests check both.
 
+### The payment rule: payments count as check-ins
+
+Brief 3.12: every Savings payment and pocket refill also spends the coins close to needing a check-in, so it refreshes them at no extra step. The yearly check-in is then only needed when nothing has been paid for a while.
+
+- **`checkin::PaymentRule::new(window, checkin_rule)`.** A coin is due for a refresh once it's within `window` blocks of its check-in being due, that is, at `interval - window` confirmations. `1 <= window < interval`.
+  - Default window: 8,760 blocks (about 2 months), `DEFAULT_REFRESH_WINDOW`. With the default interval, that means coins older than 43,800 blocks, about 10 months. A placeholder, like the other timelocks.
+- **`spend::build_payment(wallet, delays, path, rule, configure)`** is `build_spend` plus the rule. A 2-of-3 payment also spends every coin `checkin::due_for_refresh` lists, as required inputs, whatever coin selection or the caller picked, with change back to Savings. Spending a coin restarts its heir delay: the change is a new coin with a new clock.
+  - **Not affected:** the heir path, which must not be made to take younger coins; Savings with no beneficiary, which has nothing to refresh; check-ins and moves, which already spend everything.
+  - **A pocket refill is a 2-of-3 Savings payment** to the pocket, so the rule covers it once the pocket exists. The pocket isn't built yet (brief 3.11).
+- **`checkin::refresh_of(wallet, psbt, rule)`** says which due coins a PSBT refreshes and which it leaves out. The CLI shows both at `send` and at `sign`. Leaving one out isn't refused: it only means that coin still needs a check-in or a later payment, and a coin can age into the window between building and signing.
+- **A wallet setting, on by default, and a privacy trade-off.**
+  - **Privacy:** spending old coins with a payment links them together on-chain. Anyone watching sees they have one owner and where the change went.
+  - **Cost:** each extra coin also adds its input to the network fee.
+  - **Turning it off** keeps coins apart; only check-ins then restart the heir delay. The check-in rules don't change either way, so the safety margin is the same.
+- **Receiving doesn't count.** It moves no old coin and needs no approval, so it proves nothing (brief 3.12).
+
 ## Phone key backup (prototype)
 
 `backup` is a prototype of the phone key backup: the phone key, encrypted on the phone, kept in the owner's own cloud, and unlocked only with their security device. The design, the device survey, the threats and the decisions behind it are in [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md).
@@ -257,6 +273,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 
 | File | What it proves |
 | --- | --- |
+| `src/checkin.rs` (unit) | The check-in interval and margin rules; the payment rule's window must fit inside the interval, and the defaults mean coins older than 43,800 blocks |
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently, in both shapes. Checked for all 16 combinations of the four keys, at ages around the heir delay and at the 65,535-block cap. No single key but HEIR ever spends; without a beneficiary nothing opens with time. A HEIR key needs a delay and the other way round. The internal key matches Liana v15.0's published test vectors, and adding an heir changes it. |
 | `src/holder.rs` (unit) | A phrase round-trips, and BIP39's public test phrase gives the account key BIP86 publishes for it. A bad checksum, 11 or 24 words, an old `tprv` key and garbage are all refused without repeating their input. A phrase is spotted in text however it's split up. |
 | `src/backup/tests.rs` (unit) | The backup alone shows only its date and device ids: no phrase word or setup text is in it. The right device with its PIN restores the same 12 words, keys and setup. A wrong device is refused before it's asked anything; a device without its PIN unlocks nothing; wrong PINs block it for good. Replacing the device locks the backup to the new one only, and the old device still opens an old copy (the limit, pinned). Changing any single byte, the date included, stops it opening; cut-short, padded and garbage files are refused; a contact entry is never opened by a device. No error repeats the phrase. |
@@ -264,6 +281,7 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | `tests/allowed_paths.rs` | Any 2 of 3 spends on regtest in both shapes, and HEIR alone at exactly its delay, each through the expected leaf |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through every leaf the wallet has, is refused by Twofold **and** rejected by the node: PHONE, DEVICE or HELPER alone even after the heir delay; HEIR alone or with any one other key before it; signing a shorter sequence to skip the delay. Without a beneficiary: any single key at any age, an heir path refused, and a long sequence buying nothing. |
 | `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. Checked against the wallet the settings say, a move is refused if it goes to a wallet with a different HEIR key or a shorter heir delay (whether its marker owns up or claims the right one), has one extra output (to someone else, or back as change), pays elsewhere, names a different HEIR, isn't marked, goes to a wallet with different keys, or leaves out a confirmed coin. An heir delay below the minimum is refused in the settings, in building and in checking. Changing the beneficiary works the same way. |
+| `tests/payment_rule.rs` | With the rule, a payment from one young coin also spends the old coin due for a refresh, with change back to Savings. When the old coin would have reached the heir delay, HEIR alone is refused, and HEIR opens the change at exactly the heir delay from the payment. With the setting off, the same payment leaves the old coin alone, and HEIR opens it on time. Without hand-picking, every due coin goes in. The heir path and Savings with no beneficiary are never affected. |
 | `tests/checkin.rs` | A check-in restarts the heir delay for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses the heir path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. HEIR or DEVICE alone can't approve a check-in even with the heir path open. Savings with no beneficiary has no check-in. |
 | `tests/default_delays.rs` | The real 61,320-block heir delay opens at exactly that many confirmations (ignored by default) |
 | `tests/export.rs` | Bitcoin Core derives the same addresses from the export, in both shapes |

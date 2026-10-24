@@ -30,10 +30,10 @@ fn plain_with_coins(node: &Node) -> (Cli<'_>, Cli<'_>, Holders) {
     (old, Cli::new(node), holders)
 }
 
-fn add_heir_args<'a>(new: &'a str, heir: &'a str, out: &'a str) -> [&'a str; 13] {
+fn add_heir_args<'a>(new: &'a str, heir: &'a str, out: &'a str) -> [&'a str; 15] {
     [
         "add-heir", "--new-wallet-dir", new, "--heir", heir, "--heir-delay", "20",
-        "--checkin-interval", "10", "--checkin-margin", "5", "--out", out,
+        "--checkin-interval", "10", "--checkin-margin", "5", "--refresh-window", common::REFRESH_WINDOW, "--out", out,
     ]
 }
 
