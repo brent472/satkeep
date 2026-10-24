@@ -15,7 +15,7 @@ const CREATED_AT: usize = 4 + 1 + 16;
 const FIRST_ENTRY_KIND: usize = CREATED_AT + 8 + 1;
 
 fn phrase() -> Mnemonic {
-    let entropy: Zeroizing<[u8; 32]> = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).into());
+    let entropy: Zeroizing<[u8; 32]> = Zeroizing::new(<[u8; 32]>::generate());
     Mnemonic::from_entropy(&entropy[..16]).expect("16 bytes make a 12-word phrase")
 }
 
@@ -123,7 +123,7 @@ fn each_backup_uses_a_new_data_key() {
 #[test]
 fn only_a_12_word_english_phrase_is_backed_up() {
     let mut device = device();
-    let words_24 = Mnemonic::from_entropy(&XChaCha20Poly1305::generate_key(&mut OsRng)).unwrap();
+    let words_24 = Mnemonic::from_entropy(&<[u8; 32]>::generate()).unwrap();
     device.enter_pin(PIN).unwrap();
     assert_eq!(make_backup(&words_24, &setup(), new_wallet_id(), CREATED, &mut device).err(), Some(BackupError::BadPhrase));
     assert_eq!(device.requests(), 0, "the device isn't asked for a backup that won't be made");

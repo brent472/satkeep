@@ -15,10 +15,11 @@ simulated-device = []
 [dependencies]
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 # getrandom: the operating system's generator for data keys, nonces and
-# wallet ids (aead's OsRng). It adds no crate to the build.
-chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "getrandom"] }
-hkdf = "0.12.4"
-sha2 = "0.10.9"
+# wallet ids (RustCrypto's `Generate`). zeroize: the cipher wipes its key
+# when dropped, as 0.10 always did; from 0.11 it's a feature.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
+hkdf = "0.13.0"
+sha2 = "0.11.1"
 thiserror.workspace = true
 zeroize = "1.9.1"
 

@@ -4,7 +4,7 @@ members = ["crates/satkeep-backup", "crates/satkeep-cli", "crates/satkeep-restor
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 publish = false
 license = "MIT"
 

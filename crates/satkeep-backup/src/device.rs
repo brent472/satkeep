@@ -89,8 +89,8 @@ impl SimulatedDevice {
     /// A fresh device with a random secret from the operating system's
     /// random source, and this PIN.
     pub fn new(pin: &str) -> Self {
-        use chacha20poly1305::aead::{KeyInit, OsRng};
-        let secret = Zeroizing::new(chacha20poly1305::XChaCha20Poly1305::generate_key(&mut OsRng).into());
+        use chacha20poly1305::aead::Generate;
+        let secret = Zeroizing::new(<[u8; 32]>::generate());
         Self { secret, pin: Zeroizing::new(pin.to_owned()), unlocked: false, wrong_tries: 0, requests: 0 }
     }
 

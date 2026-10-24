@@ -198,12 +198,12 @@ Either way the card needs:
 
 All three are new dependencies, approved for the prototype.
 
-**Which versions, and why.** The prototype uses the mature line: `chacha20poly1305` 0.10.1, `hkdf` 0.12.4, `sha2` 0.10.9, not the newest 0.11 / 0.13 / 0.11.
-- The newest line pulls in `ctutils` 0.4.2, which has a fresh advisory ([RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), non-constant-time comparisons). `cargo deny` caught it.
-- The fixed `ctutils` 0.4.4 came out the same day as this work and needs Rust 1.87, above our 1.85 floor.
-- The 0.10 line doesn't use `ctutils` at all, and is closer to the versions NCC reviewed.
-- It brings in `subtle` (constant-time helpers, BSD-3-Clause), allowed in `deny.toml` for that crate only. The rest are RustCrypto crates plus `generic-array` and `typenum`, all MIT or Apache-2.0.
-- Moving to the newest line is a small change once `ctutils` 0.4.4 has settled.
+**Which versions, and why.** The prototype now uses RustCrypto's current generation, all one line: `chacha20poly1305` 0.11.0, `hkdf` 0.13.0 and `sha2` 0.11.1, with `aead` 0.6, `hmac` 0.13, `digest` 0.11 and `ctutils` 0.4.5.
+- **At first it used the mature line** (0.10.1 / 0.12.4 / 0.10.9). Back then the newest line pulled in `ctutils` 0.4.2, which has an advisory ([RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), non-constant-time comparisons), and the fixed `ctutils` needed Rust 1.87, above our 1.85 floor.
+- **Why it moved:** the second phone (decision D4 in `restore-tool.md`) needs `p256`, and only `p256` 0.14 is free of advisories: 0.13 pulls in `crypto-bigint` 0.5, which has a timing advisory of its own ([RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387)). `p256` 0.14 belongs to the current generation, and keeping one generation means one set of constant-time helpers, with no old line kept alive.
+- **The minimum Rust version** rose from 1.85 to 1.87 for the fixed `ctutils`.
+- **The format didn't change:** the spec's test vectors still come out byte for byte. NCC's 2020 audit covered an older `chacha20poly1305`; the vectors show this one makes the same bytes.
+- **`subtle` and `generic-array` are gone.** `ctutils`, `cmov` and `hybrid-array` take their place, all MIT or Apache-2.0, so `deny.toml` no longer needs a licence exception for `subtle`.
 
 ## 5. The recovery contact: helping unlock without reading
 

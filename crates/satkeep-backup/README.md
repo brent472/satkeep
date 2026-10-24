@@ -27,7 +27,8 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 ## Dependencies
 
 `bip39`, `chacha20poly1305`, `hkdf`, `sha2`, `zeroize` and `thiserror`, all already in the build. There's no BDK or miniscript, so the restore tool stays small.
-- **Randomness:** `chacha20poly1305`'s `getrandom` feature gives the operating system's generator (`OsRng`) for data keys, nonces and wallet ids. It adds no crate to the build: `getrandom` 0.2 and `rand_core` 0.6 were already there.
+- **Versions:** RustCrypto's current generation (`chacha20poly1305` 0.11, `hkdf` 0.13, `sha2` 0.11), which needs Rust 1.87 or later. Why: [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md), section 4.
+- **Randomness:** `chacha20poly1305`'s `getrandom` feature gives the operating system's generator for data keys, nonces and wallet ids, through RustCrypto's `Generate` trait. It uses `getrandom` 0.4, already in the build through `tempfile`. The bitcoin crates keep their own `getrandom` 0.2 and `rand_core` 0.6.
 
 ## Assumptions
 
