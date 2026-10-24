@@ -24,5 +24,5 @@ Satkeep is a phone-first bitcoin self-custody wallet. The user sees one balance:
 ## Copy and design
 
 - Product copy comes from Section 19 of the master brief (in the private repo `brent472/satkeep-private`); don't invent UI wording.
-- Typography is Inter throughout; the Satkeep concept image in the private repo's `docs/brand/` is the identity reference (it isn't in this repo yet); its screens predate the current product, so Section 19 wins on content.
+- Typography is Inter throughout; the Satkeep brand sheet (`docs/brand/SATKEEP_brand_sheet.png`) is the visual master; Section 19 of the brief wins on wording.
 - Plain words in the app: key, approve, network fee, Savings, everyday payments. No "multisig", "UTXO", "PSBT", "xpub" or "seed" in main flows.
