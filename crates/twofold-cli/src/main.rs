@@ -673,9 +673,13 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
         }
     }
     println!("  Network fee: {}", btc(payment.fee()?));
+    // Only a plain 2-of-3 payment: a check-in or move already spends
+    // everything, and the rule never applies to the heir path.
     let plain_payment = !checkin::is_checkin(payment) && !migrate::is_move(payment);
-    if let (true, SpendPath::TwoOfThree, Some(rule)) = (plain_payment, path, opened.config.payment_rule()?) {
-        print_refresh(opened, payment, &rule, "  ");
+    if plain_payment && path == SpendPath::TwoOfThree {
+        if let Some(rule) = opened.config.payment_rule()? {
+            print_refresh(opened, payment, &rule, "  ");
+        }
     }
     let who = match path {
         SpendPath::TwoOfThree => PathArg::TwoOfThree,
@@ -715,11 +719,15 @@ fn print_refresh(opened: &Opened, payment: &Psbt, rule: &checkin::PaymentRule, i
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     if !refresh.refreshed.is_empty() {
         let n = refresh.refreshed.len();
+        let change = payment.unsigned_tx.output.iter().any(|o| {
+            matches!(opened.wallet.derivation_of_spk(o.script_pubkey.clone()), Some((KeychainKind::Internal, _)))
+        });
         println!(
             "{indent}Also refreshes {n} coin{} ({}) close to needing a check-in: their heir delay restarts \
-             once this confirms. Change comes back to Savings.",
+             once this confirms.{}",
             plural(n),
-            btc(amount(&refresh.refreshed))
+            btc(amount(&refresh.refreshed)),
+            if change { " Change comes back to Savings." } else { "" }
         );
     }
     if !refresh.left_out.is_empty() {
