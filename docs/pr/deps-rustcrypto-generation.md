@@ -50,6 +50,14 @@ No RustCrypto crate is left in two versions.
 
 ### Security review
 
-SECURITY-REVIEW
+**None.** The review checked the new library code behind each changed call:
+- **Randomness:** `<[u8; N]>::generate()` fills from the operating system's generator (`getrandom::fill`), and panics on failure rather than returning a zeroed buffer. Nothing in the repo overrides `getrandom`'s backend.
+- **Nonces:** a fresh random wrap nonce and body nonce for every backup, as before. `XNonce::from([u8; 24])` can't take a wrong length.
+- **Keys:** `new_from_slice` refuses a wrong-length key (`InvalidLength`), which `restore` reports as "can't unlock", alongside the existing 32-byte check.
+- **Authentication:** decryption checks the Poly1305 tag in constant time (`ctutils`) before decrypting. The associated data is unchanged.
+- **Wiping:** with the `zeroize` feature, the cipher wipes its key and its per-message MAC key on drop, as 0.10 did. Data keys, device secrets and plaintext stay in `Zeroizing`.
+- **HKDF:** the calls are unchanged, and the vectors confirm the KEK is too.
+
+**One point from the review work, fixed here:** without the `zeroize` feature, the upgrade would have quietly stopped wiping the cipher's key (see above).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
