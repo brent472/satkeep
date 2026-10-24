@@ -25,3 +25,5 @@ Where they differ from the brand sheet or the tokens in Section 02 of the brief,
 | Red | `#E07A5F` | Sent |
 | Amber | `#E8B46A` | Not active yet, needs attention |
 | Muted text | `#8E9498` | Secondary text |
+
+<!-- Throwaway change to test the exit drill skip (PR #17); never merged. -->
