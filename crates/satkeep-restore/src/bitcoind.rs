@@ -103,25 +103,42 @@ pub fn birthday_time(client: &Client, height: u32) -> Result<u64> {
     header["time"].as_u64().context("the node's block header has no time")
 }
 
-/// Creates a new descriptor wallet called `name` in the node and imports
-/// `imports` into it. Refuses a wallet that already exists.
-pub fn import(client: &Client, url: &str, cookie: &Path, name: &str, imports: &[Import]) -> Result<()> {
+/// How long the wallet stays unlocked for the import, in seconds.
+const UNLOCK_FOR_IMPORT: u64 = 60;
+
+/// Checks a Core wallet name before it goes into a URL.
+pub fn check_wallet_name(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
         "--core-wallet may only use letters, digits, - and _"
     );
+    Ok(())
+}
+
+/// Creates a new descriptor wallet called `name` in the node, encrypted with
+/// `passphrase`, and imports `imports` into it: unlocked for at most 60 s
+/// around the import, and locked again afterwards. Refuses a wallet that
+/// already exists. Errors never repeat the passphrase.
+pub fn import(client: &Client, url: &str, cookie: &Path, name: &str, passphrase: &str, imports: &[Import]) -> Result<()> {
+    check_wallet_name(name)?;
+    ensure!(!passphrase.is_empty(), "the wallet passphrase can't be empty");
     // createwallet name, disable_private_keys, blank, passphrase, avoid_reuse, descriptors, load_on_startup
-    let args = [json!(name), json!(false), json!(true), json!(""), json!(false), json!(true), json!(false)];
+    let args = [json!(name), json!(false), json!(true), json!(passphrase), json!(false), json!(true), json!(false)];
     client
         .call::<Value>("createwallet", &args)
-        .with_context(|| format!("creating the wallet {name:?} in Bitcoin Core (a wallet of that name may already exist)"))?;
+        .map_err(|_| anyhow::anyhow!("couldn't create the wallet {name:?} in Bitcoin Core (a wallet of that name may already exist)"))?;
 
     let wallet = self::client(&format!("{}/wallet/{name}", url.trim_end_matches('/')), cookie)?;
+    wallet
+        .call::<Value>("walletpassphrase", &[json!(passphrase), json!(UNLOCK_FOR_IMPORT)])
+        .map_err(|_| anyhow::anyhow!("Bitcoin Core couldn't unlock the new wallet for the import"))?;
     // serde_json can't wipe its strings; this request lives only until the
-    // call returns (README, "Assumptions").
-    let results: Value = wallet
-        .call("importdescriptors", &[requests(imports)])
-        .map_err(|_| anyhow::anyhow!("Bitcoin Core refused the import (no detail: the request holds the phone key)"))?;
+    // call returns (README, "Rules for anything secret").
+    let imported: Result<Value, _> = wallet.call("importdescriptors", &[requests(imports)]);
+    // Locked again whatever happened.
+    let locked = wallet.call::<Value>("walletlock", &[]);
+    let results = imported.map_err(|_| anyhow::anyhow!("Bitcoin Core refused the import (no detail: the request holds the phone key)"))?;
+    locked.context("Bitcoin Core couldn't lock the wallet after the import; lock it with `bitcoin-cli walletlock`")?;
     let results = results.as_array().context("importdescriptors returned no list")?;
     for (i, result) in results.iter().enumerate() {
         if result["success"] != json!(true) {

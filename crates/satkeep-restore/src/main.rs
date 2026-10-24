@@ -111,13 +111,17 @@ fn run(cli: Cli) -> Result<()> {
             match out {
                 Some(path) => {
                     bitcoind::write_file(&path, &imports)?;
-                    println!("Wrote Bitcoin Core's import request to {} (it holds the phone key).", path.display());
-                    println!("Import it into a new blank descriptor wallet with `bitcoin-cli importdescriptors`.");
+                    println!("Wrote Bitcoin Core's import request to {}.", path.display());
+                    println!("It holds the phone key UNENCRYPTED: delete it once it's imported.");
+                    println!("Import it into a new blank, encrypted descriptor wallet with `bitcoin-cli importdescriptors`.");
                 }
                 None => {
                     let name = core_wallet.unwrap_or_else(|| format!("satkeep-restore-{}", hex(&wallet_id[..4])));
-                    bitcoind::import(&client, &url, &cookie, &name, &imports)?;
+                    bitcoind::check_wallet_name(&name)?;
+                    let passphrase = new_passphrase()?;
+                    bitcoind::import(&client, &url, &cookie, &name, &passphrase, &imports)?;
                     println!("Imported into a new Bitcoin Core wallet, {name:?}, which holds the phone key.");
+                    println!("The wallet is encrypted: Bitcoin Core needs its passphrase (walletpassphrase) to sign as PHONE.");
                     println!("Spending Savings still needs a second key: sign the PSBT with DEVICE, then broadcast.");
                 }
             }
@@ -188,6 +192,24 @@ fn simulated_device(path: &std::path::Path) -> Result<satkeep_backup::SimulatedD
     std::io::stdin().read_line(&mut typed).context("reading the PIN")?;
     device.enter_pin(typed.trim()).map_err(anyhow::Error::from)?;
     Ok(device)
+}
+
+/// A new passphrase for the Core wallet, typed twice on standard input. It
+/// shows as it's typed on a plain terminal (README); it's never printed or
+/// put in an error.
+fn new_passphrase() -> Result<Zeroizing<String>> {
+    use anyhow::Context;
+    let read = |prompt: &str| -> Result<Zeroizing<String>> {
+        eprint!("{prompt}");
+        let mut line = Zeroizing::new(String::new());
+        std::io::stdin().read_line(&mut line).context("reading the wallet passphrase")?;
+        Ok(Zeroizing::new(line.trim_end_matches(['\r', '\n']).to_owned()))
+    };
+    let first = read("New passphrase for the Bitcoin Core wallet: ")?;
+    anyhow::ensure!(!first.is_empty(), "the wallet passphrase can't be empty");
+    let second = read("The same passphrase again: ")?;
+    anyhow::ensure!(*first == *second, "the two passphrases don't match");
+    Ok(first)
 }
 
 /// BIP39 words in a row that count as (part of) a phrase. Lower than 12 so a

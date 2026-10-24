@@ -11,7 +11,7 @@ It's a developer tool: its wording isn't product copy.
 | Command | What it does |
 | --- | --- |
 | `show --kit FILE` | What the kit holds, without unlocking anything: the backup's date, which second key unlocks it, and the plain wallet setup, marked **unverified** |
-| `core --kit FILE …` | Unlock, check the phone key, and import every Savings wallet into a **new** wallet in your own Bitcoin Core (`--core-wallet`, default `satkeep-restore-<wallet id>`), over local RPC with the cookie (`--rpc-url`, `--rpc-cookie`; defaults as `satkeep`'s) |
+| `core --kit FILE …` | Unlock, check the phone key, and import every Savings wallet into a **new, encrypted** wallet in your own Bitcoin Core (`--core-wallet`, default `satkeep-restore-<wallet id>`), over local RPC with the cookie (`--rpc-url`, `--rpc-cookie`; defaults as `satkeep`'s) |
 | `core --kit FILE … --out FILE` | The same, but write Bitcoin Core's `importdescriptors` request to a new file instead |
 | `liana --kit FILE …` | Unlock, check the phone key, and print each Savings wallet's public descriptor for Liana. Liana can't hold Savings with no beneficiary, so that one is marked for Bitcoin Core or Sparrow. |
 | `liana … --show-phrase` | Also print the phone key's 12 words, after a warning, for Liana's hot signer |
@@ -31,6 +31,11 @@ It's a developer tool: its wording isn't product copy.
 - **Two descriptors per Savings wallet,** receive and change, each with PHONE's `tprv` in place of its `tpub`. The other keys stay public.
 - **A rescan** from each wallet's birthday block (`timestamp` = that block's time).
 - **Active descriptors:** only the newest wallet of each shape is active, since Core keeps one per address type. Earlier ones are still watched and spendable.
+- **An encrypted wallet:**
+  - **The passphrase** is asked for twice on standard input. They must match, and it can't be empty.
+  - **The import:** the wallet is created with that passphrase, unlocked for at most 60 seconds around the import, and locked again afterwards.
+  - **To sign as PHONE,** Core needs the passphrase (`walletpassphrase`). The tests check the wallet reports as encrypted and that Core can't sign until it's unlocked.
+  - **The passphrase shows as it's typed** on a plain terminal. There's no approved crate to hide typing yet; a later step can fix that.
 - **Spending needs a second signature:** Core can sign as PHONE, but a Savings payment still needs DEVICE. The tests check Core can't finalize with PHONE alone, and that PHONE from Core plus DEVICE spends both shapes on regtest.
 
 ## The second key
@@ -43,11 +48,12 @@ It's a developer tool: its wording isn't product copy.
 - **The command line:** no key or phrase is ever taken on it. An argument that looks like one is refused before parsing and never repeated, even when it isn't valid text. That's `tprv`, `xprv`, or 6 BIP39 words in a row, so a phrase that's mistyped or cut short is caught too.
 - **Output:** nothing secret goes to standard output except the 12 words with `--show-phrase`, and nothing secret ever goes to standard error. The tests check every command's output for `tprv`, `xprv` and runs of the phrase.
 - **Errors:** an error from Bitcoin Core's import is never repeated, since its message could quote the request. Only its position and error code are shown.
-- **The file from `--out`** is created new, never overwritten, and readable only by its owner on Unix. On Windows it takes its folder's permissions. If writing it fails partway, it's removed.
+- **The file from `--out`** holds the phone key **unencrypted**. The tool says so and tells you to delete it once it's imported. It's created new, never overwritten, and readable only by its owner on Unix. On Windows it takes its folder's permissions. If writing it fails partway, it's removed.
 - **Only a node on this machine:** the import sends PHONE's key over plain HTTP, so `--rpc-url` must be `http://127.0.0.1`, `http://localhost` or `http://[::1]`.
 - **Memory:**
-  - the phrase, its seed and the descriptors with PHONE's key are wiped from memory after use;
-  - the JSON request sent to Core isn't, because `serde_json` can't wipe its strings. It lives only until the call returns.
+  - the phrase, its seed, the descriptors with PHONE's key and the wallet passphrase are wiped from memory after use;
+  - the phone key's account `Xpriv` (in `PhoneKey`) isn't, because the `bitcoin` crate doesn't support wiping it;
+  - the JSON sent to Core isn't, because `serde_json` can't wipe its strings: the import request, and the passphrase in `createwallet` and `walletpassphrase`. Each lives only until its call returns.
 
 ## Assumptions
 

@@ -22,6 +22,8 @@ const PIN: &str = "2468";
 /// 2026-10-23, as Unix seconds.
 const CREATED: u64 = 1_792_713_600;
 const HEIR_DELAY: u16 = 20;
+/// The new Core wallet's passphrase, for the tests only.
+const PASSPHRASE: &str = "a test passphrase";
 
 /// A folder for one test, removed when the test ends.
 struct TempDir(PathBuf);
@@ -152,12 +154,14 @@ impl Owner {
         }
     }
 
+    /// Runs the tool, typing the PIN and then the new wallet passphrase
+    /// twice (lines a command doesn't ask for are never read).
     fn run(&self, args: &[&str]) -> Output {
-        self.run_typing(args, PIN)
+        self.run_typing(args, &format!("{PIN}\n{PASSPHRASE}\n{PASSPHRASE}"))
     }
 
-    /// Runs the tool, typing `pin` when the second key asks for its PIN.
-    fn run_typing(&self, args: &[&str], pin: &str) -> Output {
+    /// Runs the tool with `typed` on its standard input.
+    fn run_typing(&self, args: &[&str], typed: &str) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_satkeep-restore"))
             .args(args)
             .stdin(Stdio::piped())
@@ -166,7 +170,7 @@ impl Owner {
             .spawn()
             .unwrap();
         // The tool may exit before reading (a refusal), so a failed write is fine.
-        let _ = child.stdin.take().unwrap().write_all(format!("{pin}\n").as_bytes());
+        let _ = child.stdin.take().unwrap().write_all(format!("{typed}\n").as_bytes());
         child.wait_with_output().unwrap()
     }
 
@@ -214,11 +218,24 @@ fn core_imports_both_shapes_and_phone_with_device_spends_them() {
     let out = owner.ok(&args.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(out.contains("The phone key is PHONE in every Savings wallet"), "{out}");
     assert!(out.contains("\"restored\""), "{out}");
+    assert!(out.contains("The wallet is encrypted"), "{out}");
 
     // Core found both coins from the birthday on.
     let wallet = owner.wallet("restored");
     let balances: Value = wallet.call("getbalances", &[]).unwrap();
     assert_eq!(balances["mine"]["trusted"], json!(3.0), "{balances}");
+
+    // Encrypted and locked: Core can't sign as PHONE until it's unlocked.
+    let info: Value = wallet.call("getwalletinfo", &[]).unwrap();
+    assert_eq!(info["unlocked_until"], json!(0), "an encrypted wallet, locked again after the import: {info}");
+    let coin: Vec<Value> = wallet.call("listunspent", &[]).unwrap();
+    let input = json!([{"txid": coin[0]["txid"], "vout": coin[0]["vout"]}]);
+    let to = owner.node.new_address().to_string();
+    let funded: Value =
+        wallet.call("walletcreatefundedpsbt", &[input, json!([{ to: 0.5 }]), json!(0), json!({"add_inputs": false})]).unwrap();
+    let locked: Result<Value, _> = wallet.call("walletprocesspsbt", &[funded["psbt"].clone(), json!(true), json!("ALL")]);
+    assert!(locked.is_err(), "a locked wallet signed");
+    let _: Value = wallet.call("walletpassphrase", &[json!(PASSPHRASE), json!(60)]).unwrap();
 
     // Spend each coin, one shape per payment as Satkeep does: Core signs as
     // PHONE, DEVICE adds its signature, and the node accepts it.
@@ -251,6 +268,29 @@ fn core_imports_both_shapes_and_phone_with_device_spends_them() {
 }
 
 #[test]
+fn core_needs_the_same_non_empty_passphrase_twice() {
+    let owner = Owner::new();
+    let (kit, key) = (owner.kit(), owner.second_key());
+    let mut args: Vec<String> =
+        ["core", "--kit", &kit_s(&kit), "--simulated-device", &kit_s(&key), "--core-wallet", "nopass"].map(str::to_owned).to_vec();
+    args.extend(owner.rpc_args());
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    for (typed, why) in [
+        (format!("{PIN}\none passphrase\nanother passphrase"), "don't match"),
+        (format!("{PIN}\n\n"), "can't be empty"),
+    ] {
+        let out = owner.run_typing(&argv, &typed);
+        owner.check_no_secrets(&out, false);
+        assert!(!out.status.success(), "{why}: accepted");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(why), "{err}");
+        assert!(!err.contains("passphrase\n") && !err.contains("one passphrase"), "the passphrase is never repeated");
+    }
+    let wallets: Vec<String> = owner.node.rpc().call("listwallets", &[]).unwrap();
+    assert!(!wallets.contains(&"nopass".to_owned()), "no wallet was created");
+}
+
+#[test]
 fn core_out_writes_the_import_file_once_and_it_imports() {
     let owner = Owner::new();
     let (kit, key, file) = (owner.kit(), owner.second_key(), owner.dir.file("import.json"));
@@ -261,6 +301,7 @@ fn core_out_writes_the_import_file_once_and_it_imports() {
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = owner.ok(&argv);
     assert!(out.contains("Wrote Bitcoin Core's import request"), "{out}");
+    assert!(out.contains("UNENCRYPTED: delete it once it's imported"), "{out}");
 
     let request: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     let entries = request.as_array().unwrap();
