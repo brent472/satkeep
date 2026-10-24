@@ -25,8 +25,8 @@ pub mod kit;
 pub mod setup;
 
 use bip39::{Language, Mnemonic};
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::aead::{Aead, Generate, KeyInit, Payload};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -97,8 +97,7 @@ pub struct Restored {
 
 /// A fresh random wallet id, from the operating system's generator.
 pub fn new_wallet_id() -> WalletId {
-    let random = XChaCha20Poly1305::generate_key(&mut OsRng);
-    random[..16].try_into().expect("a 32-byte key has 16 bytes")
+    WalletId::generate()
 }
 
 /// Makes a backup of `phrase` and `setup`, locked to `device`. The device
@@ -111,9 +110,9 @@ pub fn make_backup(
     created: u64,
     device: &mut dyn SecurityDevice,
 ) -> Result<Vec<u8>, BackupError> {
-    let data_key: Zeroizing<[u8; 32]> = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).into());
-    let wrap_nonce: [u8; NONCE_LEN] = XChaCha20Poly1305::generate_nonce(&mut OsRng).into();
-    let body_nonce: [u8; NONCE_LEN] = XChaCha20Poly1305::generate_nonce(&mut OsRng).into();
+    let data_key: Zeroizing<[u8; 32]> = Zeroizing::new(<[u8; 32]>::generate());
+    let wrap_nonce: [u8; NONCE_LEN] = <[u8; NONCE_LEN]>::generate();
+    let body_nonce: [u8; NONCE_LEN] = <[u8; NONCE_LEN]>::generate();
     seal(phrase, setup, wallet_id, created, device, &data_key, &wrap_nonce, &body_nonce)
 }
 
@@ -142,7 +141,7 @@ fn seal(
 
     let aad = wrap_aad(&wallet_id, LockKind::Device, device_id, method, &request);
     let wrapped = aead(&kek)
-        .encrypt(XNonce::from_slice(wrap_nonce), Payload { msg: data_key, aad: &aad })
+        .encrypt(&XNonce::from(*wrap_nonce), Payload { msg: data_key, aad: &aad })
         .expect("XChaCha20-Poly1305 encryption of 32 bytes can't fail");
     let wrapped_key: [u8; WRAPPED_KEY_LEN] = wrapped.try_into().expect("32 bytes plus a 16-byte tag");
 
@@ -160,7 +159,7 @@ fn seal(
     let phrase_text = Zeroizing::new(phrase.to_string());
     let plaintext = encode_payload(&phrase_text, &setup_text);
     let body = aead(data_key)
-        .encrypt(XNonce::from_slice(body_nonce), Payload { msg: &plaintext, aad: &header_bytes })
+        .encrypt(&XNonce::from(*body_nonce), Payload { msg: &plaintext, aad: &header_bytes })
         .expect("XChaCha20-Poly1305 encryption can't fail for a small payload");
     let file = format::encode_body(&header_bytes, body_nonce, &body);
     if file.len() > format::MAX_FILE {
@@ -201,15 +200,16 @@ pub fn restore(file: &[u8], device: &mut dyn SecurityDevice) -> Result<Restored,
     let aad = wrap_aad(&wallet_id, entry.kind, device_id, method, &entry.request);
     let data_key = Zeroizing::new(
         aead(&kek)
-            .decrypt(XNonce::from_slice(&entry.wrap_nonce), Payload { msg: &entry.wrapped_key, aad: &aad })
+            .decrypt(&XNonce::from(entry.wrap_nonce), Payload { msg: &entry.wrapped_key, aad: &aad })
             .map_err(|_| BackupError::CannotUnlock)?,
     );
     if data_key.len() != 32 {
         return Err(BackupError::CannotUnlock);
     }
     let plaintext = Zeroizing::new(
-        XChaCha20Poly1305::new(Key::from_slice(&data_key))
-            .decrypt(XNonce::from_slice(&parsed.body_nonce), Payload { msg: parsed.body, aad: parsed.header_bytes })
+        XChaCha20Poly1305::new_from_slice(&data_key)
+            .map_err(|_| BackupError::CannotUnlock)?
+            .decrypt(&XNonce::from(parsed.body_nonce), Payload { msg: parsed.body, aad: parsed.header_bytes })
             .map_err(|_| BackupError::CannotUnlock)?,
     );
     let (phrase_text, setup_text) = decode_payload(&plaintext).ok_or(BackupError::CannotUnlock)?;
@@ -277,7 +277,7 @@ fn decode_payload(plaintext: &[u8]) -> Option<(&str, &str)> {
 }
 
 fn aead(key: &[u8; 32]) -> XChaCha20Poly1305 {
-    XChaCha20Poly1305::new(Key::from_slice(key))
+    XChaCha20Poly1305::new_from_slice(key).expect("a 32-byte key")
 }
 
 /// Lowercase hex, for the unlock label and the kit's lines.
@@ -303,7 +303,7 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         }
     }
     let bytes = text.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     bytes.chunks(2).map(|pair| Some(digit(pair[0])? << 4 | digit(pair[1])?)).collect()

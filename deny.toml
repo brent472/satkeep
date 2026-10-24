@@ -49,7 +49,4 @@ confidence-threshold = 0.9
 exceptions = [
     # MIT plus a no-false-attribution clause; still permissive.
     { crate = "hex_lit", allow = ["MITNFA"] },
-    # BSD 3-clause; constant-time helpers used by the RustCrypto AEAD and HMAC
-    # crates behind the phone key backup. Permissive.
-    { crate = "subtle", allow = ["BSD-3-Clause"] },
 ]
