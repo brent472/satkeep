@@ -27,6 +27,7 @@
    - The 9-month device-only path was removed in brief 3.8: the phone key backup covers a lost phone, and removing it takes away a stolen card's slow route to Savings.
 2. **A small Rust command-line tool** using BDK and rust-miniscript: create the wallet, receive, build PSBTs, sign with any 2 keys, broadcast.
 3. **Check-in** (only with a beneficiary): a send-to-self transaction that restarts the heir delay and consolidates coins. It must run sooner than the heir delay. The plan is once a year (52,560 blocks), with a margin of about 2 months (8,760 blocks).
+   - **Payment rule** (brief 3.12): every Savings payment and pocket refill also spends the coins within a window of needing a check-in (placeholder: older than about 10 months), with change back to Savings, so it counts as their check-in. A wallet setting, on by default; off for privacy.
 4. **Leave without Twofold:** export the wallet descriptor, import it into Liana or Sparrow, and spend with no Twofold code involved.
 
 ## Tests

@@ -51,6 +51,12 @@ pub enum Error {
     CheckinTooLate { interval: u16, margin: u16, heir: u16 },
     #[error("this Savings has no beneficiary, so it needs no check-in")]
     NoCheckinWithoutHeir,
+    #[error("the refresh window must be at least 1 block")]
+    RefreshWindowZero,
+    #[error(
+        "the refresh window ({window} blocks) must be shorter than the check-in interval ({interval} blocks)"
+    )]
+    RefreshWindowTooLong { window: u16, interval: u16 },
     #[error("there are no confirmed Savings coins to check in")]
     CheckinNoCoins,
     #[error("a check-in must not spend unconfirmed coin {coin}; its delays haven't started yet")]

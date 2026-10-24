@@ -20,7 +20,8 @@ use bdk_wallet::{TxBuilder, Wallet};
 
 use crate::bitcoin::psbt::Psbt;
 use crate::miniscript::psbt::{InputError, PsbtExt};
-use crate::bitcoin::{Sequence, Transaction, relative};
+use crate::bitcoin::{OutPoint, Sequence, Transaction, relative};
+use crate::checkin::{self, PaymentRule};
 use crate::{Delays, Error};
 
 /// Which Savings spending path a payment uses.
@@ -67,11 +68,44 @@ pub fn build_spend(
     path: Path,
     configure: impl FnOnce(&mut TxBuilder<'_, DefaultCoinSelectionAlgorithm>),
 ) -> Result<Psbt, Error> {
+    build(wallet, delays, path, &[], configure)
+}
+
+/// Builds an unsigned Savings payment, like [`build_spend`], under the
+/// payment rule: with `rule` (Savings with a beneficiary, the setting on),
+/// a 2-of-3 payment also spends every coin due for a refresh
+/// ([`checkin::due_for_refresh`]), whatever else it spends. Change comes
+/// back to Savings. A pocket refill is a payment like any other. The heir
+/// path, and Savings with no beneficiary, are never affected.
+pub fn build_payment(
+    wallet: &mut Wallet,
+    delays: Delays,
+    path: Path,
+    rule: Option<&PaymentRule>,
+    configure: impl FnOnce(&mut TxBuilder<'_, DefaultCoinSelectionAlgorithm>),
+) -> Result<Psbt, Error> {
+    let refresh = match rule {
+        Some(rule) if path == Path::TwoOfThree && delays.heir().is_some() => checkin::due_for_refresh(wallet, rule),
+        _ => Vec::new(),
+    };
+    build(wallet, delays, path, &refresh, configure)
+}
+
+fn build(
+    wallet: &mut Wallet,
+    delays: Delays,
+    path: Path,
+    must_spend: &[OutPoint],
+    configure: impl FnOnce(&mut TxBuilder<'_, DefaultCoinSelectionAlgorithm>),
+) -> Result<Psbt, Error> {
     if path == Path::Heir && delays.heir().is_none() {
         return Err(Error::NoHeirPath);
     }
     let mut builder = wallet.build_tx();
     configure(&mut builder);
+    if !must_spend.is_empty() {
+        builder.add_utxos(must_spend).expect("the wallet's own unspent coins, listed just now");
+    }
     builder.set_condition(Condition { csv: path.sequence(delays), timelock: None });
     let psbt = builder.finish()?;
     check_delays(wallet, &psbt)?;

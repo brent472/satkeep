@@ -19,6 +19,11 @@ pub use twofold_testenv::Node;
 /// default, so regtest tests can use heir delays of a few blocks.
 pub const MIN_HEIR_DELAY: &str = "10";
 
+/// The refresh window the test wallets use: with their 10-block check-in
+/// interval, payments also spend coins with 6 or more confirmations. The
+/// placeholder default (8,760 blocks) doesn't fit a 10-block interval.
+pub const REFRESH_WINDOW: &str = "4";
+
 pub struct Holders {
     pub phone: HolderKey,
     pub device: HolderKey,
@@ -116,7 +121,8 @@ impl<'a> Cli<'a> {
 
     /// `twofold create` with these holders' public keys and HEIR as the
     /// beneficiary. Check-ins every half the heir delay, with a 1-block
-    /// margin. The minimum heir delay is lowered to [`MIN_HEIR_DELAY`].
+    /// margin. The minimum heir delay is lowered to [`MIN_HEIR_DELAY`], and
+    /// the refresh window is [`REFRESH_WINDOW`].
     pub fn create(&self, holders: &Holders, heir_delay: u16) -> String {
         self.create_with_checkin(holders, heir_delay, heir_delay / 2, 1)
     }
@@ -128,6 +134,7 @@ impl<'a> Cli<'a> {
             "create", "--network", "regtest",
             "--phone", &keys[0], "--device", &keys[1], "--helper", &keys[2], "--heir", &keys[3],
             "--heir-delay", &hd, "--checkin-interval", &ci, "--checkin-margin", &cm, "--min-heir-delay", MIN_HEIR_DELAY,
+            "--refresh-window", REFRESH_WINDOW,
         ])
     }
 

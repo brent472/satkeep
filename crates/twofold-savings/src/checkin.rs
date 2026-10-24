@@ -6,6 +6,10 @@
 //! starts again from zero. It must happen before the oldest coin reaches the
 //! heir delay, or HEIR alone could spend it. Savings with no beneficiary has
 //! no delayed path, so it needs no check-in, and this module refuses one.
+//!
+//! The **payment rule** ([`PaymentRule`]) makes most check-ins unnecessary:
+//! every 2-of-3 Savings payment also spends the coins close to needing one,
+//! with change back to Savings, so the payment refreshes them.
 
 use bdk_wallet::{KeychainKind, Wallet};
 
@@ -21,6 +25,12 @@ pub const DEFAULT_CHECKIN_INTERVAL: u16 = 52_560;
 /// Placeholder margin the interval must leave before the heir delay: about
 /// 2 months of blocks, for fees, confirmations and a late check-in.
 pub const DEFAULT_CHECKIN_MARGIN: u16 = 8_760;
+
+/// Placeholder refresh window: about 2 months of blocks. Under the payment
+/// rule, a payment also spends every coin within this many blocks of its
+/// check-in being due; with the default interval, coins older than about
+/// 10 months (43,800 blocks).
+pub const DEFAULT_REFRESH_WINDOW: u16 = 8_760;
 
 /// How often check-ins are due, and how much room that leaves before the
 /// heir delay.
@@ -63,6 +73,77 @@ impl CheckinRule {
     pub fn status(&self, delays: Delays, confirmations: u32) -> CoinStatus {
         status(delays, Some(*self), confirmations)
     }
+}
+
+/// The payment rule (brief 3.12), for Savings with a beneficiary: every
+/// 2-of-3 Savings payment, a pocket refill included, also spends every
+/// confirmed coin within `window` blocks of needing a check-in, with change
+/// back to Savings. Spending a coin restarts its heir delay, so the payment
+/// counts as that coin's check-in, and the yearly check-in is only needed
+/// when nothing has been paid for a while.
+///
+/// It's a wallet setting, on by default. It links the refreshed coins to
+/// the payment (anyone watching the chain sees they have one owner), so it
+/// can be turned off for privacy, which leaves only check-ins to refresh
+/// coins. Including more coins also costs a little more network fee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaymentRule {
+    window: u16,
+    refresh_age: u16,
+}
+
+impl PaymentRule {
+    /// Refuses unless `1 <= window < ` the check-in interval, so only coins
+    /// at least one block old are ever due.
+    pub fn new(window: u16, checkin: CheckinRule) -> Result<Self, Error> {
+        if window == 0 {
+            return Err(Error::RefreshWindowZero);
+        }
+        if window >= checkin.interval() {
+            return Err(Error::RefreshWindowTooLong { window, interval: checkin.interval() });
+        }
+        Ok(Self { window, refresh_age: checkin.interval() - window })
+    }
+
+    /// Blocks before a coin's check-in is due that a payment refreshes it.
+    pub fn window(&self) -> u16 {
+        self.window
+    }
+
+    /// Confirmations at which a coin is due for a refresh.
+    pub fn refresh_age(&self) -> u16 {
+        self.refresh_age
+    }
+}
+
+/// The confirmed coins a payment must also spend under `rule`: those with
+/// at least [`PaymentRule::refresh_age`] confirmations, counted as of the
+/// next block, as [`coins`] does.
+pub fn due_for_refresh(wallet: &Wallet, rule: &PaymentRule) -> Vec<OutPoint> {
+    let next_block = wallet.latest_checkpoint().height() + 1;
+    wallet
+        .list_unspent()
+        .filter(|utxo| {
+            utxo.chain_position
+                .confirmation_height_upper_bound()
+                .is_some_and(|c| next_block.saturating_sub(c) >= u32::from(rule.refresh_age))
+        })
+        .map(|utxo| utxo.outpoint)
+        .collect()
+}
+
+/// Which coins due for a refresh a payment spends, and which it leaves out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Refresh {
+    pub refreshed: Vec<OutPoint>,
+    pub left_out: Vec<OutPoint>,
+}
+
+/// What `psbt` does for the coins due for a refresh under `rule`.
+pub fn refresh_of(wallet: &Wallet, psbt: &Psbt, rule: &PaymentRule) -> Refresh {
+    let spends = |coin: &OutPoint| psbt.unsigned_tx.input.iter().any(|i| i.previous_output == *coin);
+    let (refreshed, left_out) = due_for_refresh(wallet, rule).into_iter().partition(spends);
+    Refresh { refreshed, left_out }
 }
 
 /// Where a coin with `confirmations` stands. Without a check-in rule (a
@@ -252,6 +333,27 @@ mod tests {
             CheckinRule::new(DEFAULT_CHECKIN_INTERVAL + 1, DEFAULT_CHECKIN_MARGIN, d),
             Err(Error::CheckinTooLate { .. })
         ));
+    }
+
+    #[test]
+    fn the_default_refresh_window_means_coins_older_than_about_10_months() {
+        let d = Delays::with_heir(crate::DEFAULT_HEIR_DELAY).unwrap();
+        let checkin = CheckinRule::new(DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, d).unwrap();
+        let rule = PaymentRule::new(DEFAULT_REFRESH_WINDOW, checkin).unwrap();
+        assert_eq!((rule.window(), rule.refresh_age()), (8_760, 43_800));
+    }
+
+    #[test]
+    fn the_refresh_window_must_fit_inside_the_check_in_interval() {
+        let checkin = CheckinRule::new(10, 5, delays()).unwrap();
+        assert!(matches!(PaymentRule::new(0, checkin), Err(Error::RefreshWindowZero)));
+        for window in [10, 11, u16::MAX] {
+            assert!(
+                matches!(PaymentRule::new(window, checkin), Err(Error::RefreshWindowTooLong { .. })),
+                "window {window}"
+            );
+        }
+        assert_eq!(PaymentRule::new(9, checkin).unwrap().refresh_age(), 1);
     }
 
     #[test]

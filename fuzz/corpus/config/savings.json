@@ -8,5 +8,7 @@
   "birthday": 0,
   "checkin_interval": 10,
   "checkin_margin": 5,
+  "refresh_with_payments": true,
+  "refresh_window": 4,
   "min_heir_delay": 10
 }
