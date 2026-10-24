@@ -73,6 +73,7 @@ The Python script [`contrib/exit-drill/drill.py`](../contrib/exit-drill/drill.py
   - if the next read fills that buffer exactly, the client grows it and reads again without trying to parse;
   - `lianad` sends no newline after a reply and keeps the connection open, so when those were the reply's last bytes, nothing more comes.
   - A draft report for Liana is in [`docs/pr/liana-cli-read-hang.md`](pr/liana-cli-read-hang.md). It hasn't been posted.
+- **Result:** with this change, 20 of 20 copies passed, including 100 `getnewaddress` calls.
 - **It's still Liana:** the drill uses Liana's own daemon and its documented JSON-RPC interface, exactly as `liana-cli` does, just with a reader that waits for a complete reply. The Liana app that people actually run doesn't use `liana-cli`.
 - **How the drill talks to it:** one connection per call. It sends the request and a newline, then reads until what has arrived decodes as one complete JSON object with its id (`json.JSONDecoder.raw_decode`), within the 60-second timeout. An error from `lianad` fails the drill with Liana's own message.
 - **The sync check is real now.**
