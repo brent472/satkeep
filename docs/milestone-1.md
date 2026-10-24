@@ -58,7 +58,7 @@ Decided in brief 3.9–3.10: the recovery contact is not a Savings key. They hel
 - [ ] All tests pass on regtest
 - [ ] Signet demo transaction for each allowed path
 - [x] Exit through Liana or Sparrow works with no Twofold code
-- [ ] README has a diagram of the spending paths
+- [x] README has a diagram of the spending paths
 - [ ] One experienced Bitcoin developer has reviewed the policy
 
 ## Next
