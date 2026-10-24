@@ -1,3 +1,5 @@
+Replaces #17, whose branch history got tangled (a local amend rewrote the #16 merge commit); the changes are the same, as one commit on main.
+
 The exit drill's `drill` job now reports on every pull request, so it can be made a required check without blocking PRs it has nothing to do with.
 
 ## What changes
@@ -24,8 +26,9 @@ The exit drill's `drill` job now reports on every pull request, so it can be mad
   - a new `rust-toolchain.toml`: full drill;
   - a `push` event: full drill;
   - an unknown commit (no merge base): full drill.
-- **On GitHub:** this PR changes the workflow, so its own drill run is the full drill: RESULT_FULL
-- **The skip path:** a throwaway docs-only PR, opened against this branch so it runs the new workflow, then closed without merging: RESULT_SKIP
+- **On GitHub:** this PR changes the workflow, so its own drill run is the full drill: passed all 17 checks ([run 40117196522](https://github.com/brent472/satkeep/actions/runs/40117196522)), and its summary says "Full drill: drill paths changed: .github/workflows/exit-drill.yml".
+- **The skip path:** a throwaway docs-only PR, opened against this branch so it runs the new workflow, then closed without merging: #20 passed in 5 s ([run 40117198225](https://github.com/brent472/satkeep/actions/runs/40117198225), attempt 2). Its summary says "No drill paths changed: skipped (changed files: 1, none used by the drill)", and scan-log was skipped. #20 was closed without merging.
+  - **The first attempt** showed 3 minutes, but its steps ran in 3 s. GitHub marked the job complete late while its API was returning 502s, and the re-run took 5 s.
 
 ## Security review
 
