@@ -11,8 +11,9 @@ An old phone or tablet with the Satkeep app can now be the second key that locks
 - **Unlocking** is an offline exchange of text, with no servers and no cable:
   1. The tool shows an **unlock request**: the wallet, the phone's id, the ephemeral key, a fresh session key and a check, as 244 hex digits.
   2. The phone refuses a request for another phone or another wallet before it asks for its face, fingerprint or passcode.
-  3. It **answers** with the unlock secret masked by the session key, plus a check bound to the whole request: 72 hex digits.
-  4. The person types the answer into the tool.
+  3. It shows a **warning**, required app behaviour, before every answer: "Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email."
+  4. It **answers** with the unlock secret masked by the session key, plus a check bound to the whole request: 72 hex digits.
+  5. The person types the answer into the tool.
 - **Why the mask:** the phone's screen never shows the secret itself, and an answer to one request fails another's check.
 - **No curve code in the tool:** its side is hashing only, so release builds of `satkeep-restore` don't include `p256`.
 - **Test vectors** for every step (6.1). The P-256 values were checked against an independent computation in plain Python, by hand.
@@ -71,8 +72,10 @@ An old phone or tablet with the Satkeep app can now be the second key that locks
 
 - The spec's new sections 3.4 and 6.1, and its assumptions.
 - Both crate READMEs.
-- `restore-tool.md`'s status for step 5.
-- The draft exit guide: the old-phone unlock, step by step, and two new troubleshooting lines. These are plain words for a family member; it's not app copy.
+- `restore-tool.md`: the status for step 5, and a new threat, 7.6:
+  - **The threat:** the phone can't tell who made a request, so someone with a stolen backup file could try to talk the owner into answering it, which reveals the phone key.
+  - **The mitigations:** the warning, and a new backup if the owner reports it. A new backup doesn't take back a phone key that's out, so 7.6 says moving to new keys is the full fix.
+- The draft exit guide: the old-phone unlock, step by step, with the warning and "never read the answer out", and two new troubleshooting lines. These are plain words for a family member; the warning is the only app copy, quoted as the owner gave it.
 
 ### Security review
 
@@ -103,5 +106,6 @@ An old phone or tablet with the Satkeep app can now be the second key that locks
 - **Terminal scrollback** shows the request and the typed answer, which together give the unlock secret. Someone who can read that screen can already see the restored result. The README says to close the terminal.
 - **A seen request and answer keep opening that backup,** because its ephemeral key doesn't change. That's the design, and the spec now says so (3.4): after such an exposure, the app should make a new backup.
 - **The standard-input buffer** may keep the typed answer, unwiped.
+- **Someone else's request** (added after review): the phone can't tell who made a request, so a person with a stolen backup file could try to talk the owner into answering. That's social engineering, not a code flaw; the spec now requires a warning before every answer (3.4) and restore-tool.md threat 7.6 covers it.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
