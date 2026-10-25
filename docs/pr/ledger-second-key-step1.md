@@ -116,10 +116,13 @@ Approved on 2026-10-25. Direct dependencies are pinned with `=`. Every crate is 
 
 ### Before merging
 
-- **`cargo deny check` fails on this PR, and on main too, because of a yanked crate unrelated to the Ledger.**
-  - Today RustCrypto yanked every `crypto-bigint` 0.7 release except 0.7.9, including our 0.7.7.
-  - That's handled in its own small PR. Once it's merged, this branch needs main merged in.
-- **The tokio date:** not before 27 October.
+- **Not before 27 October:** tokio 1.53.3's 14-day date.
+- **`cargo deny check` passes:** #32 (the yanked crypto-bigint) is merged, and main is merged into this branch.
+- **The Ledger job passed all 5 Speculos tests,** on its third run:
+  - **The first run hung:** the approve screen reads "Approve public key", not "Approve". Each Ledger call now has a 3-minute watchdog.
+  - **The second run found one wrong assumption in my tests:** the node refuses an early heir-sequence spend before it checks the script. That check now uses a 2-of-3 payment with no delay.
+- **What the job's log shows:** each screen the Ledger showed, redacted. Key and address screens show only their titles.
+  - The second run's log, before that was tightened, shows the last 5 characters of the unspendable internal key ("Dummy key@0"). It's a public key that nobody can sign with.
 
 ### A real Ledger on signet
 
