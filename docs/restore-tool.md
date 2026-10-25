@@ -207,10 +207,8 @@ A kit from before a phone key or second key change opens to old keys, which may 
 The second phone can't tell who made an unlock request (`backup-format.md` 3.4). Someone with a stolen backup file, for example from the cloud account, can make a valid request on their own computer. They could then try to talk the owner into reading them the answer, for example posing as Satkeep or the helper. The answer and the file together open the backup, which reveals the phone key: one of the three keys. That's the pocket, and one of the two keys Savings needs.
 
 **Mitigations:**
-- **A warning before every answer,** required app behaviour (`backup-format.md` 3.4): "Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email."
-- **A new backup** if the owner reports answering a request they didn't make. A new backup has a new ephemeral key, so that file and any answer seen for it open nothing new.
-
-**What a new backup doesn't undo:** if the backup was opened, the phone key itself is out. As in 7.3, Savings is still safe on the phone key alone, but the pocket isn't. Moving the pocket and Savings to new keys is the full fix. Whether the app does that on such a report is for the app's design.
+- **A warning before every answer,** required app behaviour (`backup-format.md` 3.4): "Only do this if you're restoring your own Satkeep on a computer in front of you right now. No one from Satkeep, or from any company, will ever ask you to read this answer to them, by phone, message or email." The wording matches Section 19 of brief v3.24.
+- **New keys** if an answer was seen, for example the owner reports reading one out: the app gives the owner new keys and moves all their bitcoin to them, pocket and Savings. A new backup alone isn't enough, because once the backup has been opened the phone key itself is out. As in 7.3, Savings is still safe on the phone key alone, but the pocket isn't.
 
 **Residual risk:** an owner who is talked past the warning and never reports it.
 

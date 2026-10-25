@@ -379,7 +379,9 @@ mod tests {
     fn export_is_public_checksummed_and_parses_back() {
         for policy in both_shapes() {
             let exported = policy.export_descriptor();
-            assert!(!exported.contains("prv"), "no private keys");
+            // Piece by piece: a random tpub or checksum can contain "prv".
+            assert!(!satkeep_backup::setup::holds_private_key(&exported), "no private keys");
+            assert!(satkeep_backup::setup::holds_private_key(&exported.replacen("tpub", "tprv", 1)), "the check works");
             let (body, checksum) = exported.split_once('#').expect("has a checksum");
             assert_eq!(checksum.len(), 8);
             assert!((body.starts_with("tr(") || body.starts_with("wsh(sortedmulti(2,")) && body.contains("/<0;1>/*"));
@@ -388,6 +390,7 @@ mod tests {
             let (receive, change) = policy.export_receive_and_change();
             assert!(receive.contains("/0/*") && change.contains("/1/*"));
             assert!(!receive.contains("<0;1>") && receive.contains('#') && change.contains('#'));
+            assert!(![&receive, &change].into_iter().any(|d| satkeep_backup::setup::holds_private_key(d)));
         }
     }
 
