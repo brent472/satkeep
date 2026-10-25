@@ -27,6 +27,9 @@ The warning now matches Section 19 of brief v3.24, in `docs/backup-format.md` 3.
 
 ### Security review
 
-SECURITY_REVIEW
+**None.** The review checked:
+- **The exports can't hold a private key:** they're `to_string()` of `Descriptor<DescriptorPublicKey>`, and no product code changed.
+- **The new check misses nothing the old one caught:** in these descriptors every key ends up as its own piece, after `tr(`, `pk(`, a comma or an origin, so a `tprv` or `xprv` is always caught. It now covers the receive and change exports too, and the added assertion shows it isn't always false.
+- **Nothing printed:** the assertion messages are fixed text, never the descriptor.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
