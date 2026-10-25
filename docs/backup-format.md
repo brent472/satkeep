@@ -128,7 +128,7 @@ A second phone is an old phone or tablet with the Satkeep app (decision D4 in [`
    - a wallet `W` it isn't the second key of.
 3. **After** its face, fingerprint or passcode, the phone computes `Z` = the x-coordinate of `d·E`, refusing an `E` that isn't on the curve, then `S` as in locking.
 4. **The warning,** required app behaviour. Before it shows the answer, the phone must show this warning, word for word, and show the answer only once the person has seen it:
-   > Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email.
+   > Only do this if you're restoring your own Satkeep on a computer in front of you right now. No one from Satkeep, or from any company, will ever ask you to read this answer to them, by phone, message or email.
 5. **The answer** is 36 bytes, shown as 72 hex digits in groups of 4:
    - `S` XOR `mask`, where `mask` = HKDF-SHA256 with input key material `K`, no salt, info `satkeep/second-phone/v1/answer-mask`, length 32;
    - then a check: the first 4 bytes of SHA-256(`satkeep/second-phone/v1/answer` ‖ the request's 122 bytes ‖ the masked secret).
@@ -139,8 +139,9 @@ A second phone is an old phone or tablet with the Satkeep app (decision D4 in [`
 - **The answer's check covers the request,** so an old answer, or one to another request, is caught like a typo.
 - **No elliptic-curve code in the tool.** It only hashes, and checks `E` has a compressed point's shape. Only the phone checks `E` is on the curve.
 - **`S` and the backup file together open the backup,** so the tool wipes `K` and `S` once used and never prints the answer.
-- **`S` stays the same for the life of a backup,** because `E` does. Anyone who saw both a request and its answer, on the computer's screen or in its scrollback, can work out `S` and keep opening that backup. A new backup gets a new `e`, so after any such exposure the app should make a new backup.
-- **The phone can't tell who made a request.** Anyone with a copy of the backup file can make a valid one, and an answer to it opens the backup: the phone key, one of the three keys. Hence the warning in step 4, which no format check can replace. If the owner reports answering a request they didn't make, the app should make a new backup. If the backup was opened, the phone key itself is out, and a new backup doesn't change that ([`restore-tool.md`](restore-tool.md) threat 7.6).
+- **`S` stays the same for the life of a backup,** because `E` does. Anyone who saw both a request and its answer, on the computer's screen or in its scrollback, can work out `S` and keep opening that backup.
+- **The phone can't tell who made a request.** Anyone with a copy of the backup file can make a valid one, and an answer to it opens the backup: the phone key, one of the three keys. Hence the warning in step 4, which no format check can replace.
+- **If an answer was seen** by anyone else, on the computer's screen, in its scrollback, or read out to someone, the app gives the owner new keys and moves all their bitcoin to them, pocket and Savings. A new backup alone isn't enough: once the backup has been opened, the phone key itself is out ([`restore-tool.md`](restore-tool.md) threat 7.6).
 
 ## 4. The wallet setup
 
@@ -613,6 +614,6 @@ The phone's answer:
 - **The second phone (3.4) on real phones, to be checked when the app is built:**
   - that the Secure Enclave (CryptoKit's key agreement) and Android Keystore (ECDH key agreement, Android 12 and later) both give the raw x-coordinate as `Z`;
   - how the app shows the request's scan and the answer.
-- **The warning's wording (3.4, step 4)** was set by the owner in the review of the second-phone PR. It belongs in the brief's Section 19 too, which wins on wording.
+- **The warning's wording (3.4, step 4)** matches Section 19 of brief v3.24, which wins on wording.
 - **One second phone per backup in the tool.** The format allows several; the tool refuses a backup locked to more than one, because it can't tell which phone is at hand.
 - **Version 1 replaces the prototype's layout.** The prototype's payload carried a free-form setup string. Old prototype backups don't open, and they were all test data.

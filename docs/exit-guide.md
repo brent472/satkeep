@@ -63,9 +63,9 @@ If anything doesn't match, it stops. Don't work around that.
 2. Give it to the Satkeep app on that phone. *To be decided:* how, scanning it or typing it, comes with the app.
 3. The phone checks the request is for it, and asks for its own face, fingerprint or passcode.
 4. Before the answer, the phone always shows this warning. The app must show it every time:
-   > Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email.
+   > Only do this if you're restoring your own Satkeep on a computer in front of you right now. No one from Satkeep, or from any company, will ever ask you to read this answer to them, by phone, message or email.
 5. It shows an **answer** of 72 letters and numbers. Type it into the tool yourself; spaces don't matter.
-- **Never read the answer out or send it to anyone,** whoever they say they are. If you did, tell the owner: the app should make a new backup, and the coins should move to new keys.
+- **Never read the answer out or send it to anyone,** whoever they say they are. If someone else saw an answer, tell the owner: the app then gives them new keys and moves all their bitcoin to them.
 - **A typo** is caught, and you can type the answer again.
 - **Keep both to yourself:** the request and the answer together unlock the backup. Close the window afterwards.
 
