@@ -81,6 +81,7 @@ The exact descriptors, and the tests for every path, are in [`crates/satkeep-sav
 | [`crates/satkeep-restore`](crates/satkeep-restore/README.md) | `satkeep-restore`: the phone key back from the exit kit with the second key, and Savings into Bitcoin Core or Liana, with no Satkeep app or server |
 | [`crates/satkeep-savings`](crates/satkeep-savings/README.md) | Savings wallet rules, their regtest tests, and every assumption behind them |
 | [`crates/satkeep-cli`](crates/satkeep-cli/README.md) | `satkeep`, a developer command-line tool for Savings on test networks |
+| [`crates/satkeep-ledger`](crates/satkeep-ledger/README.md) | A Ledger as DEVICE (step 1: approving Savings payments): its key, registering the wallet, signing. Tested against Ledger's emulator; [`docs/ledger-signet.md`](docs/ledger-signet.md) for a real Ledger on signet |
 | [`docs/design.md`](docs/design.md) | Design references: the brand sheet (the visual master), screens, type and color |
 | [`CLAUDE.md`](CLAUDE.md) | Ground rules for anyone (or any AI assistant) working in this repo |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability (privately, through GitHub) |
@@ -103,6 +104,8 @@ Every pull request runs [CI](.github/workflows/ci.yml):
 - the build, `cargo clippy -D warnings` and the tests, including the regtest tests on throwaway nodes
 - `cargo deny check`
 - a 60-second run of each fuzz target in [`fuzz/`](fuzz/)
+
+The [Ledger](.github/workflows/ledger.yml) workflow runs `satkeep-ledger`'s tests against Ledger's Speculos emulator on every pull request and every push to main; a PR that changes nothing those tests use passes it in seconds.
 
 The [exit drill](docs/exit-drill.md) spends Savings through Liana and Bitcoin Core. It runs every week, on every push to main, and on every pull request; a PR that changes nothing the drill uses (no crate, drill file, toolchain or dependency) passes it in seconds.
 

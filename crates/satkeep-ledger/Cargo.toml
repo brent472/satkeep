@@ -1,0 +1,32 @@
+[package]
+name = "satkeep-ledger"
+version = "0.1.0"
+description = "A Ledger as the second key of a Satkeep Savings wallet: its public key, wallet registration and signing. Test networks only."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Talking to Ledger's Speculos emulator on 127.0.0.1:9999 instead of a
+# device over USB. For tests; the CLI leaves it out.
+speculos = []
+
+[dependencies]
+# Liana's hardware wallet library, Ledger only (no other devices, no
+# network client). Pinned exactly: it talks to the device that approves
+# Savings payments.
+async-hwi = { version = "=0.0.32", default-features = false, features = ["ledger"] }
+satkeep-savings = { path = "../satkeep-savings" }
+thiserror.workspace = true
+# async-hwi is async; a current-thread runtime runs each call to the end.
+# Already in the build through async-hwi.
+tokio = { version = "=1.53.2", default-features = false, features = ["rt"] }
+
+[dev-dependencies]
+satkeep-ledger = { path = ".", features = ["speculos"] }
+satkeep-savings = { path = "../satkeep-savings", features = ["simulated-device"] }
+bdk_bitcoind_rpc.workspace = true
+bdk_wallet.workspace = true
+satkeep-testenv = { path = "../satkeep-testenv" }
+serde_json = "1.0"

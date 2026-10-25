@@ -103,7 +103,9 @@ satkeep broadcast --psbt checkin.psbt
 | `checkin [--fee-rate 2] --out FILE.psbt` | Prepares a check-in: every coin, through the 2-of-3 path, into one new Savings address. Approve and send it with `sign` and `broadcast`. Only with a beneficiary. | Yes |
 | `export [--split]` | Prints the public descriptor, for backup or for importing into other software | No |
 | `send --to ADDR (--amount BTC \| --all) [--path two-of-three\|heir] [--fee-rate 2] --out FILE.psbt` | Prepares an unsigned payment. The heir path is refused without a beneficiary, and until every coin used has waited long enough. With a beneficiary and the payment rule on, a 2-of-3 payment also spends the coins due for a refresh. | Yes |
-| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin) [--yes]` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place | No (reads the wallet folder) |
+| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin [--yes] \| --ledger)` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place. With `--ledger`, the Ledger shows the payment and signs as DEVICE once you approve it there (see below) | No (reads the wallet folder) |
+| `ledger-key` | Shows your Ledger's public key for Savings (`m/87'/1'/0'`), after you approve it on the Ledger, for `create --device` | No |
+| `ledger-register` | Registers this wallet on your Ledger, after you check its rules and keys on the Ledger's screen. Saves the registration (`ledger.json`) in the wallet folder | No |
 | `broadcast --psbt FILE.psbt` | Checks the payment has enough approvals and is old enough, then sends it | Yes |
 
 Global options:
@@ -118,6 +120,22 @@ Global options:
 If you pass both `--wallet-dir` and `--network`, they must agree.
 
 **A pruned node works.** A wallet reads blocks from its birthday (the node's height at `create` or `add-heir`) on, starting from the block before it, and later from where it last synced. The node must still have those blocks: a wallet left unsynced for longer than the node keeps blocks gets a "pruned data" error. (Bitcoin Core always keeps at least the last 288 blocks, about two days; on signet with `-prune=550` it currently keeps about a week.)
+
+## A Ledger as DEVICE
+
+DEVICE can be a Ledger running the Bitcoin Test app, over USB. This is step 1: it approves Savings payments only, and doesn't unlock the phone key backup. How it works, and every assumption, is in [`satkeep-ledger`](../satkeep-ledger/README.md). Step-by-step on signet: [`docs/ledger-signet.md`](../../docs/ledger-signet.md).
+
+```text
+satkeep ledger-key                        # approve the key on the Ledger; use it as --device
+satkeep create --phone … --device … --helper …
+satkeep ledger-register                   # check the rules and keys on the Ledger, approve
+satkeep sign --psbt pay.psbt --ledger     # the Ledger shows the payment; approve there
+```
+
+- **The Ledger is the approval.** `sign --ledger` shows the payment as usual, but doesn't ask `Approve? (y/N)`: the Ledger shows the payment on its own screen and signs only once you approve there. It takes no key, and no `--yes`.
+- **Every wallet is registered once.** `sign --ledger` refuses, before looking for a Ledger, if the wallet folder has no `ledger.json`, or one for another wallet. After `add-heir`, register the new wallet too. The move itself is signed under the old wallet's registration.
+- **The approval code is never shown.** `ledger.json` holds the Ledger's approval code for the wallet. It isn't secret, but `satkeep` never prints it or repeats the file in an error.
+- **The Ledger must sign every coin,** as with a key file; otherwise nothing is saved.
 
 ## Demo on your own regtest node (PowerShell)
 

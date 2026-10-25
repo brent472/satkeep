@@ -13,6 +13,7 @@ use bdk_wallet::{KeychainKind, SignOptions, Wallet};
 use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use satkeep_savings::bitcoin::{Address, Amount, FeeRate, Network, Transaction, Witness, XOnlyPublicKey};
+use satkeep_savings::miniscript::descriptor::DescriptorPublicKey;
 use satkeep_savings::miniscript::{Miniscript, Segwitv0, Tap};
 use satkeep_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
 
@@ -75,9 +76,26 @@ impl Savings {
         Self::from_keys(keys, Delays::with_heir(heir_delay).unwrap())
     }
 
-    fn from_keys([phone, device, helper, heir]: [HolderKey; 4], delays: Delays) -> Self {
+    /// Fresh PHONE, HELPER and HEIR, with DEVICE's public key from outside,
+    /// such as a Ledger's. `Holder::Device` then signs nothing here: DEVICE
+    /// signs wherever its key is.
+    pub fn with_device_key(device: DescriptorPublicKey, delays: Delays) -> Self {
+        let keys = [(); 4].map(|_| HolderKey::generate());
+        Self::assemble(keys, Some(device), delays)
+    }
+
+    fn from_keys(keys: [HolderKey; 4], delays: Delays) -> Self {
+        Self::assemble(keys, None, delays)
+    }
+
+    fn assemble(
+        [phone, device, helper, heir]: [HolderKey; 4],
+        device_key: Option<DescriptorPublicKey>,
+        delays: Delays,
+    ) -> Self {
         let heir_key = delays.heir().map(|_| heir.public_key(0));
-        let keys = SavingsKeys::new(phone.public_key(0), device.public_key(0), helper.public_key(0), heir_key).unwrap();
+        let device_key = device_key.unwrap_or_else(|| device.public_key(0));
+        let keys = SavingsKeys::new(phone.public_key(0), device_key, helper.public_key(0), heir_key).unwrap();
         let policy = SavingsPolicy::new(keys, delays, Network::Regtest).unwrap();
         let (receive, change) = policy.receive_and_change();
         let wallet = Wallet::create(receive.to_string(), change.to_string())

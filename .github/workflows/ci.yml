@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # hidapi (USB, for a Ledger as DEVICE) builds against libudev.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libudev-dev
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --bins --locked -- -D warnings
@@ -59,6 +61,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # hidapi (USB, for a Ledger as DEVICE) builds against libudev.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libudev-dev
       - name: Download Bitcoin Core and verify it against its signed checksums
         run: .github/scripts/fetch-bitcoin-core.sh
       # Every test except the full-length 61,320-block one, which is
@@ -74,6 +78,8 @@ jobs:
         target: [psbt, config, holder_key, backup_file, kit, second_phone]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # hidapi (USB, for a Ledger as DEVICE) builds against libudev.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libudev-dev
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
       - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -print_final_stats=1

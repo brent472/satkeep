@@ -153,6 +153,8 @@ jobs:
       - name: Build satkeep (used only to make keys and export the descriptor) and satkeep-restore
         if: steps.scope.outputs.run == 'true'
         run: |
+          # hidapi (USB, for a Ledger as DEVICE) builds against libudev.
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libudev-dev
           cargo build --release --locked -p satkeep-cli
           echo "SATKEEP=$GITHUB_WORKSPACE/target/release/satkeep" >> "$GITHUB_ENV"
           # The restore tool with its test-only simulated second key, and the

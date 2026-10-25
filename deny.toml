@@ -52,4 +52,8 @@ exceptions = [
     # BSD 3-clause; constant-time helpers used by the P-256 crates behind the
     # second phone (crypto-bigint, elliptic-curve, ff, group). Permissive.
     { crate = "subtle", allow = ["BSD-3-Clause"] },
+    # BSD 3-clause, read from its LICENSE file (its manifest names no
+    # licence): Liana's hardware wallet library, for a Ledger as DEVICE
+    # (satkeep-ledger). Permissive.
+    { crate = "async-hwi", allow = ["BSD-3-Clause"] },
 ]
