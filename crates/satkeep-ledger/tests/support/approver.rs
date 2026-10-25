@@ -163,13 +163,22 @@ fn request(line: &str, body: &str) -> Option<String> {
 }
 
 /// The screen's lines with anything that could be part of a key, address or
-/// code replaced by "…": a run of letters and digits 16 or more long, or 6
+/// code replaced by "…": everything below the title of a key or address
+/// screen, and elsewhere a run of letters and digits 16 or more long, or 6
 /// or more long with a digit or a capital after its first letter. A Nano
 /// splits a long key over several lines, so its pieces are short; words and
 /// amounts are kept.
 fn redacted(lines: &[String]) -> String {
+    // On a screen showing a key or an address, everything below the title
+    // goes, whatever it looks like: the last piece of a key can be short.
+    let title = lines.first().map(|l| l.to_ascii_lowercase()).unwrap_or_default();
+    let keyish = title.contains("key") || title.starts_with("to") || title.contains("address");
     let mut out = String::new();
-    for line in lines {
+    for (i, line) in lines.iter().enumerate() {
+        if keyish && i > 0 {
+            out.push_str(" / …");
+            continue;
+        }
         let mut run = String::new();
         let mut cleaned = String::new();
         for c in line.chars().chain(std::iter::once(' ')) {
@@ -207,6 +216,9 @@ fn redaction_removes_keys_and_codes() {
     assert_eq!(redacted(&line("Register account")), "Register account");
     assert_eq!(redacted(&line("Fees 0.00000402 BTC")), "Fees 0.… BTC");
     assert_eq!(redacted(&[String::from("Sign transaction"), String::from("Satkeep Savings")]), "Sign transaction / Satkeep Savings");
+    // A key's or an address's last, short piece, as a Nano X showed one.
+    assert_eq!(redacted(&[String::from("Dummy key@0 (3/3)"), String::from("55N9D")]), "Dummy key@0 (3/3) / …");
+    assert_eq!(redacted(&[String::from("To (2/2)"), String::from("q9x")]), "To (2/2) / …");
 }
 
 #[cfg(test)]

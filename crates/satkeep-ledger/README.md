@@ -55,7 +55,8 @@ Each one is a placeholder or an observation, written down here as the project ru
   - **Allowed:** for both shapes, the Ledger registers the wallet, and the Ledger plus PHONE, or plus HELPER, spends it.
   - **Forbidden, refused by Satkeep and, built by hand, by the node:**
     - the Ledger alone, even after the heir delay;
-    - the Ledger and HEIR before the heir delay.
+    - the Ledger and HEIR before the heir delay;
+    - the Ledger and HEIR through 2 of 3, where HEIR's signature doesn't count.
   - **Forbidden on the Ledger:**
     - signing with an altered approval code;
     - signing for a wallet it never registered;

@@ -29,7 +29,8 @@ Every assumption is written in [`crates/satkeep-ledger/README.md`](../../crates/
   - **Allowed:** the Ledger registers the wallet, and the Ledger plus PHONE, or plus HELPER, spends it.
   - **Forbidden, refused by Satkeep and, built by hand, by the node:**
     - the Ledger alone, even after the heir delay;
-    - the Ledger and HEIR before the heir delay.
+    - the Ledger and HEIR before the heir delay;
+    - the Ledger and HEIR through 2 of 3, where HEIR's signature doesn't count.
   - **Forbidden on the Ledger:** an altered approval code, a wallet it never registered, and another wallet's payment are all refused, and the PSBT is left unchanged.
   - **Not registered:** a wallet whose DEVICE isn't this Ledger.
 - **How the buttons are pressed:** through Speculos's REST API. The test presses right until one of the screens Ledger's own tests approve on, then both buttons.

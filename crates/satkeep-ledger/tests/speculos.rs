@@ -4,7 +4,7 @@
 //!
 //! Allowed: the Ledger registers each wallet, and the Ledger plus PHONE, or
 //! plus HELPER, spends it. Forbidden: the Ledger alone; the Ledger and HEIR
-//! before the heir delay; the Ledger signing for a wallet it hasn't
+//! before the heir delay, or through 2 of 3, where HEIR doesn't count; the Ledger signing for a wallet it hasn't
 //! registered, with an altered approval code, or for another wallet's
 //! payment; registering a wallet whose DEVICE isn't this Ledger. Each spend
 //! is refused by Satkeep and, built by hand, by the node.
@@ -128,8 +128,9 @@ fn the_ledger_and_heir_cant_spend_before_the_heir_delay() {
     assert!(matches!(err, Error::TooEarly { .. }), "{err}");
 
     // Built without Satkeep's checks and signed by both, it still fails:
-    // Satkeep's finalizer and the node refuse the heir leaf as too early,
-    // and the 2-of-3 leaf has only DEVICE.
+    // Satkeep's finalizer and the node refuse it as too early. (The node
+    // refuses any spend with the heir delay's sequence on a coin this young,
+    // whichever leaf it uses.)
     let mut psbt = savings.build_unchecked(Path::Heir, &node.new_address());
     ledger_signs(&mut ledger, &registration, &mut psbt);
     savings.sign(&mut psbt, &[Holder::Heir]);
@@ -137,6 +138,14 @@ fn the_ledger_and_heir_cant_spend_before_the_heir_delay() {
     assert!(matches!(err, Error::TooEarly { .. }), "{err}");
     let reason = node.accepts(&savings.forced(&psbt, Path::Heir)).expect_err("heir leaf, early");
     assert!(reason.contains(TOO_EARLY), "{reason}");
+
+    // And HEIR's signature never counts towards 2 of 3: with no delay at all,
+    // the Ledger and HEIR are still one key short.
+    let mut psbt = savings.build(Path::TwoOfThree, &node.new_address()).unwrap();
+    ledger_signs(&mut ledger, &registration, &mut psbt);
+    savings.sign(&mut psbt, &[Holder::Heir]);
+    let err = savings.finalize(&psbt).expect_err("HEIR and the Ledger through 2 of 3");
+    assert!(matches!(err, Error::NotEnoughApprovals), "{err}");
     let reason = node.accepts(&savings.forced(&psbt, Path::TwoOfThree)).expect_err("2-of-3 leaf, one key");
     assert!(reason.contains(SCRIPT_FAILED), "{reason}");
 }
