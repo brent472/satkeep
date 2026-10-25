@@ -5,7 +5,8 @@
 //! same every time, and only after its own PIN or fingerprint. That's how
 //! Trezor's SLIP-0011 CipherKeyValue works (an AES key derived on the device
 //! from a label); see docs/phone-key-backup.md section 3 for which real
-//! devices can do it.
+//! devices can do it. A second phone answers the same call through an
+//! offline request and answer ([`crate::second_phone`]).
 
 use zeroize::Zeroizing;
 
@@ -19,20 +20,25 @@ pub struct DeviceId(pub [u8; 32]);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UnlockMethod {
     /// A key derived on the device from a label, after its PIN (SLIP-0011
-    /// style). The only method so far.
+    /// style).
     CipherKeyValue,
+    /// A second phone with the Satkeep app: ECDH with its P-256 key, through
+    /// an offline request and answer (decision D4).
+    SecondPhone,
 }
 
 impl UnlockMethod {
     pub(crate) fn code(self) -> u8 {
         match self {
             Self::CipherKeyValue => 1,
+            Self::SecondPhone => 2,
         }
     }
 
     pub(crate) fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::CipherKeyValue),
+            2 => Some(Self::SecondPhone),
             _ => None,
         }
     }
@@ -47,6 +53,8 @@ pub enum DeviceError {
     WrongPin { tries_left: u8 },
     #[error("the security device is locked after too many wrong PINs")]
     Blocked,
+    #[error("type the second phone's answer to this unlock request first")]
+    AnswerRequired,
 }
 
 /// A security device that can lock and unlock the phone key backup.

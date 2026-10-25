@@ -107,7 +107,12 @@ impl Owner {
         let mut device = SimulatedDevice::from_secret(secret, PIN);
         device.enter_pin(PIN).unwrap();
         let file = backup::make_backup(phone, setup, backup::new_wallet_id(), CREATED, &mut device).unwrap();
-        let text = kit::encode(&file, plain_setup).unwrap();
+        self.pdf(name, &file, plain_setup)
+    }
+
+    /// The kit for `backup` and `plain_setup`, as a PDF.
+    fn pdf(&self, name: &str, file: &[u8], plain_setup: &WalletSetup) -> PathBuf {
+        let text = kit::encode(file, plain_setup).unwrap();
         // As in the app's PDF: the armoured text as an uncompressed attachment.
         let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /EmbeddedFile >> stream\n".to_vec();
         pdf.extend_from_slice(text.as_bytes());
@@ -358,7 +363,7 @@ fn the_wrong_second_key_or_pin_unlocks_nothing() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("wrong PIN"), "{err}");
     let err = owner.fails(&["liana", "--kit", &kit_s(&kit)]);
-    assert!(err.contains("can't talk to a second key"), "no second key given: {err}");
+    assert!(err.contains("can't talk to yet: Trezor comes in a later version"), "no second key given: {err}");
 }
 
 #[test]
@@ -688,4 +693,202 @@ fn liana_and_core_say_which_app_and_end_with_one_next_step() {
     args.extend(owner.rpc_args());
     let out = owner.ok(&args.iter().map(String::as_str).collect::<Vec<_>>());
     assert_routes(&out, "Bitcoin Core sign as PHONE");
+}
+
+// ---------------------------------------------------- the second phone ----
+
+use satkeep_backup::SimulatedSecondPhone;
+
+impl Owner {
+    /// A kit PDF for this owner's phone key and setup, locked to `phone`,
+    /// which becomes the second key of its wallet.
+    fn phone_kit(&self, phone: &mut SimulatedSecondPhone) -> PathBuf {
+        let phrase = satkeep_backup::bip39::Mnemonic::parse_in(
+            satkeep_backup::bip39::Language::English,
+            self.phone.to_secret_string().as_str(),
+        )
+        .unwrap();
+        let wallet_id = backup::new_wallet_id();
+        phone.serve(wallet_id);
+        let file =
+            satkeep_backup::make_backup_for_second_phone(&phrase, &self.setup, wallet_id, CREATED, &phone.public_key()).unwrap();
+        self.pdf("phone-kit.pdf", &file, &self.setup)
+    }
+
+    /// Runs the tool on a kit locked to a second phone: reads the unlock
+    /// request it shows, gets what to type from `reply` (the phone's answer,
+    /// or a test's wrong one), then types `then` (the wallet passphrase).
+    fn run_with_phone(&self, args: &[&str], reply: impl FnOnce(&str) -> String, then: &str) -> Output {
+        use std::io::BufRead;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_satkeep-restore"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+        let (lines, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut all = Vec::new();
+            loop {
+                let mut line = Vec::new();
+                if stderr.read_until(b'\n', &mut line).unwrap() == 0 {
+                    return all;
+                }
+                all.extend_from_slice(&line);
+                let _ = lines.send(String::from_utf8_lossy(&line).into_owned());
+            }
+        });
+        let mut request = String::new();
+        let mut inside = false;
+        for line in received.iter() {
+            match line.trim_end() {
+                "-----BEGIN SATKEEP UNLOCK REQUEST-----" => inside = true,
+                "-----END SATKEEP UNLOCK REQUEST-----" => break,
+                text if inside => {
+                    request.push_str(text);
+                    request.push('\n');
+                }
+                _ => {}
+            }
+        }
+        let typed = reply(&request);
+        let _ = child.stdin.take().unwrap().write_all(format!("{typed}\n{then}\n").as_bytes());
+        let out = child.wait_with_output().unwrap();
+        Output { stderr: reader.join().unwrap(), ..out }
+    }
+}
+
+/// The phone's answer to `request`, after its passcode.
+fn answer(phone: &mut SimulatedSecondPhone, request: &str) -> String {
+    phone.enter_passcode(PIN).unwrap();
+    phone.answer(request).unwrap().to_string()
+}
+
+/// `answer` with its last group of digits changed: a typo.
+fn typo(answer: &str) -> String {
+    let last = if answer.ends_with("0000") { "1111" } else { "0000" };
+    format!("{}{last}", &answer[..answer.len() - 4])
+}
+
+/// Neither stream holds the answer, in any spacing.
+fn assert_answer_not_shown(out: &Output, answer: &str) {
+    let digits: String = answer.split_whitespace().collect();
+    for stream in [&out.stdout, &out.stderr] {
+        let text: String = String::from_utf8_lossy(stream).split_whitespace().collect();
+        assert!(!text.contains(&digits[..16]), "the second phone's answer was printed");
+    }
+}
+
+#[test]
+fn show_says_a_second_phone_unlocks_it() {
+    let owner = Owner::new();
+    let kit = owner.phone_kit(&mut SimulatedSecondPhone::new(PIN));
+    let out = owner.ok(&["show", "--kit", &s(&kit)]);
+    assert!(out.contains("Unlocks with: second key") && out.contains("a second phone with the Satkeep app"), "{out}");
+}
+
+#[test]
+fn a_second_phone_unlocks_the_kit_and_core_signs_as_phone() {
+    let owner = Owner::new();
+    let mut phone = SimulatedSecondPhone::new(PIN);
+    let kit = owner.phone_kit(&mut phone);
+
+    // liana: the descriptors, after the exchange.
+    let mut shown = String::new();
+    let reply = |request: &str| {
+        shown = answer(&mut phone, request);
+        shown.clone()
+    };
+    let out = owner.run_with_phone(&["liana", "--kit", &s(&kit)], reply, "");
+    owner.check_no_secrets(&out, false);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_answer_not_shown(&out, &shown);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("The phone key is PHONE in every Savings wallet"), "{stdout}");
+    assert!(stdout.contains(&owner.heir.export_descriptor()), "{stdout}");
+
+    // core: imported, and Core signs as PHONE with the restored key.
+    let mut args: Vec<String> = ["core", "--kit", &s(&kit), "--core-wallet", "phone"].map(str::to_owned).to_vec();
+    args.extend(owner.rpc_args());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = owner.run_with_phone(&args, |request| answer(&mut phone, request), &format!("{PASSPHRASE}\n{PASSPHRASE}"));
+    owner.check_no_secrets(&out, false);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let wallet = owner.wallet("phone");
+    let balances: Value = wallet.call("getbalances", &[]).unwrap();
+    assert_eq!(balances["mine"]["trusted"], json!(3.0), "{balances}");
+    let _: Value = wallet.call("walletpassphrase", &[json!(PASSPHRASE), json!(60)]).unwrap();
+    let coin: Vec<Value> = wallet.call("listunspent", &[]).unwrap();
+    let input = json!([{"txid": coin[0]["txid"], "vout": coin[0]["vout"]}]);
+    let to = owner.node.new_address().to_string();
+    let funded: Value =
+        wallet.call("walletcreatefundedpsbt", &[input, json!([{ to: 0.5 }]), json!(0), json!({"add_inputs": false})]).unwrap();
+    let processed: Value =
+        wallet.call("walletprocesspsbt", &[funded["psbt"].clone(), json!(true), json!("ALL"), json!(true), json!(false)]).unwrap();
+    let psbt = Psbt::from_str(processed["psbt"].as_str().unwrap()).unwrap();
+    let signed: usize = psbt.inputs.iter().map(|i| i.partial_sigs.len() + i.tap_script_sigs.len()).sum();
+    assert_eq!(signed, 1, "Core signed as PHONE");
+}
+
+#[test]
+fn a_typo_can_be_typed_again_and_three_wrong_answers_unlock_nothing() {
+    let owner = Owner::new();
+    let mut phone = SimulatedSecondPhone::new(PIN);
+    let kit = owner.phone_kit(&mut phone);
+    let args = ["liana", "--kit", &s(&kit)];
+
+    // One typo, then the right answer.
+    let out = owner.run_with_phone(
+        &args,
+        |request| {
+            let right = answer(&mut phone, request);
+            format!("{}\n{right}", typo(&right))
+        },
+        "",
+    );
+    owner.check_no_secrets(&out, false);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("that answer has a typo"), "the typo was reported");
+
+    // Three typos: nothing is unlocked, and the answer isn't repeated.
+    let mut shown = String::new();
+    let reply = |request: &str| {
+        shown = answer(&mut phone, request);
+        let typo = typo(&shown);
+        format!("{typo}\n{typo}\n{typo}")
+    };
+    let out = owner.run_with_phone(&args, reply, "");
+    owner.check_no_secrets(&out, false);
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "nothing exported");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nothing was unlocked"), "{stderr}");
+    assert_answer_not_shown(&out, &shown);
+
+    // No answer at all.
+    let out = owner.run_with_phone(&args, |_| String::new(), "");
+    assert!(!out.status.success() && out.stdout.is_empty());
+}
+
+#[test]
+fn an_answer_to_an_earlier_request_unlocks_nothing() {
+    // Each run makes a new request: an answer seen before (a photo of the
+    // phone's screen, say) fails the next run's check.
+    let owner = Owner::new();
+    let mut phone = SimulatedSecondPhone::new(PIN);
+    let kit = owner.phone_kit(&mut phone);
+    let args = ["liana", "--kit", &s(&kit)];
+    let mut earlier = String::new();
+    let reply = |request: &str| {
+        earlier = answer(&mut phone, request);
+        earlier.clone()
+    };
+    assert!(owner.run_with_phone(&args, reply, "").status.success());
+
+    let out = owner.run_with_phone(&args, |_| format!("{earlier}\n{earlier}\n{earlier}"), "");
+    owner.check_no_secrets(&out, false);
+    assert!(!out.status.success() && out.stdout.is_empty(), "an old answer unlocked the kit");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("answers a different unlock request"));
 }

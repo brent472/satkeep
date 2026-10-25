@@ -13,6 +13,8 @@
 //! - Each **lock entry** wraps the data key under a key derived
 //!   (HKDF-SHA256) from one security device's secret, bound to this wallet,
 //!   this device and this format.
+//! - A **second phone** ([`second_phone`]) locks it by ECDH with its P-256
+//!   key, and unlocks it through an offline request and answer.
 //! - The **exit kit** ([`kit`]) carries the locked backup and a plain copy of
 //!   the wallet setup as armoured text, which the restore tool finds in a
 //!   PDF, in pasted text, or reads as the raw backup.
@@ -22,6 +24,7 @@
 mod device;
 pub mod format;
 pub mod kit;
+pub mod second_phone;
 pub mod setup;
 
 use bip39::{Language, Mnemonic};
@@ -35,6 +38,9 @@ use zeroize::Zeroizing;
 pub use device::{MAX_PIN_TRIES, SimulatedDevice};
 pub use device::{DeviceError, DeviceId, SecurityDevice, UnlockMethod};
 pub use format::{Header, LockEntry, LockKind};
+#[cfg(feature = "simulated-device")]
+pub use second_phone::SimulatedSecondPhone;
+pub use second_phone::{SecondPhoneError, SecondPhoneUnlock};
 pub use setup::WalletSetup;
 // The phrase type in `Restored`, and the wiping wrapper, for users of this
 // crate (the restore tool) without their own dependency on either.
@@ -61,6 +67,10 @@ pub enum BackupError {
     BadPhrase,
     #[error("that key can't unlock this backup")]
     WrongDevice,
+    #[error("this backup is locked to more than one second phone, and this version can't choose between them yet")]
+    SeveralSecondPhones,
+    #[error("that isn't a second phone's public key")]
+    NotASecondPhoneKey,
     #[error(transparent)]
     Device(#[from] DeviceError),
     #[error("the backup couldn't be unlocked: it's damaged or has been changed")]
@@ -110,34 +120,85 @@ pub fn make_backup(
     created: u64,
     device: &mut dyn SecurityDevice,
 ) -> Result<Vec<u8>, BackupError> {
-    let data_key: Zeroizing<[u8; 32]> = Zeroizing::new(<[u8; 32]>::generate());
-    let wrap_nonce: [u8; NONCE_LEN] = <[u8; NONCE_LEN]>::generate();
-    let body_nonce: [u8; NONCE_LEN] = <[u8; NONCE_LEN]>::generate();
-    seal(phrase, setup, wallet_id, created, device, &data_key, &wrap_nonce, &body_nonce)
+    let setup_text = checked_payload(phrase, setup)?;
+    let lock = device_lock(&wallet_id, device)?;
+    let (data_key, wrap_nonce, body_nonce) = fresh_keys();
+    seal(phrase, &setup_text, wallet_id, created, lock, &data_key, &wrap_nonce, &body_nonce)
 }
 
-/// [`make_backup`] with its random parts given, for the test vectors.
-#[allow(clippy::too_many_arguments)]
-fn seal(
+/// Makes a backup of `phrase` and `setup`, locked to the second phone with
+/// `phone_key` (its P-256 public key, SEC1 compressed). The second phone
+/// needn't be there: ECDH with a fresh ephemeral key needs only its public
+/// key. Each call uses a new ephemeral key, data key and nonces.
+#[cfg(feature = "second-phone-lock")]
+pub fn make_backup_for_second_phone(
     phrase: &Mnemonic,
     setup: &WalletSetup,
     wallet_id: WalletId,
     created: u64,
-    device: &mut dyn SecurityDevice,
+    phone_key: &[u8; second_phone::PUBLIC_KEY_LEN],
+) -> Result<Vec<u8>, BackupError> {
+    let setup_text = checked_payload(phrase, setup)?;
+    let ephemeral = second_phone::random_key();
+    let lock = second_phone::lock(phone_key, &wallet_id, &ephemeral)?;
+    let (data_key, wrap_nonce, body_nonce) = fresh_keys();
+    seal(phrase, &setup_text, wallet_id, created, lock, &data_key, &wrap_nonce, &body_nonce)
+}
+
+/// What one lock entry needs from its unlock path when a backup is made.
+pub(crate) struct Lock {
+    pub device_id: DeviceId,
+    pub method: UnlockMethod,
+    pub request: Vec<u8>,
+    pub secret: Zeroizing<[u8; 32]>,
+}
+
+/// The lock for a device that derives its secret from the wallet's label.
+fn device_lock(wallet_id: &WalletId, device: &mut dyn SecurityDevice) -> Result<Lock, BackupError> {
+    // A second phone's lock is made from its public key alone
+    // (make_backup_for_second_phone); asking one for a label's secret would
+    // make an entry nothing could open.
+    if device.method() != UnlockMethod::CipherKeyValue {
+        return Err(BackupError::WrongDevice);
+    }
+    let request = unlock_request(wallet_id);
+    let secret = device.unlock_secret(&request)?;
+    Ok(Lock { device_id: device.id(), method: device.method(), request, secret })
+}
+
+/// The setup's text, once the phrase and the setup are both fit to back up.
+fn checked_payload(phrase: &Mnemonic, setup: &WalletSetup) -> Result<String, BackupError> {
+    if phrase.word_count() != PHRASE_WORDS || phrase.language() != Language::English {
+        return Err(BackupError::BadPhrase);
+    }
+    setup.to_text()
+}
+
+/// A new data key, wrap nonce and body nonce.
+fn fresh_keys() -> (Zeroizing<[u8; 32]>, [u8; NONCE_LEN], [u8; NONCE_LEN]) {
+    (
+        Zeroizing::new(<[u8; 32]>::generate()),
+        <[u8; NONCE_LEN]>::generate(),
+        <[u8; NONCE_LEN]>::generate(),
+    )
+}
+
+/// The backup itself, with its random parts given (fixed in the test
+/// vectors).
+#[allow(clippy::too_many_arguments)]
+fn seal(
+    phrase: &Mnemonic,
+    setup_text: &str,
+    wallet_id: WalletId,
+    created: u64,
+    lock: Lock,
     data_key: &[u8; 32],
     wrap_nonce: &[u8; NONCE_LEN],
     body_nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>, BackupError> {
-    if phrase.word_count() != PHRASE_WORDS || phrase.language() != Language::English {
-        return Err(BackupError::BadPhrase);
-    }
-    let setup_text = setup.to_text()?;
-    let device_id = device.id();
-    let method = device.method();
-    let request = unlock_request(&wallet_id);
-    let device_secret = device.unlock_secret(&request)?;
-    let kek = key_encryption_key(&device_secret, &wallet_id, device_id, method);
-    drop(device_secret);
+    let Lock { device_id, method, request, secret } = lock;
+    let kek = key_encryption_key(&secret, &wallet_id, device_id, method);
+    drop(secret);
 
     let aad = wrap_aad(&wallet_id, LockKind::Device, device_id, method, &request);
     let wrapped = aead(&kek)
@@ -157,7 +218,7 @@ fn seal(
     let header_bytes = format::encode_header(&header);
 
     let phrase_text = Zeroizing::new(phrase.to_string());
-    let plaintext = encode_payload(&phrase_text, &setup_text);
+    let plaintext = encode_payload(&phrase_text, setup_text);
     let body = aead(data_key)
         .encrypt(&XNonce::from(*body_nonce), Payload { msg: &plaintext, aad: &header_bytes })
         .expect("XChaCha20-Poly1305 encryption can't fail for a small payload");
@@ -188,9 +249,15 @@ pub fn restore(file: &[u8], device: &mut dyn SecurityDevice) -> Result<Restored,
         .find(|e| e.kind == LockKind::Device && e.device_id == device_id && e.method == method)
         .ok_or(BackupError::WrongDevice)?;
     let wallet_id = parsed.header.wallet_id;
-    // Only ever ask the device for this wallet's own label, so a changed
-    // file can't get it to derive a key for anything else.
-    if entry.request != unlock_request(&wallet_id) {
+    // Only ever ask a device for this wallet's own label, so a changed file
+    // can't get it to derive a key for anything else. A second phone's
+    // request is its ephemeral key, which the phone binds to the wallet
+    // itself.
+    let request_ok = match method {
+        UnlockMethod::CipherKeyValue => entry.request == unlock_request(&wallet_id),
+        UnlockMethod::SecondPhone => second_phone::is_ephemeral_key(&entry.request),
+    };
+    if !request_ok {
         return Err(BackupError::CannotUnlock);
     }
 

@@ -202,6 +202,18 @@ A tool, real or fake, could ask the device to derive a key for another label.
 
 A kit from before a phone key or second key change opens to old keys, which may hold nothing. The tool shows the backup's date and the wallets' birthdays before unlocking. After unlocking, it reports which wallets have coins, using the owner's own node, as a separate step after the export.
 
+### 7.6 Someone else's unlock request to the second phone
+
+The second phone can't tell who made an unlock request (`backup-format.md` 3.4). Someone with a stolen backup file, for example from the cloud account, can make a valid request on their own computer. They could then try to talk the owner into reading them the answer, for example posing as Satkeep or the helper. The answer and the file together open the backup, which reveals the phone key: one of the three keys. That's the pocket, and one of the two keys Savings needs.
+
+**Mitigations:**
+- **A warning before every answer,** required app behaviour (`backup-format.md` 3.4): "Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email."
+- **A new backup** if the owner reports answering a request they didn't make. A new backup has a new ephemeral key, so that file and any answer seen for it open nothing new.
+
+**What a new backup doesn't undo:** if the backup was opened, the phone key itself is out. As in 7.3, Savings is still safe on the phone key alone, but the pocket isn't. Moving the pocket and Savings to new keys is the full fix. Whether the app does that on such a report is for the app's design.
+
+**Residual risk:** an owner who is talked past the warning and never reports it.
+
 ## 8. Decisions
 
 All approved: D1–D3 and D5–D7 as recommended, and D4 as decided in brief v3.12.
@@ -238,6 +250,9 @@ Each item is its own branch and PR, stopping for review after each, as usual.
        - **The owner decided this** on 2026-10-24.
 4. **The exit drill.** Make a kit with the prototype, restore it with the tool, import into Liana and Bitcoin Core, and spend 2 of 3 with PHONE (from the tool) and DEVICE, in both Savings shapes. Then run the key-material scan.
 5. **The second-phone exchange** (D4): the tool's side of the offline request and answer, against a simulated second phone. The app's side comes with the app.
+   - **Status:** done. The format is [`backup-format.md`](backup-format.md) section 3.4, with P-256 test vectors. `satkeep-restore` unlocks a backup locked to a second phone in every build, through the request it shows and the answer typed back.
+   - **The dependency:** `p256` 0.14, approved 2026-10-24, only for locking a backup to a phone and for the simulated phone. The tool's side is hashing only, so its release builds don't include `p256`.
+   - **Before it,** RustCrypto moved to its current generation (PR #25), so `p256` 0.14 sits on one generation.
 6. **Trezor support** (D6): CipherKeyValue through the chosen crate or `trezorctl`, tested against the emulator in CI. This needs your OK for the emulator download and any new dependency.
 
 The Satkeep card's unlock (FIDO `hmac-secret`) waits for the card's design. The everyday pocket's export waits for its descriptor. The format leaves room for both.

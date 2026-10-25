@@ -482,6 +482,213 @@ fn a_kit_is_only_made_from_a_real_backup() {
     assert_eq!(kit::encode(&file, &empty), Err(BackupError::BadSetup));
 }
 
+// ---------------------------------------------------- the second phone ----
+
+/// A second phone that's the second key of a fresh wallet, and a backup
+/// locked to it by its public key alone.
+fn phone_backup() -> (Mnemonic, SimulatedSecondPhone, WalletId, Vec<u8>) {
+    let phrase = phrase();
+    let mut phone = SimulatedSecondPhone::new(PIN);
+    let wallet_id = new_wallet_id();
+    phone.serve(wallet_id);
+    let file = make_backup_for_second_phone(&phrase, &setup(), wallet_id, CREATED, &phone.public_key()).unwrap();
+    (phrase, phone, wallet_id, file)
+}
+
+/// The tool's side of the exchange for `file`, with a fresh request.
+fn tool_for(file: &[u8]) -> SecondPhoneUnlock {
+    SecondPhoneUnlock::for_backup(&read_header(file).unwrap()).unwrap()
+}
+
+/// The whole exchange: the tool's request, the phone's answer after its
+/// passcode, typed into the tool.
+fn exchange(file: &[u8], phone: &mut SimulatedSecondPhone) -> SecondPhoneUnlock {
+    let mut tool = tool_for(file);
+    phone.enter_passcode(PIN).unwrap();
+    let answer = phone.answer(&tool.request_text()).unwrap();
+    tool.enter_answer(&answer).unwrap();
+    tool
+}
+
+/// The 72 hex digits of an answer, spaces removed.
+fn digits(answer: &str) -> String {
+    answer.split_whitespace().collect()
+}
+
+#[test]
+fn a_second_phone_unlocks_its_backup_through_a_request_and_an_answer() {
+    let (phrase, mut phone, _, file) = phone_backup();
+    let entry = &read_header(&file).unwrap().entries[0];
+    assert_eq!((entry.method, entry.device_id), (UnlockMethod::SecondPhone, phone.id()));
+
+    let mut tool = exchange(&file, &mut phone);
+    let restored = restore(&file, &mut tool).unwrap();
+    assert!(restored.phrase == phrase, "the phrase comes back");
+    assert_eq!(restored.wallet_setup, setup());
+    // One answer opens it once: the tool doesn't keep the secret.
+    assert_eq!(restore(&file, &mut tool).err(), Some(BackupError::Device(DeviceError::AnswerRequired)));
+
+    // Typed loosely: upper case, no spaces, a line break.
+    let mut tool = tool_for(&file);
+    phone.enter_passcode(PIN).unwrap();
+    let answer = digits(&phone.answer(&tool.request_text()).unwrap()).to_uppercase();
+    tool.enter_answer(&format!("{}\n{}", &answer[..30], &answer[30..])).unwrap();
+    assert!(restore(&file, &mut tool).is_ok());
+}
+
+#[test]
+fn every_backup_for_a_second_phone_has_its_own_ephemeral_key_and_every_request_its_own_answer() {
+    let (phrase, mut phone, wallet_id, file) = phone_backup();
+    let again = make_backup_for_second_phone(&phrase, &setup(), wallet_id, CREATED, &phone.public_key()).unwrap();
+    assert_ne!(read_header(&file).unwrap().entries[0].request, read_header(&again).unwrap().entries[0].request);
+
+    // Two requests for the same backup get different answers (a new
+    // session key each time), and each opens it.
+    let (first, second) = (tool_for(&file), tool_for(&file));
+    phone.enter_passcode(PIN).unwrap();
+    let a = phone.answer(&first.request_text()).unwrap();
+    phone.enter_passcode(PIN).unwrap();
+    let b = phone.answer(&second.request_text()).unwrap();
+    assert_ne!(digits(&a)[..64], digits(&b)[..64], "the screen shows the secret masked, differently each time");
+    for (mut tool, answer) in [(first, a), (second, b)] {
+        tool.enter_answer(&answer).unwrap();
+        assert!(restore(&file, &mut tool).is_ok());
+    }
+}
+
+#[test]
+fn the_phone_refuses_another_phones_or_another_wallets_request_before_its_passcode() {
+    let (_, mut phone, _, file) = phone_backup();
+    let (_, mut other, _, others_file) = phone_backup();
+    phone.enter_passcode(PIN).unwrap();
+
+    // Another phone's backup: refused without using the passcode just
+    // entered, and without reaching the key.
+    assert_eq!(phone.answer(&tool_for(&others_file).request_text()).err(), Some(SecondPhoneError::NotThisPhone));
+    // Locked to this phone's key, but for a wallet it isn't the second key
+    // of.
+    let strangers_file = make_backup_for_second_phone(&phrase(), &setup(), new_wallet_id(), CREATED, &phone.public_key()).unwrap();
+    assert_eq!(phone.answer(&tool_for(&strangers_file).request_text()).err(), Some(SecondPhoneError::NotThisWallet));
+    assert_eq!(phone.answers(), 0, "a refused request never reaches the phone's key");
+
+    // The passcode entered before still allows this backup's answer.
+    let mut tool = tool_for(&file);
+    let answer = phone.answer(&tool.request_text()).unwrap();
+    tool.enter_answer(&answer).unwrap();
+    assert!(restore(&file, &mut tool).is_ok());
+
+    // The backup changed to name another phone, which then answers: its
+    // answer doesn't open it.
+    let wallet_id = read_header(&file).unwrap().wallet_id;
+    let mut changed = file.clone();
+    changed[FIRST_ENTRY_KIND + 1..FIRST_ENTRY_KIND + 33].copy_from_slice(&other.id().0);
+    other.serve(wallet_id);
+    let mut tool = exchange(&changed, &mut other);
+    assert_eq!(restore(&changed, &mut tool).err(), Some(BackupError::CannotUnlock));
+}
+
+#[test]
+fn the_phone_answers_only_after_its_passcode_and_blocks_after_wrong_ones() {
+    let (_, mut phone, _, file) = phone_backup();
+    let tool = tool_for(&file);
+    let request = tool.request_text();
+    assert_eq!(phone.answer(&request).err(), Some(SecondPhoneError::Device(DeviceError::PinRequired)));
+    phone.enter_passcode(PIN).unwrap();
+    phone.answer(&request).unwrap();
+    assert_eq!(phone.answer(&request).err(), Some(SecondPhoneError::Device(DeviceError::PinRequired)), "one answer per passcode");
+    for tries_left in (1..MAX_PIN_TRIES).rev() {
+        assert_eq!(phone.enter_passcode("0000"), Err(DeviceError::WrongPin { tries_left }));
+    }
+    assert_eq!(phone.enter_passcode("0000"), Err(DeviceError::Blocked));
+    assert_eq!(phone.enter_passcode(PIN), Err(DeviceError::Blocked), "blocked for good, even with the right passcode");
+    assert_eq!(phone.answer(&request).err(), Some(SecondPhoneError::Device(DeviceError::Blocked)));
+    assert_eq!(phone.answers(), 1);
+}
+
+#[test]
+fn a_typo_or_an_answer_to_another_request_fails_the_check() {
+    let (_, mut phone, _, file) = phone_backup();
+    let mut tool = tool_for(&file);
+    phone.enter_passcode(PIN).unwrap();
+    let answer = digits(&phone.answer(&tool.request_text()).unwrap());
+
+    let mut typo = answer.clone().into_bytes();
+    typo[40] = if typo[40] == b'0' { b'1' } else { b'0' };
+    let typo = String::from_utf8(typo).unwrap();
+    for wrong in [typo.as_str(), &answer[..70], &format!("{answer}00"), "", "not an answer", &answer.replace('a', "g")] {
+        let refused = tool.enter_answer(wrong).unwrap_err();
+        assert_eq!(refused, SecondPhoneError::AnswerTypo);
+        assert!(!refused.to_string().contains(&answer[..8]), "an error never repeats the answer");
+    }
+    // The right answer, to an earlier request for this same backup, fails
+    // too: it's bound to its own request.
+    let mut later = tool_for(&file);
+    assert_eq!(later.enter_answer(&answer), Err(SecondPhoneError::AnswerTypo));
+    // A long paste is refused without being read through.
+    assert_eq!(tool.enter_answer(&" ".repeat(5000)), Err(SecondPhoneError::AnswerTypo));
+    // After the typos, the right one still works.
+    tool.enter_answer(&answer).unwrap();
+    assert!(restore(&file, &mut tool).is_ok());
+
+    // A typo in the request is caught on the phone.
+    let request = tool_for(&file).request_text();
+    let mut changed = request.as_bytes().to_vec();
+    changed[10] = if changed[10] == b'0' { b'1' } else { b'0' };
+    phone.enter_passcode(PIN).unwrap();
+    assert_eq!(phone.answer(std::str::from_utf8(&changed).unwrap()).err(), Some(SecondPhoneError::RequestTypo));
+    assert_eq!(phone.answer(&request[..200]).err(), Some(SecondPhoneError::RequestTypo));
+}
+
+/// Where a single-entry backup's request starts (see format.rs).
+const REQUEST_AT: usize = FIRST_ENTRY_KIND + 1 + 32 + 1 + 2;
+
+#[test]
+fn a_changed_ephemeral_key_opens_nothing_even_with_the_phones_honest_answer() {
+    let (_, mut phone, _, file) = phone_backup();
+    // Another valid point in its place: the phone answers for it, and the
+    // answer doesn't unwrap the data key.
+    let mut changed = file.clone();
+    changed[REQUEST_AT..REQUEST_AT + 33].copy_from_slice(&SimulatedSecondPhone::new(PIN).public_key());
+    let mut tool = exchange(&changed, &mut phone);
+    assert_eq!(restore(&changed, &mut tool).err(), Some(BackupError::CannotUnlock));
+
+    // Not shaped like a key: refused before any request is shown.
+    let mut changed = file.clone();
+    changed[REQUEST_AT] = 0x04;
+    assert_eq!(SecondPhoneUnlock::for_backup(&read_header(&changed).unwrap()).err(), Some(BackupError::CannotUnlock));
+    // Shaped like one but off the curve: the phone refuses it without
+    // working out an answer.
+    let mut changed = file.clone();
+    changed[REQUEST_AT + 1..REQUEST_AT + 33].fill(0xff);
+    let tool = tool_for(&changed);
+    phone.enter_passcode(PIN).unwrap();
+    let before = phone.answers();
+    assert_eq!(phone.answer(&tool.request_text()).err(), Some(SecondPhoneError::BadRequest));
+    assert_eq!(phone.answers(), before);
+}
+
+#[test]
+fn a_second_phone_lock_is_made_only_from_a_real_public_key_and_only_one_is_chosen() {
+    let mut not_a_key = [0xffu8; 33];
+    not_a_key[0] = 0x02;
+    assert_eq!(
+        make_backup_for_second_phone(&phrase(), &setup(), new_wallet_id(), CREATED, &not_a_key).err(),
+        Some(BackupError::NotASecondPhoneKey)
+    );
+    // The tool's side isn't a device that derives a label's secret, so it
+    // can't lock a backup.
+    let (_, _, _, file) = phone_backup();
+    assert_eq!(make_backup(&phrase(), &setup(), new_wallet_id(), CREATED, &mut tool_for(&file)).err(), Some(BackupError::WrongDevice));
+
+    // Locked to a device and not a phone: there's nothing to ask a phone.
+    let (_, _, _, device_file) = backed_up();
+    assert_eq!(SecondPhoneUnlock::for_backup(&read_header(&device_file).unwrap()).err(), Some(BackupError::WrongDevice));
+    // Two second phones: this version won't guess which one is at hand.
+    let mut header = read_header(&file).unwrap();
+    header.entries.push(header.entries[0].clone());
+    assert_eq!(SecondPhoneUnlock::for_backup(&header).err(), Some(BackupError::SeveralSecondPhones));
+}
+
 // ---------------------------------------------------- the test vectors ----
 
 /// A device that answers with a fixed secret, for the test vectors.
@@ -525,7 +732,11 @@ fn vector_hex(spec: &str, name: &str) -> Vec<u8> {
 }
 
 fn input_text(spec: &str, name: &str) -> String {
-    let inputs = vector(spec, "inputs");
+    block_input(spec, "inputs", name)
+}
+
+fn block_input(spec: &str, block: &str, name: &str) -> String {
+    let inputs = vector(spec, block);
     let line = inputs.lines().find(|l| l.starts_with(&format!("{name} "))).unwrap_or_else(|| panic!("no input {name}"));
     line[name.len()..].trim().to_owned()
 }
@@ -552,12 +763,13 @@ fn the_spec_test_vectors_decode_and_are_made_exactly() {
     assert!(kek.to_vec() == vector_hex(spec, "kek"), "the KEK isn't the spec's");
 
     // Made from the inputs: exactly the spec's bytes.
+    let lock = device_lock(&wallet_id, &mut device).unwrap();
     let file = seal(
         &phrase,
-        &setup,
+        &setup.to_text().unwrap(),
         wallet_id,
         created,
-        &mut device,
+        lock,
         &input(spec, "data-key"),
         &input(spec, "wrap-nonce"),
         &input(spec, "body-nonce"),
@@ -575,4 +787,67 @@ fn the_spec_test_vectors_decode_and_are_made_exactly() {
     let found = kit::read(vector(spec, "kit").as_bytes()).unwrap();
     assert!(found == Kit { backup: file, plain_setup: Some(setup) }, "the spec's kit reads back differently");
     assert!(kit::restore_kit(&found, &mut device).is_ok());
+}
+
+fn phone_input<const N: usize>(spec: &str, name: &str) -> [u8; N] {
+    unhex(&block_input(spec, "second-phone-inputs", name)).unwrap().try_into().unwrap()
+}
+
+#[test]
+fn the_spec_second_phone_vectors_decode_and_are_made_exactly() {
+    let spec = &spec();
+    let wallet_id: WalletId = input(spec, "wallet-id");
+    let created: u64 = input_text(spec, "created").parse().unwrap();
+    let phrase = Mnemonic::parse_in(Language::English, vector(spec, "phrase").trim_end()).unwrap();
+    let setup = WalletSetup::from_text(&vector(spec, "setup")).unwrap();
+    let mut phone = SimulatedSecondPhone::from_secret(phone_input(spec, "phone-secret"), PIN).unwrap();
+    phone.serve(wallet_id);
+    let phone_key = phone.public_key();
+    // assert!, not assert_eq!: a failure must not print key material, even
+    // a test vector's.
+    assert!(phone_key.to_vec() == vector_hex(spec, "phone-public-key"), "Q isn't the spec's");
+    assert!(phone.id().0.to_vec() == vector_hex(spec, "phone-device-id"), "D isn't the spec's");
+
+    // Locking, from the inputs: each intermediate value, then exactly the
+    // spec's bytes.
+    let ephemeral = p256::SecretKey::from_bytes(&phone_input::<32>(spec, "ephemeral-secret").into()).unwrap();
+    let shared = p256::ecdh::diffie_hellman(
+        ephemeral.to_nonzero_scalar(),
+        p256::PublicKey::from_sec1_bytes(&phone_key).unwrap().as_affine(),
+    );
+    assert!(shared.raw_secret_bytes().to_vec() == vector_hex(spec, "shared-x"), "Z isn't the spec's");
+    let lock = second_phone::lock(&phone_key, &wallet_id, &ephemeral).unwrap();
+    assert!(lock.request == vector_hex(spec, "ephemeral-key"), "E isn't the spec's");
+    assert!(lock.secret.to_vec() == vector_hex(spec, "phone-unlock-secret"), "S isn't the spec's");
+    let kek = key_encryption_key(&lock.secret, &wallet_id, lock.device_id, lock.method);
+    assert!(kek.to_vec() == vector_hex(spec, "phone-kek"), "the KEK isn't the spec's");
+    let file = seal(
+        &phrase,
+        &setup.to_text().unwrap(),
+        wallet_id,
+        created,
+        lock,
+        &input(spec, "data-key"),
+        &input(spec, "wrap-nonce"),
+        &input(spec, "body-nonce"),
+    )
+    .unwrap();
+    let entry = read_header(&file).unwrap().entries.remove(0);
+    assert!(entry.wrapped_key.to_vec() == vector_hex(spec, "phone-wrapped-key"), "the wrapped key isn't the spec's");
+    assert!(file == vector_hex(spec, "phone-backup"), "the backup isn't the spec's bytes");
+
+    // The exchange, with the spec's session key: the tool's request, the
+    // phone's answer, and the backup opened with it.
+    let ephemeral_key = entry.request.as_slice().try_into().unwrap();
+    let request = second_phone::UnlockRequest::with_session_key(wallet_id, entry.device_id, ephemeral_key, phone_input(spec, "session-key"));
+    assert!(request.to_text().as_str() == vector(spec, "phone-request").trim_end(), "the request isn't the spec's");
+    phone.enter_passcode(PIN).unwrap();
+    let answer = phone.answer(&vector(spec, "phone-request")).unwrap();
+    assert!(answer.as_str() == vector(spec, "phone-answer").trim_end(), "the answer isn't the spec's");
+    assert!(digits(&answer)[..64] != hex(&vector_hex(spec, "phone-unlock-secret")), "the answer shows S masked");
+    let mut tool = SecondPhoneUnlock::from_request(request);
+    tool.enter_answer(&vector(spec, "phone-answer")).unwrap();
+    let restored = restore(&vector_hex(spec, "phone-backup"), &mut tool).unwrap();
+    assert!(restored.phrase == phrase, "the vector restores to its phrase");
+    assert_eq!(restored.wallet_setup, setup);
 }

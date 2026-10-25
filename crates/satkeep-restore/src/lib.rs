@@ -20,7 +20,7 @@ use anyhow::{Context, Result, bail};
 use satkeep_backup::bip39::Mnemonic;
 use satkeep_backup::kit::{self, Kit};
 use satkeep_backup::setup::WalletSetup;
-use satkeep_backup::{LockKind, SecurityDevice};
+use satkeep_backup::{LockKind, SecurityDevice, UnlockMethod};
 
 pub use keys::{AccountKey, Alone};
 
@@ -56,7 +56,11 @@ pub fn describe(kit: &Kit) -> Result<String> {
             LockKind::Device => "second key",
             LockKind::Contact => "recovery contact (reserved; can't be opened)",
         };
-        out += &format!("Unlocks with: {kind} {}…, method {:?}\n", hex(&entry.device_id.0[..8]), entry.method);
+        let how = match entry.method {
+            UnlockMethod::CipherKeyValue => "a security device (CipherKeyValue)",
+            UnlockMethod::SecondPhone => "a second phone with the Satkeep app (an offline request and answer)",
+        };
+        out += &format!("Unlocks with: {kind} {}…, {how}\n", hex(&entry.device_id.0[..8]));
     }
     match &kit.plain_setup {
         Some(setup) => {

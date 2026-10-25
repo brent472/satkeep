@@ -36,7 +36,7 @@ header (authenticated as the body's associated data):
   each entry:
     kind         u8: 1 = device; 2 = recovery contact (reserved)
     device id    32 bytes
-    method       u8: 1 = CipherKeyValue
+    method       u8: 1 = CipherKeyValue; 2 = second phone
     request      u16 length + bytes, at most 256
     wrap nonce   24 bytes
     wrapped key  48 bytes (the 32-byte data key + a 16-byte tag)
@@ -71,7 +71,10 @@ For one device, with the wallet id `W`, the device id `D` and the method `M`:
 
 1. **Parse** the file as in section 3.
 2. **Find the entry** whose kind is 1 (device) and whose device id and method match the connected device. If none does, stop with "wrong key" **before asking the device anything**.
-3. **Check the request:** it must equal the request rebuilt from `W` in step 1 of 3.1. Otherwise stop, without asking the device. A changed file must never get a device to derive a key for another label.
+   - **A second phone** isn't connected, so its entry is the backup's one method-2 entry, and the phone itself checks the id (3.4).
+3. **Check the request.** Otherwise stop, without asking the device:
+   - **Method 1:** it must equal the request rebuilt from `W` in step 1 of 3.1. A changed file must never get a device to derive a key for another label.
+   - **Method 2:** it must be 33 bytes starting with `02` or `03`, the shape of a compressed point (3.4).
 4. **Unlock:** ask the device for `S`, derive the KEK, and open the wrapped key. Then open the body with the header's exact bytes as associated data. Any failure means the backup is damaged or changed.
 5. **Check the payload:**
    - it must split exactly into the two fields;
@@ -85,9 +88,59 @@ For one device, with the wallet id `W`, the device id `D` and the method `M`:
 
 - **The device id** is 32 bytes that identify the device at its unlock path, readable without its PIN. How each kind of device computes it is fixed when that device is supported (Trezor: [`restore-tool.md`](restore-tool.md) section 5).
 - **Method 1 (CipherKeyValue):** the device returns the same 32-byte secret for the same request, only after its own PIN, the way Trezor's [SLIP-0011](https://github.com/satoshilabs/slips/blob/master/slip-0011.md) CipherKeyValue works.
-- **More methods later:** ECDH for a second phone, a message signature, FIDO `hmac-secret` for the card. Each gets its own method code when it's built.
+- **Method 2 (second phone):** ECDH with a phone's P-256 key, unlocked through an offline request and answer (3.4).
+- **More methods later:** a message signature, FIDO `hmac-secret` for the card. Each gets its own method code when it's built.
 - **Kind 2 (recovery contact)** is reserved. Readers parse it and never open it with a device.
-- **The software device in the tests** (`SimulatedDevice`) isn't part of the format: it's a stand-in with a random secret.
+- **The software device in the tests** (`SimulatedDevice`) isn't part of the format: it's a stand-in with a random secret. So is the simulated second phone (`SimulatedSecondPhone`), with a P-256 key in software standing in for the Secure Enclave's.
+
+### 3.4 Method 2: the second phone
+
+A second phone is an old phone or tablet with the Satkeep app (decision D4 in [`restore-tool.md`](restore-tool.md)). Its key is a P-256 key pair `(d, Q)` made in its Secure Enclave or Android Keystore, which never leaves the phone and works only after its own face, fingerprint or passcode. `Q` is written in SEC1 compressed form, 33 bytes.
+
+**The device id:** `D` = SHA-256(`satkeep/second-phone/v1/id` ‖ `Q`).
+
+**Locking,** on the owner's phone. It needs only `Q`, kept since pairing, so the second phone needn't be there:
+1. Make a fresh ephemeral P-256 key pair `(e, E)`.
+2. `Z` = the x-coordinate of `e·Q`, 32 bytes.
+3. The **unlock secret** `S` = HKDF-SHA256 with:
+   - input key material `Z`;
+   - salt `W`;
+   - info = `satkeep/second-phone/v1/unlock` ‖ `E` ‖ `Q`;
+   - length 32.
+4. Go on from step 3 of 3.1 with `S`, method `M` = 2, and `request` = `E`.
+- `e`, `Z` and `S` are wiped once the wrap is made. Every backup gets a new `e`.
+
+**Unlocking** is an offline exchange of text between the computer and the phone, with no servers:
+1. **The request.** The tool makes a fresh random 32-byte session key `K` and shows these 122 bytes as 244 hex digits, in groups of 4, 8 groups a line:
+   ```text
+   magic        "SKRQ"
+   version      u8 = 1
+   wallet id    16 bytes (W)
+   device id    32 bytes (D, from the entry)
+   ephemeral    33 bytes (E, the entry's request)
+   session key  32 bytes (K)
+   check        the first 4 bytes of SHA-256 of all of the above
+   ```
+2. **The phone** reads it, scanned or typed; case, spaces and line breaks don't matter. Before asking for its face, fingerprint or passcode, it refuses, in this order:
+   - a failed check: a typo;
+   - a version other than 1;
+   - a `D` that isn't its own id;
+   - a wallet `W` it isn't the second key of.
+3. **After** its face, fingerprint or passcode, the phone computes `Z` = the x-coordinate of `d·E`, refusing an `E` that isn't on the curve, then `S` as in locking.
+4. **The warning,** required app behaviour. Before it shows the answer, the phone must show this warning, word for word, and show the answer only once the person has seen it:
+   > Only do this if you're restoring your own Satkeep on a computer in front of you right now. Satkeep and your helper will never ask you to read this answer to anyone, by phone, message or email.
+5. **The answer** is 36 bytes, shown as 72 hex digits in groups of 4:
+   - `S` XOR `mask`, where `mask` = HKDF-SHA256 with input key material `K`, no salt, info `satkeep/second-phone/v1/answer-mask`, length 32;
+   - then a check: the first 4 bytes of SHA-256(`satkeep/second-phone/v1/answer` ‖ the request's 122 bytes ‖ the masked secret).
+6. **The tool** reads the typed answer the same way. A failed check means a typo, or an answer to another request, and it can be typed again. Then `S` = the masked secret XOR `mask`, and opening goes on from step 4 of 3.2.
+
+**Why it's built this way:**
+- **The mask:** the phone's screen never shows `S` itself. A photo of the answer is useless without that request's session key, which only the tool and the computer's screen have, and which is new for every request.
+- **The answer's check covers the request,** so an old answer, or one to another request, is caught like a typo.
+- **No elliptic-curve code in the tool.** It only hashes, and checks `E` has a compressed point's shape. Only the phone checks `E` is on the curve.
+- **`S` and the backup file together open the backup,** so the tool wipes `K` and `S` once used and never prints the answer.
+- **`S` stays the same for the life of a backup,** because `E` does. Anyone who saw both a request and its answer, on the computer's screen or in its scrollback, can work out `S` and keep opening that backup. A new backup gets a new `e`, so after any such exposure the app should make a new backup.
+- **The phone can't tell who made a request.** Anyone with a copy of the backup file can make a valid one, and an answer to it opens the backup: the phone key, one of the three keys. Hence the warning in step 4, which no format check can replace. If the owner reports answering a request they didn't make, the app should make a new backup. If the backup was opened, the phone key itself is out, and a new backup doesn't change that ([`restore-tool.md`](restore-tool.md) threat 7.6).
 
 ## 4. The wallet setup
 
@@ -417,10 +470,149 @@ The exit kit's armoured text:
 -----END SATKEEP EXIT KIT-----
 ```
 
+### 6.1 The second phone (method 2)
+
+The same wallet id, date, phrase, setup, data key and nonces as above, locked instead to a second phone (3.4). The phone's key, the ephemeral key and the session key are simple byte runs too. In real use, the ephemeral key and the session key are random every time.
+
+<!-- vector: second-phone-inputs -->
+```text
+phone-secret      707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f
+ephemeral-secret  909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf
+session-key       e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff
+```
+
+**Outputs.** The phone's public key `Q` and its device id `D`:
+
+<!-- vector: phone-public-key -->
+```text
+02544bffd77cb94e5707541feed75dea06e44a57751ce22d5a7a5a7af8cc2fefe7
+```
+
+<!-- vector: phone-device-id -->
+```text
+dc5decf4134711610714f7e58a424c4767773c43396b91e2b732c9b9746d2c17
+```
+
+The ephemeral key `E`, which is the entry's request:
+
+<!-- vector: ephemeral-key -->
+```text
+03cff1393b518538ef4ce47235c606ebdf7c38765ceb662d22043774783dc71471
+```
+
+The shared x-coordinate `Z`, the unlock secret `S`, and the KEK:
+
+<!-- vector: shared-x -->
+```text
+df34e088e7468038458e692af522658cef7d8b85818de34a6eeb5791235f4052
+```
+
+<!-- vector: phone-unlock-secret -->
+```text
+56d4a439d65172fd15ce229cfb28ee9c13e994d88bf78f25ba76330ccb9d4f50
+```
+
+<!-- vector: phone-kek -->
+```text
+fbee6db0528187a56e5164a475718c19b049859269d33ecc70c5a48eb85aad18
+```
+
+The wrapped key:
+
+<!-- vector: phone-wrapped-key -->
+```text
+1a45c647d5df5761a7cf4ed80bf80ba6333e414ebde9b962e59bbcf9b34140d1
+e561916d9874b5d38015bc061f50b2d4
+```
+
+The backup file, 1,678 bytes, in hex:
+
+<!-- vector: phone-backup -->
+```text
+534b424b01000102030405060708090a0b0c0d0e0f000000006adaa3800101dc
+5decf4134711610714f7e58a424c4767773c43396b91e2b732c9b9746d2c1702
+002103cff1393b518538ef4ce47235c606ebdf7c38765ceb662d22043774783d
+c71471101112131415161718191a1b1c1d1e1f20212223242526271a45c647d5
+df5761a7cf4ed80bf80ba6333e414ebde9b962e59bbcf9b34140d1e561916d98
+74b5d38015bc061f50b2d4303132333435363738393a3b3c3d3e3f4041424344
+454647000005c770069d0fde1ff4170c23a115e73257990e2e5922367d2c384d
+db6eda9f032ae759527792a4707e57e6c1cff6f30b0e5f5252271cf96677a03e
+0510ff95b6387ee1038364e0ecb62b5cbb411bfaf46e6cad80d4ffeb5cdc0086
+41465d61e0afcd27b3c79131292981dc8d8de5d0e9d15614a0f62ed77d7708fe
+61512ba2cb5606b6f4cdd2de36017b8be26771f2f2f32edf5e7dc332a37c1c81
+2e5fa5a63c62ff73d6ba6b93c1d714f6ad939f433649ed54aecc397a715321f5
+61bc5da174ce10183c4bb0f65592baba3e1f9dd33992f4138ede5f9e1bc19d6e
+e64aa5c079a79f97870b4647ed1ae4ee8ce720a6e9aeeb7a85e5cd252b8d2d05
+56446020b302b2816a456804204e9b1c3ee422a4a43a9e9b32371d9a78737f00
+a52b9b624d209a248b7f48e438262a960673608ec674a980179f586f425b7b91
+e9b2ec35e16a6ece581d8c2e244c5cf116eccb72daa5d401273805ba8d36a7c6
+76e0fa54db2c9d1071fda2f5862adf9302677a93d13d7e6c70ad67eed247713d
+eb50d6ef560bccbd69915a75a9b7b5ae975002b2c5a08d82d2b352923a9e8a92
+9dd054a5ad7eecc5b564f872cad9ae5fee773fdc09a7779ddea075de33eb2bcd
+6306123c984da023dd13c69a6bcc42f248b6c008b845a0bee031168117497a72
+ae493a890f5fb4de84820e150525afa82a7adabb92589488775fd8b4c556b6d9
+809001bc56177052cd5717c5065d3ac6827bed64091d8f06b327fad887b56f9c
+ce97b77c5817c596002641e62f543527569ea5ba9d0d1588a6e2103d66a1e0e0
+fdc694396d65c5a6db7233ba8ef96d183a28b5f9922e42bad9c452b4bc190ba2
+475cb135c3d4ca4ddc34c5da7d12f1ee768af9545cc203314f910102a4be0ad0
+ae2c2a703a0f41c54dc26dd4cb292ef40376865666e9888316eedba5b84e1f65
+67192c7d83e76a37c928103aa53edbc719dfa0cdddb5d728b5d7c6416b7a044a
+d8283fe6f716e7938d9d20a0fa7d0d6fded13ea07f5cbcc0895828b39b687d2e
+20289ff5d45216df85f5c00ebc55600f247f8a4eb758d183ebba6ed17f060ee6
+1635614a9777a8a4adf005f0093f4b8a19732ef22a3a19e2145805e21af1b240
+0465a6bb6b5de3191551168fdbf232a5f9572ef1e00946535761a87db54eac08
+bbab078eaaa02813b0cea2d5279e45f74d218086849bad93f7e0ba6dd8f191ec
+eb5ce6c6f86ae8dfeae8b60b922260358400ca695ce5a1431dddbc7272faa106
+a9085f8d52994defea9ffa7fbbf42d065584ce64834e1b7ff919d3b4f474fe33
+aaa844ed01264d062fd0fed1dada97a2c4b4795033e242babc1bac4301c1a905
+be2c5772e8fe98fdc94b0e6d45c1522496355419eb6a31c2f88d57d01cac7fdd
+2ad12855aca7aeee45826358279f6ceb7ecadf663295279d31a86762271ff218
+e68a1fead052b1238ed117ee48f814a90c580bfb4951394756df45a89dc92c51
+5eef53ea345fe3df32eab251bac8e9b85cf8972d297f21f4d53761054c718be9
+f283b3f97d78ad42f90984d906956d352d23304cdca6873bdf2979b10e9d77d1
+3861aa6544114abd8080786a43c9cac255768838eab92328e80e9a5fa6cdc8ec
+2b2e859535719a1492487f647abc6cf9156a45260ccf99e1fb9db9b07d66e062
+a758b30971faad2ddb8d0967af97a5a12a7fbcb6ce4254fbda0ec14a3a100423
+bc0e572810764542f77bdd7cb584480cd507cd26707353409117bcbdb2d27aab
+60d2f9732f0f2e67be6c4ed869ea0e0961ebbb96a0f3eb12e40abeadbb446d74
+b74b69b107dc234e3a854c3970eea776ae2e0df3dfd9a280f7da3183591e86ea
+c5d0a8001a5bb3a32f2bdc2bd68a80211cc4aa5ee4a9ab727d69d86a690a46e6
+0ca94809a02379f88c11ff5a4eb1722f78a5123333e068a6a918b539f67554a7
+509e5c24b797ec4584da841109a32c83b600edf4e2d046de3827d905dc3d11b7
+75f4fb2b502f2973233389b0ca0f86b2e86d06f5783edfa7c6463f45a2b4b9a1
+1786576739c7d6dd2863ba15ad3403da7807e7304160a20e1dc9c2b423a50b81
+e9cb32878e7438a2cd63c7303f9e
+```
+
+The unlock request, with the session key above, as the tool shows it:
+
+<!-- vector: phone-request -->
+```text
+534b 5251 0100 0102 0304 0506 0708 090a
+0b0c 0d0e 0fdc 5dec f413 4711 6107 14f7
+e58a 424c 4767 773c 4339 6b91 e2b7 32c9
+b974 6d2c 1703 cff1 393b 5185 38ef 4ce4
+7235 c606 ebdf 7c38 765c eb66 2d22 0437
+7478 3dc7 1471 e0e1 e2e3 e4e5 e6e7 e8e9
+eaeb eced eeef f0f1 f2f3 f4f5 f6f7 f8f9
+fafb fcfd feff 7e2e 887f
+```
+
+The phone's answer:
+
+<!-- vector: phone-answer -->
+```text
+9338 ab48 b9a9 11c7 1b8a 816f 5b43 1020 783d 292d 2f7e a47c fe20 80b1 b223 7109 8c99 568d
+```
+
 ## 7. Assumptions and open points
 
 - **Not reviewed.** The construction (HKDF-derived KEK, XChaCha20-Poly1305 wraps, header as associated data) follows `phone-key-backup.md` section 2. It needs the outside review before launch, like the timelocks.
 - **The 4-byte line check** misses a typo about once in 4 billion. A miss is caught anyway, because the backup is authenticated, and the plain setup is compared with the locked one.
 - **Device ids and the request on real devices.** Trezor's CipherKeyValue path and how its device id is computed come with Trezor support (restore-tool.md, step 6). The request text above is fixed now, because the device shows it.
-- **The second phone's offline request and answer** (decision D4) needs its own method code and wire format. It's added with that step, not here.
+- **The second phone (3.4) on real phones, to be checked when the app is built:**
+  - that the Secure Enclave (CryptoKit's key agreement) and Android Keystore (ECDH key agreement, Android 12 and later) both give the raw x-coordinate as `Z`;
+  - how the app shows the request's scan and the answer.
+- **The warning's wording (3.4, step 4)** was set by the owner in the review of the second-phone PR. It belongs in the brief's Section 19 too, which wins on wording.
+- **One second phone per backup in the tool.** The format allows several; the tool refuses a backup locked to more than one, because it can't tell which phone is at hand.
 - **Version 1 replaces the prototype's layout.** The prototype's payload carried a free-form setup string. Old prototype backups don't open, and they were all test data.
