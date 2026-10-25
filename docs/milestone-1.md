@@ -55,7 +55,7 @@ Decided in brief 3.9–3.10: the recovery contact is not a Savings key. They hel
 
 ## Done when
 
-- [ ] All tests pass on regtest
+- [x] All tests pass on regtest (the full-length 61,320-block heir delay test, which CI doesn't run, was run locally on 2026-10-24 and passed)
 - [x] Signet demo transaction for each allowed path ([signet-demo.md](signet-demo.md))
 - [x] Exit through Liana or Sparrow works with no Satkeep code
 - [x] README has a diagram of the spending paths
