@@ -7,7 +7,7 @@ Milestone 1, step 4. Can someone holding the Savings keys and the wallet descrip
 | Shape | Exits checked | Paths |
 | --- | --- | --- |
 | **With a beneficiary:** Taproot, 2 of 3 plus HEIR after the heir delay | **Liana** v15.0, and **Bitcoin Core** 31.1 alone | Any 2 of 3 at any time; HEIR alone once its delay has passed, refused one block early; DEVICE alone never |
-| **No beneficiary yet:** `wsh(sortedmulti(2, PHONE, DEVICE, HELPER))`, the standard P2WSH multisig format | **Bitcoin Core** 31.1 alone end to end, and the export checked against **Sparrow**'s own descriptor parser (not run) | Any 2 of 3 at any time; no single key ever |
+| **No beneficiary yet:** `wsh(sortedmulti(2, PHONE, DEVICE, HELPER))`, the standard P2WSH multisig format | **Bitcoin Core** 31.1 alone end to end; the export checked against **Sparrow**'s descriptor parser on every run, and imported and spent in the real **Sparrow** 2.5.5 on signet, by hand (2026-10-25) | Any 2 of 3 at any time; no single key ever |
 
 - **Why two formats:** Liana refuses a policy with no timelocked path, while the standard P2WSH multisig format is read by Bitcoin Core, Sparrow, Electrum, Nunchuk and others. See [Why two formats](../crates/satkeep-savings/README.md#why-two-formats).
 - **The card-only path** (DEVICE alone after 9 months) was removed in brief 3.8, so it's no longer drilled, except to show DEVICE alone is refused.
@@ -34,7 +34,7 @@ From [run 40100414377](https://github.com/brent472/satkeep/actions/runs/40100414
 | --- | --- |
 | `satkeep-restore liana` unlocks the kit and gives the descriptor with a beneficiary | ✅ the same as `satkeep export` |
 | A Liana on that output sees the same coins as Bitcoin Core | ✅ 4 coins |
-| `satkeep-restore sparrow` writes Savings with no beneficiary in the form Sparrow imports | ✅ the same as `satkeep export`, and it passes the Sparrow-parser check below. A format check only: Sparrow isn't run. |
+| `satkeep-restore sparrow` writes Savings with no beneficiary in the form Sparrow imports | ✅ the same as `satkeep export`, and it passes the Sparrow-parser check below. That descriptor was also imported into the real Sparrow by hand, on signet (B below). |
 | The heir's route (`satkeep-restore heir`, HEIR's words and the kit's plain setup, no second key) | ✅ says UNVERIFIED and offers only the wallet with HEIR |
 | A Liana on the heir's route's output: HEIR alone one block early | ✅ refused: *"… is not recoverable with timelock '20'"* |
 | …and HEIR alone at exactly 20 confirmations, signed by Liana's own signer | ✅ |
@@ -46,7 +46,8 @@ The coin the heir claims is made in the drill with 2 of 3, so its age starts in 
 | Check | Result |
 | --- | --- |
 | The export is `wsh(sortedmulti(2, …))`, with no timelock | ✅ |
-| Sparrow could import it | ✅ The export matches the patterns Sparrow 2.5.5's descriptor parser uses (`drongo`'s [`OutputDescriptor.java`](https://github.com/sparrowwallet/drongo/blob/e1c26413e4973752c9d7d43e37e39b411f21b48c/src/main/java/com/sparrowwallet/drongo/OutputDescriptor.java#L28-L34), ported in `drill.py`): `wsh(sortedmulti(k, …))`, every key an xpub with a `[fingerprint/path]` origin and a `<0;1>/*` step, and a checksum. **A format check only: Sparrow isn't run.** |
+| Sparrow could import it | ✅ The export matches the patterns Sparrow 2.5.5's descriptor parser uses (`drongo`'s [`OutputDescriptor.java`](https://github.com/sparrowwallet/drongo/blob/e1c26413e4973752c9d7d43e37e39b411f21b48c/src/main/java/com/sparrowwallet/drongo/OutputDescriptor.java#L28-L34), ported in `drill.py`): `wsh(sortedmulti(k, …))`, every key an xpub with a `[fingerprint/path]` origin and a `<0;1>/*` step, and a checksum. A format check, run by the drill; the next row is the real app. |
+| Sparrow 2.5.5 itself, by hand, on signet (2026-10-25) | ✅ It imported `satkeep export`'s file as an output descriptor, showed the same first receive addresses as Satkeep and Bitcoin Core, and took PHONE's and DEVICE's 12 words at `m/87'/1'/0'` with their fingerprints and xpubs unchanged. It then signed a 2-of-3 payment back to Savings with those two keys alone: [`8622625d…851da`](https://mempool.space/signet/tx/8622625da9060835a29c62182ac95612b16c93a15620c6d2c7aa4324b50851da), block 327,928. Satkeep saw the result, and then spent a coin Sparrow had made. See [`signet-demo.md`](signet-demo.md), row S. |
 | Bitcoin Core derives the same first 5 addresses as `satkeep address` | ✅ |
 | PHONE, DEVICE or HELPER alone, with a 20-block sequence on a coin over 100 blocks old | ✅ each refused: Core can't complete the spend |
 | 2 of 3 keys (PHONE + DEVICE), Bitcoin Core alone | ✅ |
@@ -197,7 +198,11 @@ The same steps the workflow runs, for a person with a Linux or macOS machine, a 
 Sparrow 2.5.5's descriptor parser, `drongo` (at the commit Sparrow 2.5.5 uses), was read, not run:
 - **Savings with no beneficiary** is a standard P2WSH multisig descriptor, the kind Sparrow imports as a multisig wallet. Its patterns for xpubs with key origins, `<0;1>` multipath and checksums ([`OutputDescriptor.java` lines 28–34](https://github.com/sparrowwallet/drongo/blob/e1c26413e4973752c9d7d43e37e39b411f21b48c/src/main/java/com/sparrowwallet/drongo/OutputDescriptor.java#L28-L34)) all match the export, and the drill checks that on every run.
 - **Savings with a beneficiary** can't be imported. Sparrow refuses any Taproot descriptor with a script tree ([lines 534–537](https://github.com/sparrowwallet/drongo/blob/e1c26413e4973752c9d7d43e37e39b411f21b48c/src/main/java/com/sparrowwallet/drongo/OutputDescriptor.java#L534-L537)): *"Taproot descriptors with script path spends are not supported"*. Its wallet types are single-signature, plain multisig and silent payments ([`PolicyType.java`](https://github.com/sparrowwallet/drongo/blob/e1c26413e4973752c9d7d43e37e39b411f21b48c/src/main/java/com/sparrowwallet/drongo/policy/PolicyType.java#L8)), with no timelocked paths.
-- **Not done:** an import into the real Sparrow app, by hand.
+- **Done by hand, on signet (2026-10-25):** the real Sparrow 2.5.5 on Windows imported Savings with no beneficiary and spent 2 of 3 with no Satkeep code (table B). What its screens needed, now in the [exit guide](exit-guide.md), Step 4b:
+  - **A start date.** Importing asks "Has existing transactions starting from" and won't create the wallet until a date is picked. On a pruned node, the date must be within the blocks the node keeps.
+  - **12 words.** **Mnemonic Words (BIP39)** starts at 24 words; it has to be switched to **Use 12 Words**.
+  - **The path.** After **Create Keystore**, Sparrow fills in the keystore's own path (`m/87'/1'/0'`), and **Import Keystore** keeps it. Its fingerprint and xpub stayed the same.
+  - **A payment to Savings itself** shows as "Consolidate", with the network fee as its value.
 
 ## Not done yet (later steps)
 
@@ -210,4 +215,4 @@ Sparrow 2.5.5's descriptor parser, `drongo` (at the commit Sparrow 2.5.5 uses), 
 - **The signet run** of this drill. The [signet demo](signet-demo.md) spends every allowed path on signet with Satkeep's own tool; leaving through Liana and Bitcoin Core on signet is still to do.
 - **Hardware and app signers.** The drill signs with Liana's hot signer and with Bitcoin Core. Signing through the Liana desktop app, and through any hardware device Satkeep supports, is still to do.
 - **Real delays.** The drill uses a 20-block heir delay. The 61,320-block placeholder is covered by Satkeep's own full-length test, not by Liana.
-- **Sparrow, Electrum and Nunchuk by hand** for the P2WSH shape: importing the export into each app and spending 2 of 3.
+- **Electrum and Nunchuk by hand** for the P2WSH shape: importing the export into each app and spending 2 of 3. (Sparrow is done, on signet.)

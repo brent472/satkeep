@@ -82,10 +82,27 @@ If anything doesn't match, it stops. Don't work around that.
 
 ## Step 4b: In Sparrow (Savings with no beneficiary)
 
-1. **Import the wallet:** start Sparrow, choose to import a wallet from an output descriptor, and pick the file the tool wrote. *To be checked against Sparrow's screens.*
-2. **Add the phone's key:** run the tool again with `--show-phrase` and add the 12 words to Sparrow as that key. The same care applies as in Liana.
-3. **Add the second key** in Sparrow.
-4. **Send:** make a payment, approve it with both keys, and send it.
+*Checked against Sparrow 2.5.5's screens on Windows, on signet, on 25 October 2026.*
+
+1. **Connect Sparrow.** The first time it starts, Sparrow shows a few welcome screens. Click **Next** through them. At the end, choose how it connects: **Configure Server**, or **Later or Offline Mode**. Its own screens explain the choices. The toggle at the bottom right turns green once it's connected.
+2. **Import the wallet:**
+   - Choose **File › Import Wallet...**, then **Output Descriptor**, and pick the file the tool wrote.
+   - Give the wallet a name.
+   - Leave **Has existing transactions starting from** ticked, and pick a date from before the first bitcoin went into Savings. **Create Wallet** stays greyed out until there's a date.
+   - A password for the wallet file is up to you.
+3. **Check it's the right wallet.** Sparrow shows the balance, and its **Addresses** tab should start with the same address as the exit kit or the tool showed.
+4. **Add the phone's key:**
+   - Run the tool again with `--show-phrase` to see the phone key's 12 words. The same care applies as in Liana.
+   - In Sparrow's **Settings** tab, find the key (keystore) whose master fingerprint matches the phone key's, as the tool printed it. Click its **Import...** button, then **Software Wallet**.
+   - Under **Mnemonic Words (BIP39)**, change **Use 24 Words** to **Use 12 Words**. Type the 12 words. Leave the passphrase off.
+   - Click **Create Keystore**. Sparrow fills in the key's path for you; leave it as it is and click **Import Keystore**.
+   - The master fingerprint must be the same as before. If it isn't, a word is wrong: click **Revert** and try again.
+5. **Add the second key** in Sparrow, the same way if you have its words, or as a connected device.
+6. **Save:** click **Apply**.
+7. **Send:**
+   - On the **Send** tab, enter the address and amount, then **Create Transaction**.
+   - Then **Finalize Transaction for Signing**, **Sign** (Sparrow signs with both keys you added), and **Broadcast Transaction**.
+   - A payment to an address of this same wallet shows as "Consolidate", with only the network fee as its value. That's normal.
 
 ## If you're the heir
 
