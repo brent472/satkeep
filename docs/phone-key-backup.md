@@ -198,7 +198,7 @@ Either way the card needs:
 
 All three are new dependencies, approved for the prototype.
 
-**Which versions, and why.** The prototype now uses RustCrypto's current generation, all one line: `chacha20poly1305` 0.11.0, `hkdf` 0.13.0 and `sha2` 0.11.1, with `aead` 0.6, `hmac` 0.13, `digest` 0.11 and `ctutils` 0.4.5.
+**Which versions, and why.** The prototype now uses RustCrypto's current generation, all one line: `chacha20poly1305` 0.11.0, `hkdf` 0.13.0 and `sha2` 0.11.1, with `aead` 0.6, `hmac` 0.13, `digest` 0.11 and `ctutils` 0.4.5. The cipher's, `hmac`'s and `sha2`'s optional `zeroize` features are on, so the cipher's key and HKDF's HMAC state are wiped on drop (`hkdf` has no such feature; what's left unwiped is in `satkeep-backup`'s README).
 - **At first it used the mature line** (0.10.1 / 0.12.4 / 0.10.9). Back then the newest line pulled in `ctutils` 0.4.2, which has an advisory ([RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), non-constant-time comparisons), and the fixed `ctutils` needed Rust 1.87, above our 1.85 floor.
 - **Why it moved:** the second phone (decision D4 in `restore-tool.md`) needs `p256`, and only `p256` 0.14 is free of advisories: 0.13 pulls in `crypto-bigint` 0.5, which has a timing advisory of its own ([RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387)). `p256` 0.14 belongs to the current generation, and keeping one generation means one set of constant-time helpers, with no old line kept alive.
 - **The minimum Rust version** rose from 1.85 to 1.87 for the fixed `ctutils`.

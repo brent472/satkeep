@@ -27,7 +27,7 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 
 ## Dependencies
 
-`bip39`, `chacha20poly1305`, `hkdf`, `sha2`, `zeroize` and `thiserror`, all already in the build, and `p256` for the second phone. There's no BDK or miniscript, so the restore tool stays small.
+`bip39`, `chacha20poly1305`, `hkdf`, `hmac`, `sha2`, `zeroize` and `thiserror`, all already in the build, and `p256` for the second phone. `hmac` is listed only to turn on its `zeroize` feature (see Wiping, below). There's no BDK or miniscript, so the restore tool stays small.
 - **`p256` 0.14** (RustCrypto, `ecdh` only, approved 2026-10-24) is optional, behind the `second-phone-lock` feature: locking a backup to a second phone, the P-256 test vectors, and the simulated second phone. The restore tool's side of the exchange needs no curve code, so its release builds leave `p256` out. 0.14, not 0.13: 0.13 pulls in `crypto-bigint` 0.5, which has a timing advisory (RUSTSEC-2026-0387). It brings in 15 crates: `p256`, `elliptic-curve`, `primeorder`, `primefield`, `crypto-bigint`, `sec1`, `der`, `base16ct`, `cpubits`, `ff`, `group`, `wnaf`, `subtle`, `num-traits` and `autocfg`. All are MIT or Apache-2.0 except `subtle` (BSD-3-Clause), so `deny.toml` brings back its licence exception for `subtle`.
 - **Versions:** RustCrypto's current generation (`chacha20poly1305` 0.11, `hkdf` 0.13, `sha2` 0.11), which needs Rust 1.87 or later. Why: [`docs/phone-key-backup.md`](../../docs/phone-key-backup.md), section 4.
 - **Randomness:** `chacha20poly1305`'s `getrandom` feature gives the operating system's generator for data keys, nonces and wallet ids, through RustCrypto's `Generate` trait. It uses `getrandom` 0.4, already in the build through `tempfile`. The bitcoin crates keep their own `getrandom` 0.2 and `rand_core` 0.6.
@@ -43,7 +43,11 @@ let restored = kit::restore_kit(&found, &mut device)?;  // the phrase and the lo
 - **The `simulated-device` feature** is for tests, the prototype and fuzzing. It turns on `second-phone-lock`. `satkeep-savings` passes it on only through its own `simulated-device` feature, which its tests turn on. The CLI and the restore tool build without it (`cargo build -p satkeep-cli`, `cargo build -p satkeep-restore`). In tests, `SimulatedDevice::from_secret` rebuilds the same simulated device in another process (the restore tool's).
 - **Re-exports `bip39` and `zeroize`**, so the restore tool can name the phrase type and wipe secrets without its own dependency on either.
 - **Kit lines over 256 bytes are refused** before they're split, so a hostile file can't make the reader use memory out of proportion to it.
-- **Nothing here prints or logs key material**, and no error carries any. `Restored`, `SimulatedDevice`, `SimulatedSecondPhone`, `UnlockRequest` and `SecondPhoneUnlock` aren't `Debug`. The phrase, data key, device secret and key-encryption key are wiped after use, except HKDF's working state (the `hkdf` crate doesn't support wiping it).
+- **Nothing here prints or logs key material**, and no error carries any. `Restored`, `SimulatedDevice`, `SimulatedSecondPhone`, `UnlockRequest` and `SecondPhoneUnlock` aren't `Debug`. The phrase, data key, device secret and key-encryption key are wiped after use.
+- **Wiping inside the libraries:**
+  - **The cipher** wipes its key on drop (`chacha20poly1305`'s `zeroize` feature).
+  - **HKDF's working state** is wiped on drop. `hkdf` 0.13 has no `zeroize` feature of its own, but its state is HMAC-SHA256: `hmac`'s and `sha2`'s `zeroize` features wipe each HMAC (the salt-keyed one, the one keyed with the pseudorandom key, and the copy made for each output block), with SHA-256's state and buffer inside them.
+  - **Still not wiped:** a few short-lived plain arrays inside the libraries. In `hkdf`, the pseudorandom key `Hkdf::new` throws away and the last output block in `expand`; in `hmac`, the key XORed with its pad while keying, and the inner hash while finishing. Those are on the stack only during the call, and no feature wipes them. Copies the compiler makes when values move aren't wiped either.
 
 ## Tests
 
