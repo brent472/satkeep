@@ -42,7 +42,7 @@ Status on 24 October 2026, after PR #28. The milestone itself is [`milestone-1.m
 
 | Box | Status |
 | --- | --- |
-| All tests pass on regtest | **Passing:** all of them pass in CI on every PR, and the full-length test passes too (see Tests). The box isn't ticked in `milestone-1.md` yet. Ticking it is your call. |
+| All tests pass on regtest | **Ticked.** All of them pass in CI on every PR. The full-length test, which CI doesn't run, was run locally on 2026-10-24 and passed (see Tests). |
 | Signet demo transaction for each allowed path | **Ticked.** A run with the renamed tool is left (step list A). |
 | Exit through Liana or Sparrow works with no Satkeep code | **Ticked**, through Liana. Sparrow in the real app is left (step list B). |
 | README has a diagram of the spending paths | **Ticked** (#10) |
