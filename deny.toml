@@ -11,7 +11,19 @@ unmaintained = "all"
 unsound = "all"
 yanked = "deny"
 # An advisory may only be ignored here with a reason, in a reviewed PR.
-ignore = []
+ignore = [
+    # Yanked, not an advisory. On 2026-10-25 RustCrypto yanked every
+    # crypto-bigint 0.7 release except 0.7.9, published that day, because
+    # 0.7.9 makes a breaking fix: the blanket `Mul` for `NonZero<T>` lacked a
+    # `T: Integer` bound, so a non-zero modular number times another could
+    # claim to be non-zero when it was zero
+    # (https://github.com/RustCrypto/crypto-bigint/pull/1373). Nothing here
+    # multiplies two `NonZero` values: in the second phone's p256 chain,
+    # `NonZero` appears only in p256's hash2curve module (not built) and its
+    # tests. 0.7.7 stays until 0.7.9 is 14 days old, 2026-11-08; then move to
+    # 0.7.9 and remove this entry.
+    { crate = "crypto-bigint@0.7.7", reason = "yanked for the 0.7.9 breaking fix (crypto-bigint#1373), whose code p256 doesn't use; move to 0.7.9 on 2026-11-08" },
+]
 
 [bans]
 # Duplicates are reported. For the crates that hold keys and build
