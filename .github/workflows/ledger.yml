@@ -141,4 +141,5 @@ jobs:
       # One test at a time: Speculos has one APDU socket and one screen.
       - name: Run the Ledger tests
         if: steps.scope.outputs.run == 'true'
+        timeout-minutes: 15
         run: cargo test -p satkeep-ledger --test speculos --locked -- --ignored --test-threads=1
