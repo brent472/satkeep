@@ -21,7 +21,7 @@ satkeep-savings = { path = "../satkeep-savings" }
 thiserror.workspace = true
 # async-hwi is async; a current-thread runtime runs each call to the end.
 # Already in the build through async-hwi.
-tokio = { version = "=1.53.2", default-features = false, features = ["rt"] }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt"] }
 
 [dev-dependencies]
 satkeep-ledger = { path = ".", features = ["speculos"] }

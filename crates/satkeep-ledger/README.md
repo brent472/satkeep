@@ -74,7 +74,7 @@ Each one is a placeholder or an observation, written down here as the project ru
 
 ## Dependencies
 
-Approved for this step on 2026-10-25, each pinned in `Cargo.lock`, none published in the 14 days before:
+Approved for this step on 2026-10-25, each pinned in `Cargo.lock`. None was published in the 14 days before, except `tokio` 1.53.3 (published 2026-10-13), which fixes RUSTSEC-2026-0386; the PR waits until it's 14 days old (27 October) to merge.
 
 - **`async-hwi` `=0.0.32`** (BSD-3-Clause; from May 2026), with only its `ledger` feature. It brings:
   - `ledger_bitcoin_client`, Ledger's Bitcoin app protocol (Apache-2.0);
@@ -83,6 +83,6 @@ Approved for this step on 2026-10-25, each pinned in `Cargo.lock`, none publishe
   - `tokio`, `futures`, `async-trait`, `regex` and a few small crates.
 
   `deny.toml` allows its BSD-3-Clause licence, read from its LICENSE file because its manifest names none.
-- **`tokio` `=1.53.2`, with `rt`.** async-hwi is async, and a current-thread runtime runs each call to the end. It's already in the build through async-hwi.
+- **`tokio` `=1.53.3`, with `rt`.** async-hwi is async, and a current-thread runtime runs each call to the end. It's already in the build through async-hwi.
 - **Build scripts:** `hidapi`'s compiles its bundled C (`etc/hidapi`) and looks up `libudev` with pkg-config. It downloads nothing. `thiserror` 1, `syn` 1 and `doc-comment` only run `rustc --version`.
 - **On Linux, building needs `libudev-dev`** (`sudo apt-get install libudev-dev`). CI installs it in every job that builds Rust.
