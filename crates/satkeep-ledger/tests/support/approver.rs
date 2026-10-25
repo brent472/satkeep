@@ -3,10 +3,12 @@
 //!
 //! On a Nano, each request is a row of screens: the owner presses right to
 //! read them and both buttons on the one that approves. The approving
-//! screens' labels are the ones Ledger's own tests for the Bitcoin app wait
-//! for (`tests/instructions.py` at 2.4.6): "Approve" for a public key,
-//! "Register account" for a wallet, "Sign transaction" for a payment, and
-//! "Continue anyway" past a warning.
+//! screens are the ones Ledger's own tests for the Bitcoin app wait for
+//! (`tests/instructions.py` at 2.4.6), as they read on a Nano X: "Approve
+//! public key" (any screen starting "Approve"), "Register account",
+//! "Sign transaction", and "Continue anyway" past a warning. A screen
+//! starting "Reject" comes after the approving one, so the approver steps
+//! back from it rather than wait there.
 //!
 //! Each new screen is written to standard error as it appears, and a Ledger
 //! call that hasn't finished after [`PATIENCE`] stops the test run with the
@@ -22,7 +24,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const API: &str = "127.0.0.1:5000";
-const APPROVE: [&str; 4] = ["Approve", "Register account", "Sign transaction", "Continue anyway"];
+const APPROVE: [&str; 3] = ["Register account", "Sign transaction", "Continue anyway"];
 const POLL: Duration = Duration::from_millis(250);
 /// How long one Ledger call may take, approvals included.
 const PATIENCE: Duration = Duration::from_secs(180);
@@ -57,8 +59,7 @@ impl Approver {
                     log.push(shown);
                 }
                 drop(log);
-                let approves = lines.iter().any(|l| APPROVE.contains(&l.trim()));
-                press(if approves { "both" } else { "right" });
+                press(button_for(&lines));
             }
         });
         Self { stop, seen, handle: Some(handle) }
@@ -119,6 +120,18 @@ pub fn approving<T, E: std::fmt::Display>(call: impl FnOnce() -> Result<T, E>) -
 /// even for a test that never finishes. Only ever redacted text.
 fn trace(line: &str) {
     let _ = writeln!(std::io::stderr(), "[speculos] {line}");
+}
+
+/// Which button an approving owner presses on this screen.
+fn button_for(lines: &[String]) -> &'static str {
+    let first = lines.first().map(|l| l.trim()).unwrap_or_default();
+    if first.starts_with("Approve") || lines.iter().any(|l| APPROVE.contains(&l.trim())) {
+        "both"
+    } else if first.starts_with("Reject") {
+        "left"
+    } else {
+        "right"
+    }
 }
 
 /// The text lines on the screen now.
@@ -194,4 +207,19 @@ fn redaction_removes_keys_and_codes() {
     assert_eq!(redacted(&line("Register account")), "Register account");
     assert_eq!(redacted(&line("Fees 0.00000402 BTC")), "Fees 0.… BTC");
     assert_eq!(redacted(&[String::from("Sign transaction"), String::from("Satkeep Savings")]), "Sign transaction / Satkeep Savings");
+}
+
+#[cfg(test)]
+#[test]
+fn approves_only_on_the_approving_screens() {
+    let screen = |lines: &[&str]| lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    // As the Bitcoin Test app 2.4.6 shows a public key on a Nano X.
+    assert_eq!(button_for(&screen(&["Confirm public key"])), "right");
+    assert_eq!(button_for(&screen(&["Path", "87'/1'/0'"])), "right");
+    assert_eq!(button_for(&screen(&["Public key (1/3)", "tpubD"])), "right");
+    assert_eq!(button_for(&screen(&["Approve public key"])), "both");
+    assert_eq!(button_for(&screen(&["Reject operation"])), "left");
+    assert_eq!(button_for(&screen(&["Register account"])), "both");
+    assert_eq!(button_for(&screen(&["Sign transaction"])), "both");
+    assert_eq!(button_for(&screen(&["Amount", "0.00001"])), "right");
 }
