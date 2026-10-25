@@ -75,6 +75,45 @@ impl CheckinRule {
     }
 }
 
+/// What a new wallet's heir delay must allow, from the signer's own
+/// settings: at least `min_heir_delay` blocks, and room for check-ins every
+/// `checkin_interval` blocks with `checkin_margin` to spare (see
+/// [`CheckinRule::new`]).
+///
+/// A minimum alone isn't enough. With the default check-in rule, an heir
+/// delay between the minimum (26,280) and 61,319 blocks would leave no
+/// check-in schedule that runs before the heir path opens, so the wallet
+/// would never say a check-in is due, only that it's overdue. Adding a
+/// beneficiary checks both ([`crate::migrate::wallet_with_heir`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeirDelayRules {
+    pub min_heir_delay: u16,
+    pub checkin_interval: u16,
+    pub checkin_margin: u16,
+}
+
+impl HeirDelayRules {
+    /// The placeholder defaults: [`crate::DEFAULT_MIN_HEIR_DELAY`],
+    /// [`DEFAULT_CHECKIN_INTERVAL`] and [`DEFAULT_CHECKIN_MARGIN`]. Together
+    /// they accept only heir delays of 61,320 blocks or more; a shorter one
+    /// needs a shorter check-in interval.
+    pub const DEFAULT: Self = Self {
+        min_heir_delay: crate::DEFAULT_MIN_HEIR_DELAY,
+        checkin_interval: DEFAULT_CHECKIN_INTERVAL,
+        checkin_margin: DEFAULT_CHECKIN_MARGIN,
+    };
+
+    /// Refuses `delays` unless it has a beneficiary, an heir delay of at
+    /// least the minimum, and room for the check-in rule, which it returns.
+    pub fn check(&self, delays: Delays) -> Result<CheckinRule, Error> {
+        if delays.heir().is_none() {
+            return Err(Error::HeirAndDelayMismatch);
+        }
+        delays.require_heir_at_least(self.min_heir_delay)?;
+        CheckinRule::new(self.checkin_interval, self.checkin_margin, delays)
+    }
+}
+
 /// The payment rule (brief 3.12), for Savings with a beneficiary: every
 /// 2-of-3 Savings payment, a pocket refill included, also spends every
 /// confirmed coin within `window` blocks of needing a check-in, with change
@@ -354,6 +393,35 @@ mod tests {
             );
         }
         assert_eq!(PaymentRule::new(9, checkin).unwrap().refresh_age(), 1);
+    }
+
+    #[test]
+    fn with_the_default_rules_only_the_full_heir_delay_leaves_room_for_check_ins() {
+        let rules = HeirDelayRules::DEFAULT;
+        let heir = |blocks| Delays::with_heir(blocks).unwrap();
+        // Above the minimum, but the default check-ins can't beat it.
+        for blocks in [crate::DEFAULT_MIN_HEIR_DELAY, 40_000, crate::DEFAULT_HEIR_DELAY - 1] {
+            assert!(
+                matches!(rules.check(heir(blocks)), Err(Error::CheckinTooLate { interval: 52_560, margin: 8_760, .. })),
+                "heir delay {blocks}"
+            );
+        }
+        assert!(matches!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY - 1)), Err(Error::HeirDelayTooShort { .. })));
+        let rule = rules.check(heir(crate::DEFAULT_HEIR_DELAY)).unwrap();
+        assert_eq!((rule.interval(), rule.margin()), (52_560, 8_760));
+        assert!(matches!(rules.check(Delays::none()), Err(Error::HeirAndDelayMismatch)));
+    }
+
+    #[test]
+    fn a_shorter_heir_delay_needs_a_shorter_check_in_interval() {
+        let rules = HeirDelayRules { checkin_interval: 17_000, ..HeirDelayRules::DEFAULT };
+        let heir = |blocks| Delays::with_heir(blocks).unwrap();
+        assert!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY)).is_ok());
+        assert!(matches!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY - 1)), Err(Error::HeirDelayTooShort { .. })), "the minimum still applies");
+        assert!(matches!(
+            HeirDelayRules { checkin_interval: 17_521, ..rules }.check(heir(crate::DEFAULT_MIN_HEIR_DELAY)),
+            Err(Error::CheckinTooLate { .. })
+        ));
     }
 
     #[test]

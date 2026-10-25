@@ -504,15 +504,19 @@ fn run(cli: Cli) -> Result<()> {
             let to = config.policy()?;
             config.checkin_rule()?;
             config.payment_rule()?;
-            let min_heir_delay = opened.config.min_heir_delay();
-            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate)?;
+            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, config.heir_delay_rules(), fee_rate)?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
             new.persist()?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
             // What sign and broadcast check the move against, here.
             let heir_delay = to.delays().heir().expect("a wallet with a beneficiary");
-            opened.config.moving_to = Some(MovingTo { heir: new.config.heir.clone().expect("set above"), heir_delay });
+            opened.config.moving_to = Some(MovingTo {
+                heir: new.config.heir.clone().expect("set above"),
+                heir_delay,
+                checkin_interval: new.config.checkin_interval,
+                checkin_margin: new.config.checkin_margin,
+            });
             opened.save_config()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
             println!("Created the new Savings wallet in {}.", new_wallet_dir.display());
@@ -704,7 +708,8 @@ fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>
         "this is a move to a new Savings wallet, but no move is set up in this wallet's settings, \
          so there's nothing to check where it goes against (set one up with `satkeep add-heir`)",
     )?;
-    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay())?;
+    let rules = opened.config.move_rules().expect("a move is set up");
+    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, rules)?;
     Ok(Some(to))
 }
 

@@ -11,6 +11,7 @@ use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
 use bdk_wallet::descriptor::policy::Condition;
 use bdk_wallet::{KeychainKind, SignOptions, Wallet};
 use satkeep_savings::bitcoin::psbt::Psbt;
+use satkeep_savings::checkin::HeirDelayRules;
 use satkeep_savings::bitcoin::taproot::{LeafVersion, TapLeafHash};
 use satkeep_savings::bitcoin::{Address, Amount, FeeRate, Network, Transaction, Witness, XOnlyPublicKey};
 use satkeep_savings::miniscript::{Miniscript, Segwitv0, Tap};
@@ -23,6 +24,12 @@ pub const FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(2);
 /// The minimum heir delay in these tests, far below the placeholder default
 /// (`DEFAULT_MIN_HEIR_DELAY`), so regtest can use delays of a few blocks.
 pub const MIN_HEIR_DELAY: u16 = 10;
+
+/// What a new wallet's heir delay must allow in these tests: at least
+/// [`MIN_HEIR_DELAY`], with room for check-ins every 6 blocks and a 3-block
+/// margin, so any heir delay from 10 blocks up fits.
+pub const HEIR_DELAY_RULES: HeirDelayRules =
+    HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: 6, checkin_margin: 3 };
 
 pub use satkeep_testenv::Node;
 
