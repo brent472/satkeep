@@ -52,6 +52,7 @@ From the pre-review of `satkeep-savings` (finding 2). A check-in and a move both
 **None.** The change only adds refusals: every check-in or move accepted after it was accepted before.
 - **No new trust in the PSBT:** the fee is computed from input amounts that `check_inputs` has already matched against the wallet's own records, and the ceiling comes from the signer's own settings.
 - **No overflow:** sums are done in `u128`, so a hostile PSBT can't wrap them, and outputs above the inputs pay no fee and pass. The network refuses such a transaction anyway.
+- **Known limit (from the review):** a check-in is recognised by its marker, so one with the marker stripped is treated as an ordinary payment, and ordinary payments have no ceiling yet. `sign` still shows its fee. A move can't slip through the same way: a PSBT that pays the new wallet is checked as a move whether it's marked or not. Closing this belongs with question 3 (a ceiling for every Savings payment).
 - **No change to scripts, descriptors or addresses.**
 - **Nothing secret is printed or logged:** errors give amounts only.
 - **No new dependency.**
