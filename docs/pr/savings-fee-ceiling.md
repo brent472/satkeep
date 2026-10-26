@@ -17,6 +17,14 @@ From the pre-review of `satkeep-savings` (finding 2). A check-in and a move both
   - `savings.json` gains `max_fee_sat` and `max_fee_percent`, which are optional and not written while they're the defaults.
   - `add-heir` copies them to the new wallet.
   - A bad value is refused with the field names.
+- **A person can approve a higher fee, knowingly: `--allow-high-fee`** on `checkin`, `add-heir`, `sign` and `broadcast`.
+  - **Why:** on a small Savings with many coins, 5% can block a check-in when fees are high, and a blocked check-in lets the heir path open.
+  - **What it does:** above the ceiling, it prints the fee and its percentage of what's spent, and asks "Approve this network fee anyway? (y/N)".
+    - On yes, the check runs again with a ceiling of exactly that fee, so only the fee the person saw is approved.
+    - Anything else refuses, and nothing is written or signed.
+  - **Without the flag,** the ceiling refuses as before, and the error now says the flag exists.
+  - **Every approver must use it,** and `broadcast` too. On `sign` the fee question comes before "Approve? (y/N)", and `--yes` can't be combined with it.
+  - **The helper never gets this override;** the crate README says so. For it the ceiling is absolute.
 - **Not covered:** ordinary payments have no ceiling yet; `sign` shows their fee. Whether they need one is part of question 3 below.
 - **Questions for the reviewer:** a new section in `crates/satkeep-savings/README.md`, in plain words, so they travel with the code the reviewer reads:
   1. What must the helper check before approving a Savings payment, given that a stolen, unlocked phone plus the helper is 2 of 3?
@@ -41,15 +49,27 @@ From the pre-review of `satkeep-savings` (finding 2). A check-in and a move both
   - An edited-down check-in or move is refused at `sign` and, after honest approval, at `broadcast`.
   - `max_fee_percent: 0` is refused with the field names.
   - `max_fee_sat: 2000000` lets the 5,000 sat/vB check-in through.
+  - **`tests/checkin.rs`, `a_check_in_above_the_percentage_ceiling_needs_allow_high_fee_and_a_second_yes`** (1,000 sat/vB on 0.01 BTC, over 5% but under 0.005 BTC):
+    - Refused without the flag, with the error naming the flag, and nothing written.
+    - With the flag and "n": refused, nothing written. With "y": the fee and its percentage are shown and the check-in is prepared.
+    - `sign` without the flag is refused; with it, PHONE and HELPER each answer the fee question and then "Approve?".
+    - `--yes` with `--allow-high-fee` is refused.
+    - `broadcast` without the flag is refused; with it and "y", the check-in is sent.
 - **The PSBT fuzz target** now also asserts that anything `check_checkin` or `check_move` accepts is within the default ceiling.
 
-### Merging with #34
+### Merged with #34
 
-[brent472/satkeep#34](https://github.com/brent472/satkeep/pull/34) also changes `build_move` and `check_move`: it replaces the minimum heir delay with `HeirDelayRules`. Both PRs branch from `main`, so whichever merges second will conflict on those signatures and their test calls. I'll merge `main` into it and fix them before it merges.
+[brent472/satkeep#34](https://github.com/brent472/satkeep/pull/34) changed `build_move` and `check_move` too: it replaced the minimum heir delay with `HeirDelayRules`. `main` is merged into this branch, and the conflicts are fixed: both take `rules` and then the ceiling, `build_move(wallet, from, to, rules, fee_rate, ceiling)` and `check_move(wallet, psbt, from, to, rules, ceiling)`. Every test from both PRs is kept and passes.
 
 ### Security review
 
-**None.** The change only adds refusals: every check-in or move accepted after it was accepted before.
+**None.**
+- **The ceiling only adds refusals.** Without `--allow-high-fee`, every check-in or move accepted after it was accepted before.
+- **The override is narrow:**
+  - It's opt-in per command and needs a second yes on standard input.
+  - It approves exactly the fee shown, so a PSBT edited afterwards to pay more is still refused.
+  - It can't be combined with `sign --yes`.
+  - It changes nothing in the library, so the helper, built on the library, has no way to use it.
 - **No new trust in the PSBT:** the fee is computed from input amounts that `check_inputs` has already matched against the wallet's own records, and the ceiling comes from the signer's own settings.
 - **No overflow:** sums are done in `u128`, so a hostile PSBT can't wrap them, and outputs above the inputs pay no fee and pass. The network refuses such a transaction anyway.
 - **Known limit (from the review):** a check-in is recognised by its marker, so one with the marker stripped is treated as an ordinary payment, and ordinary payments have no ceiling yet. `sign` still shows its fee. A move can't slip through the same way: a PSBT that pays the new wallet is checked as a move whether it's marked or not. Closing this belongs with question 3 (a ceiling for every Savings payment).

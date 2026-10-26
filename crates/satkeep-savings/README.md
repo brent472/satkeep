@@ -279,6 +279,10 @@ Assumptions, to settle with the outside reviewer:
   - **Where it runs:** `check_checkin` and `check_move`, so before signing and again before broadcasting; `build_checkin` and `build_move` refuse to build one above it (`Error::FeeTooHigh`).
   - **The amounts it adds up are the wallet's own,** checked by `check_inputs` first, so a PSBT can't understate its inputs to get under the ceiling.
   - **Why it matters even though approvers see the fee:** the helper will approve without a person looking, so it must refuse a burning fee on its own, with the same check.
+  - **A person can approve a higher fee, knowingly; the helper never can.**
+    - **Why a person needs it:** on a small Savings with many coins, 5% can block a check-in when fees are high, and a blocked check-in lets the heir path open.
+    - **How:** the CLI's `--allow-high-fee` shows the fee and its percentage, asks again, and on yes checks with a ceiling of exactly that fee (`FeeCeiling::new(fee, 100)`). So only the fee the person saw is approved, and a PSBT changed afterwards to pay more is still refused.
+    - **The helper never gets this override.** It approves without a person looking, so for it the ceiling is absolute. A check-in or move above it then needs the second device's approval instead, with a person there to approve the fee.
   - **Not for ordinary payments yet:** a payment's fee is shown at `sign`, and what a sensible ceiling is for a payment (and for many coins at a busy time) is a question for the reviewer.
   - Found by a pre-review read of this crate.
 - Tests use a fixed 2 sat/vB, because regtest has no fee estimates. That's above the default relay minimum.
