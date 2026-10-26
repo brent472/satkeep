@@ -6,11 +6,12 @@
 
 mod common;
 
-use common::{FEE_RATE, Holder, MIN_HEIR_DELAY, Node, Path, Savings};
+use common::{FEE_RATE, HEIR_DELAY_RULES, Holder, MIN_HEIR_DELAY, Node, Path, Savings};
 use bdk_wallet::descriptor::policy::Condition;
 use satkeep_savings::bitcoin::Amount;
 use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::migrate::{build_move, check_move, destination, is_move, pays_to, wallet_with_heir};
+use satkeep_savings::checkin::HeirDelayRules;
 use satkeep_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, Error, Role};
 
 const HEIR_DELAY: u16 = 20;
@@ -30,12 +31,12 @@ fn plain_and_target(node: &Node) -> (Savings, Savings) {
 }
 
 fn prepare(plain: &mut Savings, target: &Savings) -> Psbt {
-    build_move(&mut plain.wallet, &plain.policy, &target.policy, MIN_HEIR_DELAY, FEE_RATE).expect("build the move")
+    build_move(&mut plain.wallet, &plain.policy, &target.policy, HEIR_DELAY_RULES, FEE_RATE).expect("build the move")
 }
 
 /// `check_move` against the wallet the signers' settings say.
 fn check(plain: &Savings, target: &Savings, psbt: &Psbt) -> Result<(), Error> {
-    check_move(&plain.wallet, psbt, &plain.policy, &target.policy, MIN_HEIR_DELAY)
+    check_move(&plain.wallet, psbt, &plain.policy, &target.policy, HEIR_DELAY_RULES)
 }
 
 #[test]
@@ -89,7 +90,7 @@ fn a_move_to_a_wallet_with_a_different_heir_key_is_refused() {
     let theirs = plain.with_stranger_as_heir(HEIR_DELAY);
     assert_ne!(destination(&theirs.policy), destination(&target.policy));
     let dishonest = prepare(&mut plain, &theirs);
-    assert!(check_move(&plain.wallet, &dishonest, &plain.policy, &theirs.policy, MIN_HEIR_DELAY).is_ok());
+    assert!(check_move(&plain.wallet, &dishonest, &plain.policy, &theirs.policy, HEIR_DELAY_RULES).is_ok());
     assert!(matches!(check(&plain, &target, &dishonest), Err(Error::MoveNotAsSetUp)));
 
     let mut disguised = dishonest.clone();
@@ -171,21 +172,83 @@ fn an_heir_delay_below_the_minimum_is_refused() {
     let too_short = |delay| Delays::with_heir(delay).unwrap();
 
     // In the settings the signers rebuild the new wallet from.
-    let built = wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY - 1), MIN_HEIR_DELAY);
+    let built = wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY - 1), HEIR_DELAY_RULES);
     assert!(matches!(built, Err(Error::HeirDelayTooShort { heir: 9, minimum: 10 })), "{:?}", built.err());
-    assert!(wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY), MIN_HEIR_DELAY).is_ok());
+    assert!(wallet_with_heir(&plain.policy, heir.clone(), too_short(MIN_HEIR_DELAY), HEIR_DELAY_RULES).is_ok());
 
     // In building and checking a move to such a wallet.
     let short = plain.with_heir_added(MIN_HEIR_DELAY - 1);
-    let built = build_move(&mut plain.wallet, &plain.policy, &short.policy, MIN_HEIR_DELAY, FEE_RATE);
+    let built = build_move(&mut plain.wallet, &plain.policy, &short.policy, HEIR_DELAY_RULES, FEE_RATE);
     assert!(matches!(built, Err(Error::HeirDelayTooShort { .. })), "{:?}", built.err());
-    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, 1, FEE_RATE).unwrap();
-    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, MIN_HEIR_DELAY);
+    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, HeirDelayRules { min_heir_delay: 1, ..HEIR_DELAY_RULES }, FEE_RATE).unwrap();
+    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, HEIR_DELAY_RULES);
     assert!(matches!(checked, Err(Error::HeirDelayTooShort { .. })), "{checked:?}");
 
     // With the placeholder minimum, a 20-block delay is far too short.
-    let built = wallet_with_heir(&plain.policy, heir, too_short(HEIR_DELAY), DEFAULT_MIN_HEIR_DELAY);
+    let built = wallet_with_heir(&plain.policy, heir, too_short(HEIR_DELAY), HeirDelayRules::DEFAULT);
     assert!(matches!(built, Err(Error::HeirDelayTooShort { heir: 20, minimum: 26_280 })), "{:?}", built.err());
+}
+
+#[test]
+fn an_heir_delay_the_check_ins_cant_beat_is_refused() {
+    // Check-ins every 15 blocks with a 5-block margin need an heir delay of
+    // at least 20, whatever the minimum says.
+    let node = Node::start();
+    let (mut plain, target) = plain_and_target(&node);
+    let rules = HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: Some(15), checkin_margin: 5 };
+    let heir = target.policy.keys().get(Role::Heir).unwrap().clone();
+    let delay = |blocks| Delays::with_heir(blocks).unwrap();
+
+    // In the settings the signers rebuild the new wallet from.
+    let built = wallet_with_heir(&plain.policy, heir.clone(), delay(HEIR_DELAY - 1), rules);
+    assert!(
+        matches!(built, Err(Error::CheckinTooLate { interval: 15, margin: 5, heir: 19 })),
+        "{:?}",
+        built.err()
+    );
+    assert!(wallet_with_heir(&plain.policy, heir, delay(HEIR_DELAY), rules).is_ok());
+
+    // In building and checking a move to such a wallet.
+    let short = plain.with_heir_added(HEIR_DELAY - 1);
+    let built = build_move(&mut plain.wallet, &plain.policy, &short.policy, rules, FEE_RATE);
+    assert!(matches!(built, Err(Error::CheckinTooLate { .. })), "{:?}", built.err());
+    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, HEIR_DELAY_RULES, FEE_RATE).unwrap();
+    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, rules);
+    assert!(matches!(checked, Err(Error::CheckinTooLate { .. })), "{checked:?}");
+    assert!(check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, HEIR_DELAY_RULES).is_ok());
+
+    // A yearly check-in chosen with a 40,000-block heir delay doesn't fit;
+    // left to the default, the interval fits itself (31,240 blocks).
+    let heir = target.policy.keys().get(Role::Heir).unwrap().clone();
+    let yearly = HeirDelayRules { checkin_interval: Some(52_560), ..HeirDelayRules::DEFAULT };
+    let built = wallet_with_heir(&plain.policy, heir.clone(), delay(40_000), yearly);
+    assert!(
+        matches!(built, Err(Error::CheckinTooLate { interval: 52_560, margin: 8_760, heir: 40_000 })),
+        "{:?}",
+        built.err()
+    );
+    assert!(wallet_with_heir(&plain.policy, heir, delay(40_000), HeirDelayRules::DEFAULT).is_ok());
+}
+
+#[test]
+fn a_move_to_the_minimum_heir_delay_gets_check_ins_that_fit() {
+    // Brief 3.27: with no interval chosen, a 26,280-block heir delay gets a
+    // check-in every 17,520 blocks instead of being refused, in the
+    // settings and in building and checking the move.
+    let node = Node::start();
+    let (mut plain, _) = plain_and_target(&node);
+    let short = plain.with_heir_added(DEFAULT_MIN_HEIR_DELAY);
+    let heir = short.policy.keys().get(Role::Heir).unwrap().clone();
+    let delays = Delays::with_heir(DEFAULT_MIN_HEIR_DELAY).unwrap();
+    assert_eq!(HeirDelayRules::DEFAULT.check(delays).unwrap().interval(), 17_520);
+    let to = wallet_with_heir(&plain.policy, heir, delays, HeirDelayRules::DEFAULT).unwrap();
+    assert_eq!(to.descriptor(), short.policy.descriptor());
+    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, HeirDelayRules::DEFAULT, FEE_RATE).unwrap();
+    check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, HeirDelayRules::DEFAULT).unwrap();
+    // A yearly interval chosen for it is still refused.
+    let yearly = HeirDelayRules { checkin_interval: Some(52_560), ..HeirDelayRules::DEFAULT };
+    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, yearly);
+    assert!(matches!(checked, Err(Error::CheckinTooLate { .. })), "{checked:?}");
 }
 
 #[test]
@@ -195,13 +258,13 @@ fn a_move_must_keep_phone_device_and_helper() {
     let node = Node::start();
     let (mut plain, target) = plain_and_target(&node);
     let someone_else = Savings::new(Delays::with_heir(HEIR_DELAY).unwrap());
-    let built = build_move(&mut plain.wallet, &plain.policy, &someone_else.policy, MIN_HEIR_DELAY, FEE_RATE);
+    let built = build_move(&mut plain.wallet, &plain.policy, &someone_else.policy, HEIR_DELAY_RULES, FEE_RATE);
     assert!(matches!(built, Err(Error::MoveToWrongWallet)), "{:?}", built.err());
     let good = prepare(&mut plain, &target);
-    let checked = check_move(&plain.wallet, &good, &plain.policy, &someone_else.policy, MIN_HEIR_DELAY);
+    let checked = check_move(&plain.wallet, &good, &plain.policy, &someone_else.policy, HEIR_DELAY_RULES);
     assert!(matches!(checked, Err(Error::MoveToWrongWallet)), "{checked:?}");
     // And to the very same wallet is no move at all.
-    let same = build_move(&mut plain.wallet, &plain.policy, &plain.policy, MIN_HEIR_DELAY, FEE_RATE);
+    let same = build_move(&mut plain.wallet, &plain.policy, &plain.policy, HEIR_DELAY_RULES, FEE_RATE);
     assert!(same.is_err());
 }
 
@@ -235,8 +298,8 @@ fn changing_the_beneficiary_is_another_move() {
     let mut first = Savings::new(Delays::with_heir(HEIR_DELAY).unwrap());
     first.fund(&node, btc(1.0));
     let mut next = first.with_heir_added(HEIR_DELAY + 10);
-    let mut psbt = build_move(&mut first.wallet, &first.policy, &next.policy, MIN_HEIR_DELAY, FEE_RATE).unwrap();
-    check_move(&first.wallet, &psbt, &first.policy, &next.policy, MIN_HEIR_DELAY).unwrap();
+    let mut psbt = build_move(&mut first.wallet, &first.policy, &next.policy, HEIR_DELAY_RULES, FEE_RATE).unwrap();
+    check_move(&first.wallet, &psbt, &first.policy, &next.policy, HEIR_DELAY_RULES).unwrap();
     first.sign(&mut psbt, &[Holder::Device, Holder::Helper]);
     node.broadcast_and_confirm(&first.finalize(&psbt).unwrap());
     next.sync(&node);
@@ -251,6 +314,6 @@ fn nothing_confirmed_means_nothing_to_move() {
     node.send_to(&address, btc(1.0)); // not mined
     plain.sync(&node);
     let target = plain.with_heir_added(HEIR_DELAY);
-    let built = build_move(&mut plain.wallet, &plain.policy, &target.policy, MIN_HEIR_DELAY, FEE_RATE);
+    let built = build_move(&mut plain.wallet, &plain.policy, &target.policy, HEIR_DELAY_RULES, FEE_RATE);
     assert!(matches!(built, Err(Error::MoveNoCoins)), "{:?}", built.err());
 }

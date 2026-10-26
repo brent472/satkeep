@@ -96,7 +96,7 @@ fn every_p2wsh_input_carries_its_previous_transaction() {
     let mut savings = two_coins(&node, Delays::none());
     let payment = spend_both(&mut savings, &node);
     let target = savings.with_heir_added(20);
-    let moved = satkeep_savings::migrate::build_move(&mut savings.wallet, &savings.policy, &target.policy, common::MIN_HEIR_DELAY, common::FEE_RATE).unwrap();
+    let moved = satkeep_savings::migrate::build_move(&mut savings.wallet, &savings.policy, &target.policy, common::HEIR_DELAY_RULES, common::FEE_RATE).unwrap();
     for psbt in [&payment, &moved] {
         for (txin, input) in psbt.unsigned_tx.input.iter().zip(&psbt.inputs) {
             let prev = input.non_witness_utxo.as_ref().expect("the previous transaction is included");

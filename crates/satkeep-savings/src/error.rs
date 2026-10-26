@@ -49,6 +49,8 @@ pub enum Error {
     CheckinMarginZero,
     #[error("the check-in interval ({interval} blocks) must be shorter than the heir delay ({heir} blocks) by at least the margin ({margin} blocks)")]
     CheckinTooLate { interval: u16, margin: u16, heir: u16 },
+    #[error("the heir delay ({heir} blocks) must be longer than the check-in margin ({margin} blocks), to leave room for check-ins")]
+    NoRoomForCheckins { margin: u16, heir: u16 },
     #[error("this Savings has no beneficiary, so it needs no check-in")]
     NoCheckinWithoutHeir,
     #[error("the refresh window must be at least 1 block")]

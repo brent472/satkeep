@@ -22,7 +22,7 @@ use satkeep_savings::bitcoin::{
     Address, Amount, Block, CompactTarget, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn,
     TxMerkleNode, TxOut, Txid, absolute,
 };
-use satkeep_savings::checkin::{self, build_checkin, check_checkin};
+use satkeep_savings::checkin::{self, HeirDelayRules, build_checkin, check_checkin};
 use satkeep_savings::migrate;
 use satkeep_savings::spend::{self, Path};
 use satkeep_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
@@ -39,8 +39,9 @@ struct Fixture {
     scripts: Vec<ScriptBuf>,
 }
 
-/// The minimum heir delay in the fixture.
-const MIN: u16 = 10;
+/// What a new wallet's heir delay must allow in the fixture: at least 10
+/// blocks, with room for check-ins every 6 blocks and a 3-block margin.
+const RULES: HeirDelayRules = HeirDelayRules { min_heir_delay: 10, checkin_interval: Some(6), checkin_margin: 3 };
 
 thread_local! {
     static FIXTURE: &'static Fixture = Box::leak(Box::new(build_fixture()));
@@ -55,9 +56,9 @@ fn build_fixture() -> Fixture {
         .expect("fresh keys");
     let delays = Delays::with_heir(20).expect("valid delay");
     let policy = SavingsPolicy::new(keys, delays, Network::Regtest).expect("valid policy");
-    let next = migrate::wallet_with_heir(&policy, next_heir.public_key(0), Delays::with_heir(30).expect("valid delay"), MIN)
+    let next = migrate::wallet_with_heir(&policy, next_heir.public_key(0), Delays::with_heir(30).expect("valid delay"), RULES)
         .expect("a changed beneficiary");
-    let elsewhere = migrate::wallet_with_heir(&policy, stranger.public_key(0), Delays::with_heir(15).expect("valid delay"), MIN)
+    let elsewhere = migrate::wallet_with_heir(&policy, stranger.public_key(0), Delays::with_heir(15).expect("valid delay"), RULES)
         .expect("another beneficiary");
     let (receive, change) = policy.receive_and_change();
     let mut wallet = Wallet::create(receive.to_string(), change.to_string())
@@ -117,8 +118,8 @@ fn build_fixture() -> Fixture {
     let mut b = wallet.build_tx();
     b.drain_wallet().drain_to(foreign.clone()).fee_rate(fee).set_condition(Condition::default());
     templates.push(b.finish().expect("drain spend"));
-    templates.push(migrate::build_move(&mut wallet, &policy, &next, MIN, fee).expect("template move"));
-    templates.push(migrate::build_move(&mut wallet, &policy, &elsewhere, MIN, fee).expect("template move elsewhere"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &next, RULES, fee).expect("template move"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &elsewhere, RULES, fee).expect("template move elsewhere"));
     templates.push(build_checkin(&mut wallet, delays, fee).expect("template check-in"));
 
     let scripts = vec![
@@ -211,7 +212,7 @@ fuzz_target!(|data: &[u8]| {
         let path = spend::path_of(&psbt, f.delays);
         let marked = checkin::is_checkin(&psbt);
         let complete = check_checkin(&f.wallet, &psbt, f.delays);
-        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy, &f.next, MIN);
+        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy, &f.next, RULES);
         let _ = spend::check_delays(&f.wallet, &psbt);
 
         // A check-in that passes must really be one: marked, 2-of-3, and a
