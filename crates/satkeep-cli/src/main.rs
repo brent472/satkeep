@@ -15,7 +15,7 @@ use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
 use satkeep_savings::checkin::{self, Reminder};
 use satkeep_savings::spend::{self, Path as SpendPath};
-use satkeep_savings::{DEFAULT_HEIR_DELAY, HolderKey, SavingsPolicy, contains_recovery_phrase, migrate};
+use satkeep_savings::{DEFAULT_HEIR_DELAY, Delays, HolderKey, SavingsPolicy, contains_recovery_phrase, migrate};
 use zeroize::Zeroizing;
 
 use satkeep_cli::wallet_dir::{self, Config, MovingTo, Opened, TestNetwork};
@@ -170,7 +170,8 @@ struct HeirArgs {
     /// Blocks before HEIR can spend alone (placeholder default, about 14 months)
     #[arg(long, requires = "heir")]
     heir_delay: Option<u16>,
-    /// Blocks between check-ins (placeholder default, about 12 months)
+    /// Blocks between check-ins (placeholder default: about 12 months, or
+    /// the heir delay minus the margin if that's shorter)
     #[arg(long, requires = "heir")]
     checkin_interval: Option<u16>,
     /// Blocks the check-in interval must leave before the heir delay
@@ -194,9 +195,17 @@ impl HeirArgs {
     fn apply(&self, config: &mut Config) {
         config.heir = self.heir.clone();
         if self.heir.is_some() {
-            config.heir_delay = Some(self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY));
-            config.checkin_interval = Some(self.checkin_interval.unwrap_or(checkin::DEFAULT_CHECKIN_INTERVAL));
-            config.checkin_margin = Some(self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN));
+            let heir_delay = self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY);
+            let margin = self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN);
+            config.heir_delay = Some(heir_delay);
+            // Brief 3.27: the default interval fits the heir delay. Where
+            // nothing fits (an heir delay no longer than the margin), it's
+            // left unset, and the check-in rule refuses the wallet.
+            config.checkin_interval = self.checkin_interval.or_else(|| {
+                let delays = Delays::with_heir(heir_delay).ok()?;
+                checkin::default_interval(delays, margin).ok()
+            });
+            config.checkin_margin = Some(margin);
             if self.no_refresh_with_payments {
                 config.refresh_with_payments = Some(false);
             } else {
@@ -508,16 +517,20 @@ fn run(cli: Cli) -> Result<()> {
             let to = config.policy()?;
             config.checkin_rule()?;
             config.payment_rule()?;
-            let min_heir_delay = opened.config.min_heir_delay();
             let ceiling = opened.config.fee_ceiling()?;
-            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate, ceiling)?;
+            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, config.heir_delay_rules(), fee_rate, ceiling)?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
             new.persist()?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
             // What sign and broadcast check the move against, here.
             let heir_delay = to.delays().heir().expect("a wallet with a beneficiary");
-            opened.config.moving_to = Some(MovingTo { heir: new.config.heir.clone().expect("set above"), heir_delay });
+            opened.config.moving_to = Some(MovingTo {
+                heir: new.config.heir.clone().expect("set above"),
+                heir_delay,
+                checkin_interval: new.config.checkin_interval,
+                checkin_margin: new.config.checkin_margin,
+            });
             opened.save_config()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
             println!("Created the new Savings wallet in {}.", new_wallet_dir.display());
@@ -709,8 +722,9 @@ fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>
         "this is a move to a new Savings wallet, but no move is set up in this wallet's settings, \
          so there's nothing to check where it goes against (set one up with `satkeep add-heir`)",
     )?;
+    let rules = opened.config.move_rules().expect("a move is set up");
     let ceiling = opened.config.fee_ceiling()?;
-    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay(), ceiling)?;
+    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, rules, ceiling)?;
     Ok(Some(to))
 }
 

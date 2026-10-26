@@ -57,18 +57,44 @@ fn an_interval_at_or_past_the_heir_delay_is_refused() {
         assert!(!cli.wallet_dir().join("savings.json").exists(), "{why}: nothing was created");
     }
 
-    // The placeholder defaults don't fit a 20-block heir delay either.
+    // The placeholder margin leaves no room in a 20-block heir delay, so no
+    // interval fits.
     let cli = Cli::new(&node);
     let err = cli.fails(&[
         "create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3], "--heir-delay", "20", "--min-heir-delay", "10",
     ]);
-    assert!(err.contains("the check-in interval (52560 blocks) must be shorter than the heir delay (20 blocks)"), "{err}");
+    assert!(err.contains("the heir delay (20 blocks) must be longer than the check-in margin (8760 blocks)"), "{err}");
+    assert!(!cli.wallet_dir().join("savings.json").exists(), "nothing was created");
 
-    // And they do fit the placeholder heir delay: once a year.
+    // The placeholder heir delay gets the placeholder interval: once a year.
     let cli = Cli::new(&node);
     let out = cli.ok(&["create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3]]);
     assert!(out.contains("HEIR alone can approve once a coin has 61320 confirmations (about 14 months)."), "{out}");
     assert!(out.contains("Check in every 52560 blocks"), "{out}");
+}
+
+#[test]
+fn the_default_interval_fits_a_shorter_heir_delay() {
+    // Brief 3.27: the default interval is the smaller of 52,560 blocks and
+    // the heir delay minus the margin. The minimum 6-month heir delay gets
+    // a check-in every 17,520 blocks, about every 4 months, and the wallet
+    // is created instead of refused.
+    let node = Node::start();
+    let k = Holders::generate().public_keys();
+    let base = ["create", "--phone", &k[0], "--device", &k[1], "--helper", &k[2], "--heir", &k[3]];
+    for (heir_delay, interval) in [("26280", "17520"), ("40000", "31240")] {
+        let cli = Cli::new(&node);
+        let out = cli.ok(&[&base[..], &["--heir-delay", heir_delay]].concat());
+        assert!(out.contains(&format!("Check in every {interval} blocks")), "{heir_delay}: {out}");
+        let saved = std::fs::read_to_string(cli.wallet_dir().join("savings.json")).unwrap();
+        assert!(saved.contains(&format!("\"checkin_interval\": {interval}")), "the interval is saved: {saved}");
+    }
+
+    // A yearly interval chosen with it is still refused.
+    let cli = Cli::new(&node);
+    let err = cli.fails(&[&base[..], &["--heir-delay", "26280", "--checkin-interval", "52560"]].concat());
+    assert!(err.contains("the check-in interval (52560 blocks) must be shorter than the heir delay (26280 blocks)"), "{err}");
+    assert!(!cli.wallet_dir().join("savings.json").exists(), "nothing was created");
 }
 
 #[test]

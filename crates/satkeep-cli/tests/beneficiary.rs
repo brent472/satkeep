@@ -283,6 +283,48 @@ fn an_heir_delay_below_the_minimum_is_refused() {
 }
 
 #[test]
+fn a_move_whose_check_ins_cant_beat_the_heir_delay_is_refused() {
+    // add-heir refuses such a wallet outright (the check-in rule must fit),
+    // and the move set up here keeps the new wallet's check-ins, so sign
+    // and broadcast check them too.
+    let node = Node::start();
+    let (old, new, holders) = plain_with_coins(&node);
+    let file = old.path("move.psbt");
+    let new_dir = new.wallet_dir().display().to_string();
+    let heir = holders.public_keys()[3].clone();
+    let mut args = add_heir_args(&new_dir, &heir, &file);
+    args[8] = "16"; // every 16 blocks + a 5-block margin > the 20-block heir delay
+    let err = old.fails(&args);
+    assert!(err.contains("must be shorter than the heir delay (20 blocks) by at least the margin (5 blocks)"), "{err}");
+    assert!(!file_exists(&file) && !new.wallet_dir().exists(), "nothing written");
+
+    args[8] = "10";
+    old.ok(&args);
+    let ours = settings(&old);
+    assert!(ours.contains("\"checkin_interval\": 10") && ours.contains("\"checkin_margin\": 5"), "{ours}");
+
+    // Settings edited so the new wallet's check-ins come too late.
+    restore(&old, &ours.replace("\"checkin_interval\": 10", "\"checkin_interval\": 16"));
+    sign_refused(&old, &holders, &file, "must be shorter than the heir delay (20 blocks)");
+
+    // A move set up by an earlier version has no check-ins saved: it gets
+    // the default margin, which leaves no room in a 20-block heir delay.
+    let earlier = ours.replace(",\n    \"checkin_interval\": 10", "").replace(",\n    \"checkin_margin\": 5", "");
+    assert!(!earlier.contains("checkin_"), "{earlier}");
+    restore(&old, &earlier);
+    sign_refused(&old, &holders, &file, "the heir delay (20 blocks) must be longer than the check-in margin (8760 blocks)");
+
+    // Signed under the settings add-heir wrote, it's still refused at
+    // broadcast by settings whose check-ins don't fit.
+    restore(&old, &ours);
+    old.sign(&file, &holders.phone);
+    old.sign(&file, &holders.device);
+    restore(&old, &ours.replace("\"checkin_interval\": 10", "\"checkin_interval\": 16"));
+    let err = old.fails(&["broadcast", "--psbt", &file]);
+    assert!(err.contains("must be shorter than the heir delay (20 blocks)"), "{err}");
+}
+
+#[test]
 fn a_move_whose_fee_is_above_the_ceiling_is_refused() {
     let node = Node::start();
     let (old, new, holders) = plain_with_coins(&node);
