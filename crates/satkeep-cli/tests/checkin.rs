@@ -7,6 +7,7 @@ mod common;
 use std::str::FromStr;
 
 use common::{Cli, Holders, Node, expect_failure};
+use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::bitcoin::{Address, Amount, Network};
 
 fn wallet(node: &Node) -> (Cli<'_>, Holders) {
@@ -271,4 +272,117 @@ fn balance_works_for_a_wallet_without_a_check_in_rule() {
     node.mine(15);
     let out = cli.ok(&["balance"]);
     assert!(out.contains("OVERDUE") && out.contains("WARNING: check-in overdue."), "{out}");
+}
+
+fn settings_path(cli: &Cli) -> std::path::PathBuf {
+    cli.wallet_dir().join("savings.json")
+}
+
+/// Sets `field` to `value` in the wallet's settings.
+fn set_setting(cli: &Cli, field: &str, value: &str) {
+    let path = settings_path(cli);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let edited = text.replacen('{', &format!("{{
+  \"{field}\": {value},"), 1);
+    std::fs::write(&path, edited).unwrap();
+}
+
+const FEE_TOO_HIGH: &str = "more than this wallet allows";
+
+#[test]
+fn a_check_in_whose_fee_is_above_the_ceiling_is_refused() {
+    let node = Node::start();
+    let (cli, holders) = wallet(&node);
+    fund(&cli, &node, 1.0);
+    fund(&cli, &node, 0.5);
+
+    // A typo in the fee rate, 5,000 sat/vB for 5: refused, nothing written.
+    let file = cli.path("checkin.psbt");
+    let err = cli.fails(&["checkin", "--fee-rate", "5000", "--out", &file]);
+    assert!(err.contains(FEE_TOO_HIGH) && err.contains("at most 0.00500000 BTC, and at most 5%"), "{err}");
+    assert!(!common::file_exists(&file));
+
+    // A good check-in whose one output was edited down: refused at sign.
+    cli.ok(&["checkin", "--out", &file]);
+    let honest = std::fs::read_to_string(&file).unwrap();
+    let edit_down = || {
+        let mut psbt = Psbt::from_str(std::fs::read_to_string(&file).unwrap().trim()).unwrap();
+        psbt.unsigned_tx.output[0].value = Amount::from_btc(0.1).unwrap();
+        std::fs::write(&file, psbt.to_string()).unwrap();
+    };
+    edit_down();
+    let edited = std::fs::read_to_string(&file).unwrap();
+    let args = ["sign", "--psbt", &file, "--yes", "--key-stdin"];
+    let err = expect_failure(&args, cli.run_with_stdin(&args, &holders.phone.to_secret_string()));
+    assert!(err.contains("the network fee is 1.40000000 BTC") && err.contains(FEE_TOO_HIGH), "{err}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), edited, "nothing was signed");
+
+    // Approved honestly, then edited before broadcasting: refused there too.
+    std::fs::write(&file, &honest).unwrap();
+    cli.sign(&file, &holders.phone);
+    cli.sign(&file, &holders.helper);
+    edit_down();
+    let err = cli.fails(&["broadcast", "--psbt", &file]);
+    assert!(err.contains(FEE_TOO_HIGH), "{err}");
+
+    // The ceiling is a setting in savings.json.
+    let saved = std::fs::read_to_string(settings_path(&cli)).unwrap();
+    assert!(!saved.contains("max_fee"), "the defaults aren't written: {saved}");
+    set_setting(&cli, "max_fee_percent", "0");
+    let err = cli.fails(&["checkin", "--fee-rate", "5000", "--out", &cli.path("zero.psbt")]);
+    assert!(err.contains("max_fee_sat and max_fee_percent") && err.contains("from 1 to 100, not 0"), "{err}");
+    std::fs::write(settings_path(&cli), &saved).unwrap();
+    set_setting(&cli, "max_fee_sat", "2000000");
+    let out = cli.ok(&["checkin", "--fee-rate", "5000", "--out", &cli.path("raised.psbt")]);
+    assert!(out.contains("Prepared a check-in of 2 coins"), "{out}");
+}
+
+#[test]
+fn a_check_in_above_the_percentage_ceiling_needs_allow_high_fee_and_a_second_yes() {
+    // A small Savings when fees are high: 1,000 sat/vB on 0.01 BTC is well
+    // over 5%, though under 0.005 BTC. Blocking the check-in would let the
+    // heir path open, so a person can approve the fee knowingly.
+    let node = Node::start();
+    let (cli, holders) = wallet(&node);
+    fund(&cli, &node, 0.01);
+    let file = cli.path("checkin.psbt");
+    let high = ["checkin", "--fee-rate", "1000", "--out", &file];
+
+    // Without the flag: refused as before, saying how to approve it.
+    let err = cli.fails(&high);
+    assert!(err.contains(FEE_TOO_HIGH) && err.contains("--allow-high-fee"), "{err}");
+    assert!(!common::file_exists(&file));
+
+    // With it, the fee and its percentage are shown and asked about again;
+    // anything but yes refuses and writes nothing.
+    let allowed = [&high[..], &["--allow-high-fee"]].concat();
+    let err = expect_failure(&allowed, cli.run_with_stdin(&allowed, "n\n"));
+    assert!(err.contains("the network fee wasn't approved, so nothing was done"), "{err}");
+    assert!(!common::file_exists(&file));
+    let out = common::expect_ok(&allowed, cli.run_with_stdin(&allowed, "y\n"));
+    assert!(out.contains("The network fee is 0.00") && out.contains("% of the 0.01000000 BTC this spends"), "{out}");
+    assert!(out.contains("above this wallet's limit of 0.00500000 BTC and 5%"), "{out}");
+    assert!(out.contains("Approve this network fee anyway? (y/N)"), "{out}");
+    assert!(out.contains("Prepared a check-in of 1 coin"), "{out}");
+
+    // Each approver must allow it too: sign refuses without the flag, and
+    // with it asks about the fee before the usual approval.
+    let sign = ["sign", "--psbt", &file, "--key-stdin"];
+    let err = expect_failure(&sign, cli.run_with_stdin(&sign, &format!("y\n{}\n", holders.phone.to_secret_string())));
+    assert!(err.contains(FEE_TOO_HIGH), "{err}");
+    let sign = [&sign[..], &["--allow-high-fee"]].concat();
+    for holder in [&holders.phone, &holders.helper] {
+        let out = common::expect_ok(&sign, cli.run_with_stdin(&sign, &format!("y\ny\n{}\n", holder.to_secret_string())));
+        assert!(out.contains("Approve this network fee anyway? (y/N)") && out.contains("Approve? (y/N)"), "{out}");
+    }
+    let yes_too = ["sign", "--psbt", &file, "--key-stdin", "--yes", "--allow-high-fee"];
+    let err = expect_failure(&yes_too, cli.run_with_stdin(&yes_too, ""));
+    assert!(err.contains("--yes") && err.contains("--allow-high-fee"), "--yes can't skip the fee question: {err}");
+
+    // And so does broadcast; then it's sent.
+    let err = cli.fails(&["broadcast", "--psbt", &file]);
+    assert!(err.contains(FEE_TOO_HIGH), "{err}");
+    let send = ["broadcast", "--psbt", &file, "--allow-high-fee"];
+    let out = common::expect_ok(&send, cli.run_with_stdin(&send, "y\n"));
+    assert!(out.contains("Sent. Transaction ID: "), "{out}");
 }

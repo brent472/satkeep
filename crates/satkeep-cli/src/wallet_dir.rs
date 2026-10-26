@@ -8,7 +8,8 @@ use anyhow::{Context, Result, bail};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
-use satkeep_savings::bitcoin::Network;
+use satkeep_savings::bitcoin::{Amount, Network};
+use satkeep_savings::spend::{DEFAULT_MAX_FEE, DEFAULT_MAX_FEE_PERCENT, FeeCeiling};
 use satkeep_savings::checkin::{
     self, CheckinRule, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, HeirDelayRules, PaymentRule,
 };
@@ -86,6 +87,15 @@ pub struct Config {
     /// anywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving_to: Option<MovingTo>,
+    /// The most network fee a check-in or a move may pay, in sats. Missing
+    /// means [`DEFAULT_MAX_FEE`], a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fee_sat: Option<u64>,
+    /// The most network fee a check-in or a move may pay, as a percentage
+    /// of what it spends. Missing means [`DEFAULT_MAX_FEE_PERCENT`], a
+    /// placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fee_percent: Option<u8>,
     /// Only in wallets made before the card-only delayed path was removed.
     /// Read so such a wallet gets a clear error; never written.
     #[serde(default, skip_serializing)]
@@ -140,6 +150,13 @@ impl Config {
                 e.into()
             }
         })
+    }
+
+    /// The most network fee a check-in or a move may pay.
+    pub fn fee_ceiling(&self) -> Result<FeeCeiling> {
+        let max_fee = Amount::from_sat(self.max_fee_sat.unwrap_or(DEFAULT_MAX_FEE.to_sat()));
+        FeeCeiling::new(max_fee, self.max_fee_percent.unwrap_or(DEFAULT_MAX_FEE_PERCENT))
+            .context("max_fee_sat and max_fee_percent in this wallet's settings")
     }
 
     /// The shortest heir delay this wallet accepts.

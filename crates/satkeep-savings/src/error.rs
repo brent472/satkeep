@@ -89,6 +89,14 @@ pub enum Error {
     MoveMissesCoin { coin: crate::bitcoin::OutPoint },
     #[error("a move must use the 2-of-3 path and send everything to the new wallet's first address")]
     MoveShape,
+    #[error(
+        "the network fee is {fee}, more than this wallet allows: at most {max_fee}, and at most {max_percent}% of the {spent} this spends. Check the fee rate; if this fee is really meant, raise the limit in the wallet's settings"
+    )]
+    FeeTooHigh { fee: crate::bitcoin::Amount, spent: crate::bitcoin::Amount, max_fee: crate::bitcoin::Amount, max_percent: u8 },
+    #[error("the most network fee allowed must be more than zero")]
+    FeeCeilingZero,
+    #[error("the most network fee allowed, as a percentage, must be from 1 to 100, not {max_percent}")]
+    FeeCeilingPercent { max_percent: u8 },
     #[error("miniscript rejected the Savings descriptor: {0}")]
     Miniscript(#[source] Box<crate::miniscript::Error>),
 }

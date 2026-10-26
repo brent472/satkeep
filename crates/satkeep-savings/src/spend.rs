@@ -20,7 +20,7 @@ use bdk_wallet::{TxBuilder, Wallet};
 
 use crate::bitcoin::psbt::Psbt;
 use crate::miniscript::psbt::{InputError, PsbtExt};
-use crate::bitcoin::{OutPoint, Sequence, Transaction, relative};
+use crate::bitcoin::{Amount, OutPoint, Sequence, Transaction, relative};
 use crate::checkin::{self, PaymentRule};
 use crate::{Delays, Error};
 
@@ -159,6 +159,83 @@ pub fn check_inputs(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
     Ok(())
 }
 
+/// Placeholder ceiling on the network fee of a check-in or a move: 0.005 BTC
+/// (500,000 sats). Not final until an outside Bitcoin reviewer signs off.
+pub const DEFAULT_MAX_FEE: Amount = Amount::from_sat(500_000);
+
+/// Placeholder ceiling on the network fee of a check-in or a move, as a
+/// percentage of what it spends. Not final until an outside Bitcoin
+/// reviewer signs off.
+pub const DEFAULT_MAX_FEE_PERCENT: u8 = 5;
+
+/// The most network fee a check-in or a move may pay: at most `max_fee`, and
+/// at most `max_percent` of everything it spends.
+///
+/// Both sweep the whole wallet into one output back to Savings, so the fee
+/// is the only thing that leaves. Without a ceiling, a typo in the fee rate
+/// (1,000 sat/vB for 1) or a PSBT whose one output was edited down would
+/// pass every other check and pay most of Savings as fee. Each approver sees
+/// the fee before approving, but the helper will approve without a person
+/// looking, so this is checked in [`crate::checkin::check_checkin`] and
+/// [`crate::migrate::check_move`], before signing and again before
+/// broadcasting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeCeiling {
+    max_fee: Amount,
+    max_percent: u8,
+}
+
+impl FeeCeiling {
+    /// The placeholders, [`DEFAULT_MAX_FEE`] and [`DEFAULT_MAX_FEE_PERCENT`].
+    pub const DEFAULT: Self = Self { max_fee: DEFAULT_MAX_FEE, max_percent: DEFAULT_MAX_FEE_PERCENT };
+
+    /// Refuses a zero `max_fee`, and a `max_percent` outside 1 to 100.
+    pub fn new(max_fee: Amount, max_percent: u8) -> Result<Self, Error> {
+        if max_fee == Amount::ZERO {
+            return Err(Error::FeeCeilingZero);
+        }
+        if !(1..=100).contains(&max_percent) {
+            return Err(Error::FeeCeilingPercent { max_percent });
+        }
+        Ok(Self { max_fee, max_percent })
+    }
+
+    pub fn max_fee(&self) -> Amount {
+        self.max_fee
+    }
+
+    pub fn max_percent(&self) -> u8 {
+        self.max_percent
+    }
+
+    /// Refuses `psbt` if its fee is above either ceiling. Run it after
+    /// [`check_inputs`], so the amounts it adds up are the wallet's own. A
+    /// PSBT whose outputs add up to more than its inputs pays no fee and
+    /// passes; the network refuses it anyway.
+    pub fn check(&self, psbt: &Psbt) -> Result<(), Error> {
+        let mut spent: u128 = 0;
+        for (input, meta) in psbt.inputs.iter().enumerate() {
+            let utxo = meta.witness_utxo.as_ref().ok_or(Error::InputMismatch { input })?;
+            spent += u128::from(utxo.value.to_sat());
+        }
+        let paid: u128 = psbt.unsigned_tx.output.iter().map(|o| u128::from(o.value.to_sat())).sum();
+        let Some(fee) = spent.checked_sub(paid) else { return Ok(()) };
+        let over_amount = fee > u128::from(self.max_fee.to_sat());
+        let over_percent = fee * 100 > spent * u128::from(self.max_percent);
+        if over_amount || over_percent {
+            // Both fit in a u64: spent is a sum of the wallet's own coins.
+            let sats = |n: u128| Amount::from_sat(u64::try_from(n).unwrap_or(u64::MAX));
+            return Err(Error::FeeTooHigh {
+                fee: sats(fee),
+                spent: sats(spent),
+                max_fee: self.max_fee,
+                max_percent: self.max_percent,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Checks every input of `psbt` is old enough for the delay its sequence
 /// asks for, as of the next block. Inputs without a relative delay pass.
 pub fn check_delays(wallet: &Wallet, psbt: &Psbt) -> Result<(), Error> {
@@ -237,6 +314,58 @@ mod tests {
             output: vec![],
         };
         Psbt::from_unsigned_tx(tx).unwrap()
+    }
+
+    /// A PSBT spending coins of `spent` sats into outputs of `paid` sats.
+    fn psbt_paying(spent: &[u64], paid: &[u64]) -> Psbt {
+        let mut psbt = psbt_with(&vec![Sequence::ENABLE_RBF_NO_LOCKTIME; spent.len()]);
+        for (meta, &sats) in psbt.inputs.iter_mut().zip(spent) {
+            meta.witness_utxo = Some(crate::bitcoin::TxOut { value: Amount::from_sat(sats), script_pubkey: Default::default() });
+        }
+        psbt.unsigned_tx.output =
+            paid.iter().map(|&sats| crate::bitcoin::TxOut { value: Amount::from_sat(sats), script_pubkey: Default::default() }).collect();
+        psbt.outputs = vec![Default::default(); paid.len()];
+        psbt
+    }
+
+    #[test]
+    fn the_fee_ceiling_is_the_placeholder() {
+        assert_eq!((FeeCeiling::DEFAULT.max_fee(), FeeCeiling::DEFAULT.max_percent()), (Amount::from_sat(500_000), 5));
+    }
+
+    #[test]
+    fn refuses_a_fee_above_the_amount_ceiling() {
+        let ceiling = FeeCeiling::new(Amount::from_sat(1_000), 100).unwrap();
+        assert!(ceiling.check(&psbt_paying(&[60_000, 40_000], &[99_000])).is_ok(), "exactly the ceiling");
+        assert!(matches!(
+            ceiling.check(&psbt_paying(&[60_000, 40_000], &[98_999])),
+            Err(Error::FeeTooHigh { fee, spent, .. }) if fee == Amount::from_sat(1_001) && spent == Amount::from_sat(100_000)
+        ));
+    }
+
+    #[test]
+    fn refuses_a_fee_above_the_percentage_ceiling() {
+        let ceiling = FeeCeiling::new(Amount::from_sat(1_000_000), 5).unwrap();
+        assert!(ceiling.check(&psbt_paying(&[100_000], &[95_000])).is_ok(), "exactly 5%");
+        assert!(matches!(ceiling.check(&psbt_paying(&[100_000], &[94_999])), Err(Error::FeeTooHigh { .. })));
+        // Edited down to almost nothing: everything but 1 sat is fee.
+        assert!(matches!(FeeCeiling::DEFAULT.check(&psbt_paying(&[100_000_000], &[1])), Err(Error::FeeTooHigh { .. })));
+    }
+
+    #[test]
+    fn outputs_above_the_inputs_pay_no_fee_and_dont_overflow() {
+        assert!(FeeCeiling::DEFAULT.check(&psbt_paying(&[1_000], &[2_000])).is_ok());
+        assert!(FeeCeiling::DEFAULT.check(&psbt_paying(&[1_000], &[u64::MAX, u64::MAX])).is_ok());
+        assert!(matches!(FeeCeiling::DEFAULT.check(&psbt_with(&[Sequence::MAX])), Err(Error::InputMismatch { input: 0 })));
+    }
+
+    #[test]
+    fn refuses_a_ceiling_of_nothing_or_past_everything() {
+        assert!(matches!(FeeCeiling::new(Amount::ZERO, 5), Err(Error::FeeCeilingZero)));
+        for percent in [0, 101, u8::MAX] {
+            assert!(matches!(FeeCeiling::new(Amount::ONE_SAT, percent), Err(Error::FeeCeilingPercent { .. })), "{percent}");
+        }
+        assert!(FeeCeiling::new(Amount::ONE_SAT, 100).is_ok());
     }
 
     #[test]

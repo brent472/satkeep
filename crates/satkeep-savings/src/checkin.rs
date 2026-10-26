@@ -15,7 +15,7 @@ use bdk_wallet::{KeychainKind, Wallet};
 
 use crate::bitcoin::psbt::{Psbt, raw::ProprietaryKey};
 use crate::bitcoin::{Amount, FeeRate, OutPoint};
-use crate::spend::{self, Path};
+use crate::spend::{self, FeeCeiling, Path};
 use crate::{Delays, Error};
 
 /// Placeholder check-in interval: about 12 months of blocks. Not final until
@@ -298,7 +298,9 @@ pub fn is_checkin(psbt: &Psbt) -> bool {
 /// nothing to restart, and including one would let whoever sent it stall or
 /// break the check-in by never confirming it (a low fee) or replacing it
 /// (RBF), since a transaction can't confirm before the coins it spends.
-pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate) -> Result<Psbt, Error> {
+///
+/// Refuses if the fee at `fee_rate` would be above `ceiling`.
+pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate, ceiling: FeeCeiling) -> Result<Psbt, Error> {
     if delays.heir().is_none() {
         return Err(Error::NoCheckinWithoutHeir);
     }
@@ -310,17 +312,18 @@ pub fn build_checkin(wallet: &mut Wallet, delays: Delays, fee_rate: FeeRate) -> 
         b.drain_wallet().exclude_unconfirmed().drain_to(to.clone()).fee_rate(fee_rate);
     })?;
     psbt.proprietary.insert(checkin_marker(), Vec::new());
-    check_checkin(wallet, &psbt, delays)?;
+    check_checkin(wallet, &psbt, delays, ceiling)?;
     Ok(psbt)
 }
 
 /// Checks a check-in is complete: marked as one, spending every confirmed
 /// Savings coin and nothing else, through the 2-of-3 path, into exactly one
-/// output back to this wallet. Unconfirmed coins must not be in it and
-/// don't count as missing (see [`build_checkin`]). Run it again just before
+/// output back to this wallet, for a fee no higher than `ceiling`.
+/// Unconfirmed coins must not be in it and don't count as missing (see
+/// [`build_checkin`]). Run it again just before
 /// signing and broadcasting, since a coin may have confirmed since it was
 /// built.
-pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(), Error> {
+pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays, ceiling: FeeCeiling) -> Result<(), Error> {
     if delays.heir().is_none() {
         return Err(Error::NoCheckinWithoutHeir);
     }
@@ -349,6 +352,7 @@ pub fn check_checkin(wallet: &Wallet, psbt: &Psbt, delays: Delays) -> Result<(),
             return Err(Error::CheckinMissesCoin { coin: utxo.outpoint });
         }
     }
+    ceiling.check(psbt)?;
     Ok(())
 }
 
