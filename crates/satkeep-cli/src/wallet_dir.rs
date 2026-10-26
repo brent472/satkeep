@@ -10,7 +10,7 @@ use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
 use satkeep_savings::bitcoin::Network;
 use satkeep_savings::checkin::{
-    CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, HeirDelayRules, PaymentRule,
+    self, CheckinRule, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, HeirDelayRules, PaymentRule,
 };
 use satkeep_savings::miniscript::descriptor::DescriptorPublicKey;
 use satkeep_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, SavingsKeys, SavingsPolicy, migrate};
@@ -148,11 +148,12 @@ impl Config {
     }
 
     /// What this wallet's heir delay must allow: its minimum, and room for
-    /// its check-ins (the defaults for any not set).
+    /// its check-ins (the default margin if none is set, and the default
+    /// interval for the heir delay, which always fits).
     pub fn heir_delay_rules(&self) -> HeirDelayRules {
         HeirDelayRules {
             min_heir_delay: self.min_heir_delay(),
-            checkin_interval: self.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL),
+            checkin_interval: self.checkin_interval,
             checkin_margin: self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN),
         }
     }
@@ -164,7 +165,7 @@ impl Config {
         let moving_to = self.moving_to.as_ref()?;
         Some(HeirDelayRules {
             min_heir_delay: self.min_heir_delay(),
-            checkin_interval: moving_to.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL),
+            checkin_interval: moving_to.checkin_interval,
             checkin_margin: moving_to.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN),
         })
     }
@@ -195,17 +196,21 @@ impl Config {
 
     /// The check-in rule, or `None` for Savings with no beneficiary, which
     /// needs no check-in. A wallet made before check-ins existed gets the
-    /// defaults, if they fit its heir delay.
+    /// default margin and the default interval for its heir delay, if the
+    /// heir delay is longer than the margin.
     pub fn checkin_rule(&self) -> Result<Option<CheckinRule>> {
         let delays = self.delays()?;
         if delays.heir().is_none() {
             return Ok(None);
         }
-        let interval = self.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL);
         let margin = self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN);
-        CheckinRule::new(interval, margin, delays).map(Some).map_err(|e| {
+        let rule = match self.checkin_interval {
+            Some(interval) => CheckinRule::new(interval, margin, delays),
+            None => checkin::default_interval(delays, margin).and_then(|i| CheckinRule::new(i, margin, delays)),
+        };
+        rule.map(Some).map_err(|e| {
             if self.checkin_interval.is_none() {
-                anyhow::anyhow!("this wallet has no check-in interval set and the defaults don't fit it ({e})")
+                anyhow::anyhow!("this wallet has no check-in interval set and the default doesn't fit it ({e})")
             } else {
                 e.into()
             }

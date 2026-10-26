@@ -308,11 +308,11 @@ fn a_move_whose_check_ins_cant_beat_the_heir_delay_is_refused() {
     sign_refused(&old, &holders, &file, "must be shorter than the heir delay (20 blocks)");
 
     // A move set up by an earlier version has no check-ins saved: it gets
-    // the defaults, which a 20-block heir delay can't fit.
+    // the default margin, which leaves no room in a 20-block heir delay.
     let earlier = ours.replace(",\n    \"checkin_interval\": 10", "").replace(",\n    \"checkin_margin\": 5", "");
     assert!(!earlier.contains("checkin_"), "{earlier}");
     restore(&old, &earlier);
-    sign_refused(&old, &holders, &file, "the check-in interval (52560 blocks) must be shorter than the heir delay (20 blocks)");
+    sign_refused(&old, &holders, &file, "the heir delay (20 blocks) must be longer than the check-in margin (8760 blocks)");
 
     // Signed under the settings add-heir wrote, it's still refused at
     // broadcast by settings whose check-ins don't fit.

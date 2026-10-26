@@ -29,7 +29,7 @@ pub const MIN_HEIR_DELAY: u16 = 10;
 /// [`MIN_HEIR_DELAY`], with room for check-ins every 6 blocks and a 3-block
 /// margin, so any heir delay from 10 blocks up fits.
 pub const HEIR_DELAY_RULES: HeirDelayRules =
-    HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: 6, checkin_margin: 3 };
+    HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: Some(6), checkin_margin: 3 };
 
 pub use satkeep_testenv::Node;
 

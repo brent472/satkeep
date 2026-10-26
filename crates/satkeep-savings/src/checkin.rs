@@ -19,7 +19,8 @@ use crate::spend::{self, Path};
 use crate::{Delays, Error};
 
 /// Placeholder check-in interval: about 12 months of blocks. Not final until
-/// an outside Bitcoin reviewer signs off.
+/// an outside Bitcoin reviewer signs off. A shorter heir delay gets a
+/// shorter interval by default ([`default_interval`]).
 pub const DEFAULT_CHECKIN_INTERVAL: u16 = 52_560;
 
 /// Placeholder margin the interval must leave before the heir delay: about
@@ -75,12 +76,31 @@ impl CheckinRule {
     }
 }
 
+/// The check-in interval for `delays` when none is chosen (brief 3.27): the
+/// smaller of [`DEFAULT_CHECKIN_INTERVAL`] and the heir delay minus
+/// `margin`, so the check-ins always fit. The minimum heir delay (26,280
+/// blocks) with the default margin gets a check-in every 17,520 blocks,
+/// about every 4 months. Refuses Savings with no beneficiary, a zero
+/// margin, and an heir delay no longer than the margin, which leaves no
+/// room for any check-in.
+pub fn default_interval(delays: Delays, margin: u16) -> Result<u16, Error> {
+    let heir = delays.heir().ok_or(Error::NoCheckinWithoutHeir)?;
+    if margin == 0 {
+        return Err(Error::CheckinMarginZero);
+    }
+    match heir.checked_sub(margin) {
+        Some(room) if room > 0 => Ok(room.min(DEFAULT_CHECKIN_INTERVAL)),
+        _ => Err(Error::NoRoomForCheckins { margin, heir }),
+    }
+}
+
 /// What a new wallet's heir delay must allow, from the signer's own
 /// settings: at least `min_heir_delay` blocks, and room for check-ins every
 /// `checkin_interval` blocks with `checkin_margin` to spare (see
-/// [`CheckinRule::new`]).
+/// [`CheckinRule::new`]). With no interval chosen, it's
+/// [`default_interval`], which always fits.
 ///
-/// A minimum alone isn't enough. With the default check-in rule, an heir
+/// A minimum alone isn't enough. With a fixed yearly interval, an heir
 /// delay between the minimum (26,280) and 61,319 blocks would leave no
 /// check-in schedule that runs before the heir path opens, so the wallet
 /// would never say a check-in is due, only that it's overdue. Adding a
@@ -88,18 +108,18 @@ impl CheckinRule {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeirDelayRules {
     pub min_heir_delay: u16,
-    pub checkin_interval: u16,
+    /// `None` means [`default_interval`] for the heir delay.
+    pub checkin_interval: Option<u16>,
     pub checkin_margin: u16,
 }
 
 impl HeirDelayRules {
     /// The placeholder defaults: [`crate::DEFAULT_MIN_HEIR_DELAY`],
-    /// [`DEFAULT_CHECKIN_INTERVAL`] and [`DEFAULT_CHECKIN_MARGIN`]. Together
-    /// they accept only heir delays of 61,320 blocks or more; a shorter one
-    /// needs a shorter check-in interval.
+    /// [`DEFAULT_CHECKIN_MARGIN`], and the default interval for the heir
+    /// delay. Every heir delay from the minimum up gets check-ins that fit.
     pub const DEFAULT: Self = Self {
         min_heir_delay: crate::DEFAULT_MIN_HEIR_DELAY,
-        checkin_interval: DEFAULT_CHECKIN_INTERVAL,
+        checkin_interval: None,
         checkin_margin: DEFAULT_CHECKIN_MARGIN,
     };
 
@@ -110,7 +130,11 @@ impl HeirDelayRules {
             return Err(Error::HeirAndDelayMismatch);
         }
         delays.require_heir_at_least(self.min_heir_delay)?;
-        CheckinRule::new(self.checkin_interval, self.checkin_margin, delays)
+        let interval = match self.checkin_interval {
+            Some(interval) => interval,
+            None => default_interval(delays, self.checkin_margin)?,
+        };
+        CheckinRule::new(interval, self.checkin_margin, delays)
     }
 }
 
@@ -396,32 +420,65 @@ mod tests {
     }
 
     #[test]
-    fn with_the_default_rules_only_the_full_heir_delay_leaves_room_for_check_ins() {
-        let rules = HeirDelayRules::DEFAULT;
+    fn the_default_interval_fits_the_heir_delay() {
         let heir = |blocks| Delays::with_heir(blocks).unwrap();
-        // Above the minimum, but the default check-ins can't beat it.
-        for blocks in [crate::DEFAULT_MIN_HEIR_DELAY, 40_000, crate::DEFAULT_HEIR_DELAY - 1] {
+        let interval = |blocks| default_interval(heir(blocks), DEFAULT_CHECKIN_MARGIN).unwrap();
+        // The minimum 6-month heir delay: a check-in about every 4 months.
+        assert_eq!(interval(crate::DEFAULT_MIN_HEIR_DELAY), 17_520);
+        assert_eq!(interval(40_000), 31_240);
+        assert_eq!(interval(crate::DEFAULT_HEIR_DELAY - 1), 52_559);
+        // From the placeholder heir delay up, about once a year.
+        assert_eq!(interval(crate::DEFAULT_HEIR_DELAY), 52_560);
+        assert_eq!(interval(u16::MAX), 52_560);
+        // Short test delays: the heir delay minus the margin.
+        assert_eq!(default_interval(heir(20), 5).unwrap(), 15);
+        assert_eq!(default_interval(heir(6), 5).unwrap(), 1);
+    }
+
+    #[test]
+    fn the_default_interval_needs_room_after_the_margin() {
+        let heir = |blocks| Delays::with_heir(blocks).unwrap();
+        for blocks in [5, 4, 1] {
             assert!(
-                matches!(rules.check(heir(blocks)), Err(Error::CheckinTooLate { interval: 52_560, margin: 8_760, .. })),
+                matches!(default_interval(heir(blocks), 5), Err(Error::NoRoomForCheckins { margin: 5, .. })),
                 "heir delay {blocks}"
             );
         }
-        assert!(matches!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY - 1)), Err(Error::HeirDelayTooShort { .. })));
+        assert!(matches!(default_interval(heir(20), 0), Err(Error::CheckinMarginZero)));
+        assert!(matches!(default_interval(Delays::none(), 5), Err(Error::NoCheckinWithoutHeir)));
+    }
+
+    #[test]
+    fn with_the_default_rules_every_heir_delay_from_the_minimum_gets_check_ins_that_fit() {
+        let rules = HeirDelayRules::DEFAULT;
+        let heir = |blocks| Delays::with_heir(blocks).unwrap();
+        // Refused before brief 3.27, when the interval was always a year.
+        for (blocks, interval) in [(crate::DEFAULT_MIN_HEIR_DELAY, 17_520), (40_000, 31_240), (61_319, 52_559)] {
+            let rule = rules.check(heir(blocks)).unwrap();
+            assert_eq!((rule.interval(), rule.margin()), (interval, 8_760), "heir delay {blocks}");
+        }
         let rule = rules.check(heir(crate::DEFAULT_HEIR_DELAY)).unwrap();
         assert_eq!((rule.interval(), rule.margin()), (52_560, 8_760));
+        assert!(matches!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY - 1)), Err(Error::HeirDelayTooShort { .. })));
         assert!(matches!(rules.check(Delays::none()), Err(Error::HeirAndDelayMismatch)));
     }
 
     #[test]
-    fn a_shorter_heir_delay_needs_a_shorter_check_in_interval() {
-        let rules = HeirDelayRules { checkin_interval: 17_000, ..HeirDelayRules::DEFAULT };
+    fn a_chosen_interval_must_still_fit() {
         let heir = |blocks| Delays::with_heir(blocks).unwrap();
+        let rules = HeirDelayRules { checkin_interval: Some(17_000), ..HeirDelayRules::DEFAULT };
         assert!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY)).is_ok());
         assert!(matches!(rules.check(heir(crate::DEFAULT_MIN_HEIR_DELAY - 1)), Err(Error::HeirDelayTooShort { .. })), "the minimum still applies");
-        assert!(matches!(
-            HeirDelayRules { checkin_interval: 17_521, ..rules }.check(heir(crate::DEFAULT_MIN_HEIR_DELAY)),
-            Err(Error::CheckinTooLate { .. })
-        ));
+        // A yearly check-in chosen for the minimum heir delay doesn't fit.
+        for interval in [17_521, DEFAULT_CHECKIN_INTERVAL] {
+            assert!(
+                matches!(
+                    HeirDelayRules { checkin_interval: Some(interval), ..rules }.check(heir(crate::DEFAULT_MIN_HEIR_DELAY)),
+                    Err(Error::CheckinTooLate { .. })
+                ),
+                "interval {interval}"
+            );
+        }
     }
 
     #[test]

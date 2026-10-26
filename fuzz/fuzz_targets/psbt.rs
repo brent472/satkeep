@@ -41,7 +41,7 @@ struct Fixture {
 
 /// What a new wallet's heir delay must allow in the fixture: at least 10
 /// blocks, with room for check-ins every 6 blocks and a 3-block margin.
-const RULES: HeirDelayRules = HeirDelayRules { min_heir_delay: 10, checkin_interval: 6, checkin_margin: 3 };
+const RULES: HeirDelayRules = HeirDelayRules { min_heir_delay: 10, checkin_interval: Some(6), checkin_margin: 3 };
 
 thread_local! {
     static FIXTURE: &'static Fixture = Box::leak(Box::new(build_fixture()));

@@ -12,7 +12,7 @@ use satkeep_savings::bitcoin::Amount;
 use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::migrate::{build_move, check_move, destination, is_move, pays_to, wallet_with_heir};
 use satkeep_savings::checkin::HeirDelayRules;
-use satkeep_savings::{Delays, Error, Role};
+use satkeep_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, Error, Role};
 
 const HEIR_DELAY: u16 = 20;
 
@@ -195,7 +195,7 @@ fn an_heir_delay_the_check_ins_cant_beat_is_refused() {
     // at least 20, whatever the minimum says.
     let node = Node::start();
     let (mut plain, target) = plain_and_target(&node);
-    let rules = HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: 15, checkin_margin: 5 };
+    let rules = HeirDelayRules { min_heir_delay: MIN_HEIR_DELAY, checkin_interval: Some(15), checkin_margin: 5 };
     let heir = target.policy.keys().get(Role::Heir).unwrap().clone();
     let delay = |blocks| Delays::with_heir(blocks).unwrap();
 
@@ -217,14 +217,38 @@ fn an_heir_delay_the_check_ins_cant_beat_is_refused() {
     assert!(matches!(checked, Err(Error::CheckinTooLate { .. })), "{checked:?}");
     assert!(check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, HEIR_DELAY_RULES).is_ok());
 
-    // With the placeholder defaults, an heir delay above the minimum but
-    // below 61,320 blocks leaves no room for the yearly check-in.
-    let built = wallet_with_heir(&plain.policy, target.policy.keys().get(Role::Heir).unwrap().clone(), delay(40_000), HeirDelayRules::DEFAULT);
+    // A yearly check-in chosen with a 40,000-block heir delay doesn't fit;
+    // left to the default, the interval fits itself (31,240 blocks).
+    let heir = target.policy.keys().get(Role::Heir).unwrap().clone();
+    let yearly = HeirDelayRules { checkin_interval: Some(52_560), ..HeirDelayRules::DEFAULT };
+    let built = wallet_with_heir(&plain.policy, heir.clone(), delay(40_000), yearly);
     assert!(
         matches!(built, Err(Error::CheckinTooLate { interval: 52_560, margin: 8_760, heir: 40_000 })),
         "{:?}",
         built.err()
     );
+    assert!(wallet_with_heir(&plain.policy, heir, delay(40_000), HeirDelayRules::DEFAULT).is_ok());
+}
+
+#[test]
+fn a_move_to_the_minimum_heir_delay_gets_check_ins_that_fit() {
+    // Brief 3.27: with no interval chosen, a 26,280-block heir delay gets a
+    // check-in every 17,520 blocks instead of being refused, in the
+    // settings and in building and checking the move.
+    let node = Node::start();
+    let (mut plain, _) = plain_and_target(&node);
+    let short = plain.with_heir_added(DEFAULT_MIN_HEIR_DELAY);
+    let heir = short.policy.keys().get(Role::Heir).unwrap().clone();
+    let delays = Delays::with_heir(DEFAULT_MIN_HEIR_DELAY).unwrap();
+    assert_eq!(HeirDelayRules::DEFAULT.check(delays).unwrap().interval(), 17_520);
+    let to = wallet_with_heir(&plain.policy, heir, delays, HeirDelayRules::DEFAULT).unwrap();
+    assert_eq!(to.descriptor(), short.policy.descriptor());
+    let psbt = build_move(&mut plain.wallet, &plain.policy, &short.policy, HeirDelayRules::DEFAULT, FEE_RATE).unwrap();
+    check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, HeirDelayRules::DEFAULT).unwrap();
+    // A yearly interval chosen for it is still refused.
+    let yearly = HeirDelayRules { checkin_interval: Some(52_560), ..HeirDelayRules::DEFAULT };
+    let checked = check_move(&plain.wallet, &psbt, &plain.policy, &short.policy, yearly);
+    assert!(matches!(checked, Err(Error::CheckinTooLate { .. })), "{checked:?}");
 }
 
 #[test]
