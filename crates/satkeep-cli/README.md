@@ -233,6 +233,7 @@ $null = & $bcli @node generatetoaddress 1 $burn
   - A PSBT carries every leaf of each coin, so a holder may add a signature the chosen path doesn't need (for example HELPER on an heir payment). That's harmless: `broadcast` only sends a payment whose signatures actually satisfy a path.
   - `sign` refuses a key that adds nothing.
 - **Fees.** The rate is set by `--fee-rate` in sat/vB, default 2, minimum 1, with no fee estimation.
+- **Fee ceiling on check-ins and moves.** `checkin`, `add-heir`, `sign` and `broadcast` refuse a check-in or move whose network fee is above 0.005 BTC or above 5% of what it spends (placeholders). That catches a fee-rate typo and a PSBT whose one output was edited down. To change it, set `max_fee_sat` and `max_fee_percent` in `savings.json`; `add-heir` copies them to the new wallet. Plain payments have no ceiling yet; `sign` shows their fee.
 - **Node access.** Over RPC with cookie auth, using raw JSON calls, because `bitcoincore-rpc`'s typed responses lag behind newer Core versions. The tool never changes anything on the node except by broadcasting a payment.
 
 ## Tests

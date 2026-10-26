@@ -404,7 +404,7 @@ fn run(cli: Cli) -> Result<()> {
                 .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
                 .context("the fee rate must be at least 1 sat/vB")?;
             let delays = opened.policy.delays();
-            let psbt = checkin::build_checkin(&mut opened.wallet, delays, fee_rate)?;
+            let psbt = checkin::build_checkin(&mut opened.wallet, delays, fee_rate, opened.config.fee_ceiling()?)?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
@@ -432,7 +432,7 @@ fn run(cli: Cli) -> Result<()> {
             let payment = read_psbt(psbt)?;
             // Synced just now: refuses if a coin arrived since it was built.
             if checkin::is_checkin(&payment) {
-                checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays())?;
+                checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays(), opened.config.fee_ceiling()?)?;
             }
             let moved_to = checked_move(&opened, &payment)?;
             spend::check_inputs(&opened.wallet, &payment)?;
@@ -464,6 +464,8 @@ fn run(cli: Cli) -> Result<()> {
                 refresh_window: None,
                 min_heir_delay,
                 moving_to: None,
+                max_fee_sat: None,
+                max_fee_percent: None,
                 device_r: None,
             };
             heir.apply(&mut config);
@@ -498,6 +500,8 @@ fn run(cli: Cli) -> Result<()> {
                 refresh_window: None,
                 min_heir_delay: opened.config.min_heir_delay,
                 moving_to: None,
+                max_fee_sat: opened.config.max_fee_sat,
+                max_fee_percent: opened.config.max_fee_percent,
                 device_r: None,
             };
             heir.apply(&mut config);
@@ -505,7 +509,8 @@ fn run(cli: Cli) -> Result<()> {
             config.checkin_rule()?;
             config.payment_rule()?;
             let min_heir_delay = opened.config.min_heir_delay();
-            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate)?;
+            let ceiling = opened.config.fee_ceiling()?;
+            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate, ceiling)?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
             new.persist()?;
             write_new(out, psbt.to_string().as_bytes())?;
@@ -643,7 +648,7 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
         .context("this payment's inputs ask for different approval paths")?;
     let network = opened.network().network();
     if checkin::is_checkin(payment) {
-        checkin::check_checkin(wallet, payment, opened.policy.delays())?;
+        checkin::check_checkin(wallet, payment, opened.policy.delays(), opened.config.fee_ceiling()?)?;
         let heir_delay = opened.policy.delays().heir().expect("check-ins need a beneficiary");
         println!("Check-in to approve: every Savings coin goes into one new Savings address,");
         println!("restarting the heir delay ({}).", blocks_and_about(heir_delay.into()));
@@ -704,7 +709,8 @@ fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>
         "this is a move to a new Savings wallet, but no move is set up in this wallet's settings, \
          so there's nothing to check where it goes against (set one up with `satkeep add-heir`)",
     )?;
-    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay())?;
+    let ceiling = opened.config.fee_ceiling()?;
+    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay(), ceiling)?;
     Ok(Some(to))
 }
 

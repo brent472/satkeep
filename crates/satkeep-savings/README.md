@@ -68,14 +68,15 @@ let tx = spend::finalize(&wallet, &signed_psbt)?;     // refuses if too early or
 A wallet's script can't change, so adding a beneficiary means a new wallet and one transaction moving Savings there (`migrate`):
 
 - `migrate::wallet_with_heir(&from, heir, Delays::with_heir(n)?, min_heir_delay)` makes the new wallet: the same PHONE, DEVICE and HELPER plus HEIR, with an heir delay of at least `min_heir_delay` blocks.
-- `migrate::build_move(&mut wallet, &from, &to, min_heir_delay, fee_rate)` drains every confirmed coin, through the 2-of-3 path, to the new wallet's first receive address: one network fee.
+- `migrate::build_move(&mut wallet, &from, &to, min_heir_delay, fee_rate, ceiling)` drains every confirmed coin, through the 2-of-3 path, to the new wallet's first receive address: one network fee, refused if it's above `ceiling` ([Fees](#fees)).
   - The PSBT carries the HEIR key and heir delay it was built for, in a proprietary field (`satkeep`/`move`) that other software ignores. It marks the PSBT as a move; it's compared, never trusted.
   - Unconfirmed coins are left out, as in a check-in. They stay spendable by 2 of 3 and can be moved once they confirm.
-- `migrate::check_move(&wallet, &psbt, &from, &to, min_heir_delay)` checks a move against `to`, the wallet the **signer's own settings** say it goes to. It refuses unless:
+- `migrate::check_move(&wallet, &psbt, &from, &to, min_heir_delay, ceiling)` checks a move against `to`, the wallet the **signer's own settings** say it goes to. It refuses unless:
   - `to` has `from`'s PHONE, DEVICE and HELPER, a beneficiary, and at least the minimum heir delay;
   - the PSBT is marked as a move and names the same HEIR key and delay as `to` (`Error::MoveNotAsSetUp` otherwise);
   - it uses the 2-of-3 path and spends every confirmed coin and nothing else;
-  - it has exactly one output, to `to`'s first address. A second output is refused even if it also pays `to`.
+  - it has exactly one output, to `to`'s first address. A second output is refused even if it also pays `to`;
+  - its network fee is no higher than `ceiling`.
 - **Where a move goes is never taken from the PSBT.** Whoever prepares a move could otherwise choose HEIR and the delay. Each signer rebuilds `to` from its own settings, so a move built for a different HEIR key, a shorter delay or an extra output is refused at `sign` and again at `broadcast` (`tests/migrate.rs`). The CLI keeps those settings in the old wallet's `savings.json` (`moving_to`, set by `add-heir`), and treats a PSBT that pays the new wallet as a move even if it isn't marked. `sign` still shows HEIR's full key and the delay, in blocks and about how long, so approvers can compare them with the beneficiary's.
 - **Replacing a key** will be a move too, with the replacement key in the same settings. Until it's built, a move to a wallet with other keys is refused (`Error::MoveToWrongWallet`).
 - Changing the beneficiary is the same move, from a wallet that already has one.
@@ -96,7 +97,7 @@ Each coin's delay clock starts when that coin confirms. A **check-in** spends ev
   `checkin::reminder` sums these up for the whole wallet.
 - **Building and checking.**
   - `checkin::build_checkin` drains every confirmed coin to one new change address through the 2-of-3 path, and marks the PSBT with a proprietary field (`satkeep`/`checkin`) that other software ignores. Unconfirmed coins are left out.
-  - `checkin::check_checkin` refuses a check-in that leaves out any confirmed coin, spends an unconfirmed one, pays anywhere but one Savings address, or uses the heir path.
+  - `checkin::check_checkin` refuses a check-in that leaves out any confirmed coin, spends an unconfirmed one, pays anywhere but one Savings address, uses the heir path, or pays a network fee above the ceiling ([Fees](#fees)). `build_checkin` refuses one whose fee rate would.
   - The CLI runs the check again at `sign` and at `broadcast`, so a coin that confirmed after the check-in was built gets it refused.
 - **Why it can't be the heir path.** The check-in's sequence carries no delay, so the heir leaf can't be satisfied. HEIR alone can't approve it even when its path is open, and the network agrees (CSV fails). The tests check both.
 
@@ -165,6 +166,31 @@ Together, these match the network's rule. Tests check the boundary exactly: refu
 - Every forbidden-path test requires both a library refusal and a node rejection.
 - `a_check_in_can_only_use_the_two_of_three_path`: with the heir path open, HEIR alone can't finalize a check-in, and the node rejects a hand-built attempt. With BDK's finalizer, this test failed.
 - Two tests pin BDK's behaviour, so we notice if it ever changes: `bdk_alone_would_finalize_an_early_delayed_spend` and `bdk_alone_would_finalize_a_delayed_leaf_whose_sequence_has_no_delay`.
+
+## Questions for the reviewer
+
+Open questions from a pre-review read of this crate, for the outside Bitcoin reviewer. None of them is settled in the code yet.
+
+1. **What must the helper check before it approves a Savings payment?**
+   - **Why it matters:** PHONE and HELPER together are 2 of 3.
+   - **The stolen-phone case:** a thief who steals the phone unlocked holds one key and can ask the helper to approve the second. Savings is then protected only by the helper's own rules.
+   - **Rules to consider:**
+     - a wait before it approves;
+     - a confirmation on the owner's second device;
+     - limits on how much and how often;
+     - alerts to the owner.
+   - **We'd like these in the spec now,** even though the helper isn't built yet. Whatever else it requires, the helper must at least run the same checks as `sign`: `check_inputs`, `check_checkin` and `check_move`, with the fee ceiling.
+2. **Should the payment rule be on by default?**
+   - **What it does:** spending old coins with a payment refreshes them, so the yearly check-in is rarely needed.
+   - **The cost:** it links those coins together on-chain, so anyone watching sees they have one owner. It can be turned off ([the payment rule](#the-payment-rule-payments-count-as-check-ins)).
+   - **The question:** is that the right default, or should privacy win and the rule start off?
+3. **How should a check-in with many coins pay its network fee?**
+   - **Why it matters:** a check-in spends every coin, so a wallet with many small coins makes a large transaction. At a busy time it could cost a lot.
+   - **The questions:**
+     - How should fees be planned for that?
+     - Should one check-in sweep at most so many coins, and do the rest later or in a second transaction?
+     - Should Satkeep warn early, while fees are low, instead of waiting until a check-in is due?
+   - **Related:** the fee ceiling on check-ins and moves ([Fees](#fees)).
 
 ## Assumptions
 
@@ -237,6 +263,13 @@ Assumptions, to settle with the outside reviewer:
 ### Fees
 
 - The library doesn't choose fees: `build_spend` lets the caller set the fee rate.
+- **A fee ceiling on check-ins and moves** (`spend::FeeCeiling`). Both sweep the whole wallet into one output back to Savings, so the network fee is the only thing that leaves, and nothing else limits it. A typo in the fee rate (1,000 sat/vB for 1), or a PSBT whose one output was edited down, would pass every other check and pay most of Savings as fee.
+  - **The rule:** the fee must be at most 0.005 BTC (`DEFAULT_MAX_FEE`) **and** at most 5% of what it spends (`DEFAULT_MAX_FEE_PERCENT`). Both are placeholders, configurable (`FeeCeiling::new`).
+  - **Where it runs:** `check_checkin` and `check_move`, so before signing and again before broadcasting; `build_checkin` and `build_move` refuse to build one above it (`Error::FeeTooHigh`).
+  - **The amounts it adds up are the wallet's own,** checked by `check_inputs` first, so a PSBT can't understate its inputs to get under the ceiling.
+  - **Why it matters even though approvers see the fee:** the helper will approve without a person looking, so it must refuse a burning fee on its own, with the same check.
+  - **Not for ordinary payments yet:** a payment's fee is shown at `sign`, and what a sensible ceiling is for a payment (and for many coins at a busy time) is a question for the reviewer.
+  - Found by a pre-review read of this crate.
 - Tests use a fixed 2 sat/vB, because regtest has no fee estimates. That's above the default relay minimum.
 - No fee bumping yet. BDK's default sequence for the 2-of-3 path signals RBF, and the delayed paths' sequences (the delay itself) do too.
 
@@ -282,15 +315,16 @@ $env:BITCOIND_EXE="C:\Program Files\Bitcoin\daemon\bitcoind.exe"; cargo test -- 
 | File | What it proves |
 | --- | --- |
 | `src/checkin.rs` (unit) | The check-in interval and margin rules; the payment rule's window must fit inside the interval, and the defaults mean coins older than 43,800 blocks |
+| `src/spend.rs` (unit) | The fee ceiling: exactly the ceiling passes and 1 sat more is refused, by amount and by percentage; outputs above the inputs pay no fee and can't overflow the sum; a zero ceiling or a percentage outside 1 to 100 is refused. Reading the path from the input sequences. |
 | `src/policy.rs` (unit) | Reading the rules back out of the descriptor matches a rule written independently, in both shapes. Checked for all 16 combinations of the four keys, at ages around the heir delay and at the 65,535-block cap. No single key but HEIR ever spends; without a beneficiary nothing opens with time. A HEIR key needs a delay and the other way round. The internal key matches Liana v15.0's published test vectors, and adding an heir changes it. |
 | `src/holder.rs` (unit) | A phrase round-trips, and BIP39's public test phrase gives the account key BIP86 publishes for it. A bad checksum, 11 or 24 words, an old `tprv` key and garbage are all refused without repeating their input. A phrase is spotted in text however it's split up. |
 | `src/backup/tests.rs` (unit) | The backup alone shows only its date and device ids: no phrase word or setup text is in it. The right device with its PIN restores the same 12 words, keys and setup. A wrong device is refused before it's asked anything; a device without its PIN unlocks nothing; wrong PINs block it for good. Replacing the device locks the backup to the new one only, and the old device still opens an old copy (the limit, pinned). Changing any single byte, the date included, stops it opening; cut-short, padded and garbage files are refused; a contact entry is never opened by a device. No error repeats the phrase. |
 | `tests/backup.rs` | A phone key restored from its backup approves a regtest 2-of-3 spend with the helper. A key restored from another wallet's backup adds no signature, and the spend can't be finalized. |
 | `tests/allowed_paths.rs` | Any 2 of 3 spends on regtest in both shapes, and HEIR alone at exactly its delay, each through the expected leaf |
 | `tests/forbidden_paths.rs` | Each forbidden case, tried through every leaf the wallet has, is refused by Satkeep **and** rejected by the node: PHONE, DEVICE or HELPER alone even after the heir delay; HEIR alone or with any one other key before it; signing a shorter sequence to skip the delay. Without a beneficiary: any single key at any age, an heir path refused, and a long sequence buying nothing. |
-| `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. Checked against the wallet the settings say, a move is refused if it goes to a wallet with a different HEIR key or a shorter heir delay (whether its marker owns up or claims the right one), has one extra output (to someone else, or back as change), pays elsewhere, names a different HEIR, isn't marked, goes to a wallet with different keys, or leaves out a confirmed coin. An heir delay below the minimum is refused in the settings, in building and in checking. Changing the beneficiary works the same way. |
+| `tests/migrate.rs` | Adding a beneficiary moves every coin in one 2-of-3 transaction, and HEIR then spends from the new wallet at its delay. One key alone can't approve a move. Checked against the wallet the settings say, a move is refused if it goes to a wallet with a different HEIR key or a shorter heir delay (whether its marker owns up or claims the right one), has one extra output (to someone else, or back as change), pays elsewhere, names a different HEIR, isn't marked, goes to a wallet with different keys, or leaves out a confirmed coin. An heir delay below the minimum is refused in the settings, in building and in checking. A fee above the ceiling is refused, from a fee-rate typo or an output edited down. Changing the beneficiary works the same way. |
 | `tests/payment_rule.rs` | With the rule, a payment from one young coin also spends the old coin due for a refresh, with change back to Savings. When the old coin would have reached the heir delay, HEIR alone is refused, and HEIR opens the change at exactly the heir delay from the payment. With the setting off, the same payment leaves the old coin alone, and HEIR opens it on time. Without hand-picking, every due coin goes in. The heir path and Savings with no beneficiary are never affected. |
-| `tests/checkin.rs` | A check-in restarts the heir delay for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses the heir path. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. HEIR or DEVICE alone can't approve a check-in even with the heir path open. Savings with no beneficiary has no check-in. |
+| `tests/checkin.rs` | A check-in restarts the heir delay for the new coin, to the block. A check-in that leaves out a confirmed coin (one that confirmed later, or one hand-picked) is refused, as is one that pays out or uses the heir path. A fee above the ceiling is refused: a 5,000 sat/vB typo when building, a signed check-in whose output was edited down when checking, and 1,000 sat/vB on a 0.01 BTC wallet by the 5% rule; a raised ceiling lets it through. An unconfirmed incoming coin neither blocks a check-in nor joins it, and one that tries to spend it is refused. HEIR or DEVICE alone can't approve a check-in even with the heir path open. Savings with no beneficiary has no check-in. |
 | `tests/default_delays.rs` | The real 61,320-block heir delay opens at exactly that many confirmations (ignored by default) |
 | `tests/export.rs` | Bitcoin Core derives the same addresses from the export, in both shapes |
 | `tests/harness.rs` | The harness's hand-built spends are valid when they have enough signatures, so a rejection elsewhere is the policy's doing |

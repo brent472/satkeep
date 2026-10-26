@@ -28,7 +28,7 @@ use bdk_wallet::Wallet;
 use crate::bitcoin::psbt::{Psbt, raw::ProprietaryKey};
 use crate::bitcoin::{FeeRate, ScriptBuf};
 use crate::miniscript::descriptor::DescriptorPublicKey;
-use crate::spend::{self, Path};
+use crate::spend::{self, FeeCeiling, Path};
 use crate::{Delays, Error, SavingsPolicy};
 
 fn move_marker() -> ProprietaryKey {
@@ -96,13 +96,15 @@ fn check_target(from: &SavingsPolicy, to: &SavingsPolicy, min_heir_delay: u16) -
 /// Builds the move: every confirmed coin in `from`'s wallet, through the
 /// 2-of-3 path, to `to`'s first receive address. Unconfirmed coins are left
 /// out, as in a check-in (see [`crate::checkin::build_checkin`]); they stay
-/// spendable by 2 of 3 and can be moved once they confirm.
+/// spendable by 2 of 3 and can be moved once they confirm. Refuses if the
+/// fee at `fee_rate` would be above `ceiling`.
 pub fn build_move(
     wallet: &mut Wallet,
     from: &SavingsPolicy,
     to: &SavingsPolicy,
     min_heir_delay: u16,
     fee_rate: FeeRate,
+    ceiling: FeeCeiling,
 ) -> Result<Psbt, Error> {
     let (heir, heir_delay) = check_target(from, to, min_heir_delay)?;
     if !wallet.list_unspent().any(|u| u.chain_position.is_confirmed()) {
@@ -113,14 +115,15 @@ pub fn build_move(
         b.drain_wallet().exclude_unconfirmed().drain_to(pay_to.clone()).fee_rate(fee_rate);
     })?;
     psbt.proprietary.insert(move_marker(), format!("{heir}\n{heir_delay}").into_bytes());
-    check_move(wallet, &psbt, from, to, min_heir_delay)?;
+    check_move(wallet, &psbt, from, to, min_heir_delay, ceiling)?;
     Ok(psbt)
 }
 
 /// Checks a move is complete and goes where this wallet's settings say:
 /// marked as one, naming the same HEIR and delay as `to`, through the 2-of-3
 /// path, spending every confirmed coin in `from`'s wallet and nothing else,
-/// into exactly one output, `to`'s first receive address.
+/// into exactly one output, `to`'s first receive address, for a fee no
+/// higher than `ceiling`.
 ///
 /// `to` must come from the signer's own settings ([`wallet_with_heir`]),
 /// not from the PSBT; it's refused unless it has `from`'s PHONE, DEVICE and
@@ -132,6 +135,7 @@ pub fn check_move(
     from: &SavingsPolicy,
     to: &SavingsPolicy,
     min_heir_delay: u16,
+    ceiling: FeeCeiling,
 ) -> Result<(), Error> {
     let (heir, heir_delay) = check_target(from, to, min_heir_delay)?;
     let value = psbt.proprietary.get(&move_marker()).ok_or(Error::NotAMove)?;
@@ -165,5 +169,6 @@ pub fn check_move(
             return Err(Error::MoveMissesCoin { coin: utxo.outpoint });
         }
     }
+    ceiling.check(psbt)?;
     Ok(())
 }

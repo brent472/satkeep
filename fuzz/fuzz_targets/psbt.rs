@@ -1,7 +1,7 @@
 //! PSBT bytes, or a valid Savings PSBT edited by the input, through the
 //! functions that judge an outside PSBT: `spend::path_of`,
 //! `checkin::is_checkin`, `checkin::check_checkin`, `migrate::check_move`
-//! and `spend::check_delays`.
+//! (both with the default fee ceiling) and `spend::check_delays`.
 //!
 //! They run against a fixed test wallet whose keys are generated inside the
 //! target when it starts. Nothing is ever printed.
@@ -24,7 +24,7 @@ use satkeep_savings::bitcoin::{
 };
 use satkeep_savings::checkin::{self, build_checkin, check_checkin};
 use satkeep_savings::migrate;
-use satkeep_savings::spend::{self, Path};
+use satkeep_savings::spend::{self, FeeCeiling, Path};
 use satkeep_savings::{Delays, HolderKey, SavingsKeys, SavingsPolicy};
 
 struct Fixture {
@@ -117,9 +117,9 @@ fn build_fixture() -> Fixture {
     let mut b = wallet.build_tx();
     b.drain_wallet().drain_to(foreign.clone()).fee_rate(fee).set_condition(Condition::default());
     templates.push(b.finish().expect("drain spend"));
-    templates.push(migrate::build_move(&mut wallet, &policy, &next, MIN, fee).expect("template move"));
-    templates.push(migrate::build_move(&mut wallet, &policy, &elsewhere, MIN, fee).expect("template move elsewhere"));
-    templates.push(build_checkin(&mut wallet, delays, fee).expect("template check-in"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &next, MIN, fee, FeeCeiling::DEFAULT).expect("template move"));
+    templates.push(migrate::build_move(&mut wallet, &policy, &elsewhere, MIN, fee, FeeCeiling::DEFAULT).expect("template move elsewhere"));
+    templates.push(build_checkin(&mut wallet, delays, fee, FeeCeiling::DEFAULT).expect("template check-in"));
 
     let scripts = vec![
         foreign,
@@ -210,8 +210,8 @@ fuzz_target!(|data: &[u8]| {
 
         let path = spend::path_of(&psbt, f.delays);
         let marked = checkin::is_checkin(&psbt);
-        let complete = check_checkin(&f.wallet, &psbt, f.delays);
-        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy, &f.next, MIN);
+        let complete = check_checkin(&f.wallet, &psbt, f.delays, FeeCeiling::DEFAULT);
+        let moved = migrate::check_move(&f.wallet, &psbt, &f.policy, &f.next, MIN, FeeCeiling::DEFAULT);
         let _ = spend::check_delays(&f.wallet, &psbt);
 
         // A check-in that passes must really be one: marked, 2-of-3, and a
@@ -224,6 +224,7 @@ fuzz_target!(|data: &[u8]| {
                 f.wallet.is_mine(psbt.unsigned_tx.output[0].script_pubkey.clone()),
                 "check_checkin accepted an output that isn't ours"
             );
+            assert!(FeeCeiling::DEFAULT.check(&psbt).is_ok(), "check_checkin accepted a fee above the ceiling");
         }
 
         // A move that passes must really be one: marked, 2-of-3, and a
@@ -234,6 +235,7 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(path, Some(Path::TwoOfThree), "check_move accepted a delayed path");
             assert_eq!(psbt.unsigned_tx.output.len(), 1, "check_move accepted more than one output");
             assert_eq!(psbt.unsigned_tx.output[0].script_pubkey, migrate::destination(&f.next), "check_move: wrong output");
+            assert!(FeeCeiling::DEFAULT.check(&psbt).is_ok(), "check_move accepted a fee above the ceiling");
         }
     });
 });

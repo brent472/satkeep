@@ -281,3 +281,33 @@ fn an_heir_delay_below_the_minimum_is_refused() {
     restore(&old, &raised);
     sign_refused(&old, &holders, &file, "below the minimum of 11 blocks");
 }
+
+#[test]
+fn a_move_whose_fee_is_above_the_ceiling_is_refused() {
+    let node = Node::start();
+    let (old, new, holders) = plain_with_coins(&node);
+    let file = old.path("move.psbt");
+    let new_dir = new.wallet_dir().display().to_string();
+    let heir = holders.public_keys()[3].clone();
+
+    // A typo in the fee rate: refused, and nothing written.
+    let mut args = add_heir_args(&new_dir, &heir, &file).to_vec();
+    args.extend(["--fee-rate", "5000"]);
+    let err = old.fails(&args);
+    assert!(err.contains("more than this wallet allows"), "{err}");
+    assert!(!file_exists(&file) && !new.wallet_dir().exists(), "nothing written");
+
+    // A good move whose one output was edited down: refused at sign and at
+    // broadcast.
+    old.ok(&add_heir_args(&new_dir, &heir, &file));
+    let honest = fs::read_to_string(&file).unwrap();
+    let edit_down = |p: &mut Psbt| p.unsigned_tx.output[0].value = Amount::from_btc(0.1).unwrap();
+    edit_psbt(&file, edit_down);
+    sign_refused(&old, &holders, &file, "the network fee is 1.40000000 BTC");
+    fs::write(&file, &honest).unwrap();
+    old.sign(&file, &holders.phone);
+    old.sign(&file, &holders.device);
+    edit_psbt(&file, edit_down);
+    let err = old.fails(&["broadcast", "--psbt", &file]);
+    assert!(err.contains("more than this wallet allows"), "{err}");
+}

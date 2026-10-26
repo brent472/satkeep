@@ -6,8 +6,9 @@ mod common;
 use common::{FEE_RATE, Holder, Node, Path, Savings};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::descriptor::policy::Condition;
-use satkeep_savings::bitcoin::{Amount, Transaction};
+use satkeep_savings::bitcoin::{Amount, FeeRate, Transaction};
 use satkeep_savings::checkin::{build_checkin, check_checkin, is_checkin};
+use satkeep_savings::spend::FeeCeiling;
 use satkeep_savings::{Delays, Error, spend};
 
 fn btc(n: f64) -> Amount {
@@ -18,9 +19,9 @@ fn btc(n: f64) -> Amount {
 /// check-in. Returns it and the height the new coin confirmed at.
 fn check_in(savings: &mut Savings, node: &Node) -> (Transaction, u32) {
     let delays = savings.delays();
-    let mut psbt = build_checkin(&mut savings.wallet, delays, FEE_RATE).expect("build check-in");
+    let mut psbt = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).expect("build check-in");
     savings.sign(&mut psbt, &[Holder::Phone, Holder::Helper]);
-    check_checkin(&savings.wallet, &psbt, delays).unwrap();
+    check_checkin(&savings.wallet, &psbt, delays, FeeCeiling::DEFAULT).unwrap();
     let tx = savings.finalize(&psbt).unwrap();
     node.broadcast_and_confirm(&tx);
     savings.sync(node);
@@ -65,19 +66,19 @@ fn a_check_in_that_leaves_out_a_coin_is_refused() {
     let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let delays = savings.delays();
-    let stale = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    let stale = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
     assert!(is_checkin(&stale));
 
     // A coin arrives after the check-in was built: the old one now leaves it out.
     savings.fund(&node, btc(0.5));
     let new_coin = savings.wallet.list_unspent().find(|u| u.txout.value == btc(0.5)).unwrap().outpoint;
-    match check_checkin(&savings.wallet, &stale, delays) {
+    match check_checkin(&savings.wallet, &stale, delays, FeeCeiling::DEFAULT) {
         Err(Error::CheckinMissesCoin { coin }) => assert_eq!(coin, new_coin),
         other => panic!("expected CheckinMissesCoin, got {other:?}"),
     }
 
     // A hand-made "check-in" that picks one coin is refused the same way.
-    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
     let back = savings.wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
     let mut builder = savings.wallet.build_tx();
     builder
@@ -89,11 +90,11 @@ fn a_check_in_that_leaves_out_a_coin_is_refused() {
         .set_condition(Condition { csv: None, timelock: None });
     let mut partial = builder.finish().unwrap();
     partial.proprietary = full.proprietary.clone();
-    assert!(matches!(check_checkin(&savings.wallet, &partial, delays), Err(Error::CheckinMissesCoin { .. })));
+    assert!(matches!(check_checkin(&savings.wallet, &partial, delays, FeeCeiling::DEFAULT), Err(Error::CheckinMissesCoin { .. })));
 
     // The rebuilt one includes both and passes.
     assert_eq!(full.unsigned_tx.input.len(), 2);
-    assert!(check_checkin(&savings.wallet, &full, delays).is_ok());
+    assert!(check_checkin(&savings.wallet, &full, delays, FeeCeiling::DEFAULT).is_ok());
 }
 
 #[test]
@@ -102,13 +103,13 @@ fn a_check_in_must_pay_only_back_into_savings() {
     let mut savings = Savings::new(Delays::with_heir(20).unwrap());
     savings.fund(&node, btc(1.0));
     let delays = savings.delays();
-    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
     let mut out = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
     out.proprietary = full.proprietary.clone();
-    assert!(matches!(check_checkin(&savings.wallet, &out, delays), Err(Error::CheckinPaysOut)));
+    assert!(matches!(check_checkin(&savings.wallet, &out, delays, FeeCeiling::DEFAULT), Err(Error::CheckinPaysOut)));
     // And a payment that isn't marked as a check-in isn't one.
     let plain = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
-    assert!(matches!(check_checkin(&savings.wallet, &plain, delays), Err(Error::NotACheckin)));
+    assert!(matches!(check_checkin(&savings.wallet, &plain, delays, FeeCeiling::DEFAULT), Err(Error::NotACheckin)));
 }
 
 #[test]
@@ -118,14 +119,14 @@ fn a_check_in_can_only_use_the_two_of_three_path() {
     let funded = savings.fund(&node, btc(1.0));
     savings.age_to(&node, funded, 20); // the heir path is open
     let delays = savings.delays();
-    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
     assert_eq!(spend::path_of(&full, delays), Some(Path::TwoOfThree));
 
     // A self-send through the heir path, marked as a check-in, is refused.
     let own = savings.wallet.reveal_next_address(KeychainKind::External).address;
     let mut delayed = savings.build_unchecked(Path::Heir, &own);
     delayed.proprietary = full.proprietary.clone();
-    assert!(matches!(check_checkin(&savings.wallet, &delayed, delays), Err(Error::CheckinUsesDelayedPath)));
+    assert!(matches!(check_checkin(&savings.wallet, &delayed, delays, FeeCeiling::DEFAULT), Err(Error::CheckinUsesDelayedPath)));
 
     // The check-in itself carries no delay in its sequence, so even with the
     // heir path open, HEIR alone can't approve it, and nor can DEVICE alone.
@@ -148,9 +149,9 @@ fn savings_with_no_beneficiary_has_no_check_in() {
     let funded = savings.fund(&node, btc(1.0));
     savings.age_to(&node, funded, 30);
     let delays = savings.delays();
-    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::NoCheckinWithoutHeir)));
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT), Err(Error::NoCheckinWithoutHeir)));
     let any = savings.build_unchecked(Path::TwoOfThree, &node.new_address());
-    assert!(matches!(check_checkin(&savings.wallet, &any, delays), Err(Error::NoCheckinWithoutHeir)));
+    assert!(matches!(check_checkin(&savings.wallet, &any, delays, FeeCeiling::DEFAULT), Err(Error::NoCheckinWithoutHeir)));
 }
 
 #[test]
@@ -167,7 +168,7 @@ fn an_immature_coinbase_coin_holds_up_the_check_in() {
     node.rpc().call::<Value>("generatetoaddress", &[json!(1), json!(address.to_string())]).unwrap();
     savings.sync(&node);
     let delays = savings.delays();
-    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::CheckinMissesCoin { .. })));
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT), Err(Error::CheckinMissesCoin { .. })));
 
     node.mine(99); // the reward now has 100 confirmations and can be spent
     savings.sync(&node);
@@ -189,10 +190,10 @@ fn an_unconfirmed_incoming_coin_neither_blocks_nor_joins_a_check_in() {
     let unconfirmed = savings.wallet.list_unspent().find(|u| !u.chain_position.is_confirmed()).expect("seen in mempool");
     let delays = savings.delays();
 
-    let psbt = build_checkin(&mut savings.wallet, delays, FEE_RATE).expect("not blocked by the unconfirmed coin");
+    let psbt = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).expect("not blocked by the unconfirmed coin");
     assert_eq!(psbt.unsigned_tx.input.len(), 1, "only the confirmed coin");
     assert!(psbt.unsigned_tx.input.iter().all(|i| i.previous_output != unconfirmed.outpoint), "doesn't join");
-    assert!(check_checkin(&savings.wallet, &psbt, delays).is_ok(), "an unconfirmed coin isn't missing");
+    assert!(check_checkin(&savings.wallet, &psbt, delays, FeeCeiling::DEFAULT).is_ok(), "an unconfirmed coin isn't missing");
 
     // A hand-made check-in that does include it is refused.
     let back = savings.wallet.reveal_next_address(KeychainKind::Internal).address.script_pubkey();
@@ -202,7 +203,7 @@ fn an_unconfirmed_incoming_coin_neither_blocks_nor_joins_a_check_in() {
     with_it.proprietary = psbt.proprietary.clone();
     assert_eq!(with_it.unsigned_tx.input.len(), 2);
     assert!(matches!(
-        check_checkin(&savings.wallet, &with_it, delays),
+        check_checkin(&savings.wallet, &with_it, delays, FeeCeiling::DEFAULT),
         Err(Error::CheckinSpendsUnconfirmed { coin }) if coin == unconfirmed.outpoint
     ));
 
@@ -220,7 +221,7 @@ fn a_confirmed_coin_left_out_is_still_refused() {
     savings.fund(&node, btc(1.0));
     savings.fund(&node, btc(0.5));
     let delays = savings.delays();
-    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE).unwrap();
+    let full = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
     assert_eq!(full.unsigned_tx.input.len(), 2);
 
     let coins: Vec<_> = savings.wallet.list_unspent().map(|u| u.outpoint).collect();
@@ -236,7 +237,7 @@ fn a_confirmed_coin_left_out_is_still_refused() {
     let mut partial = builder.finish().unwrap();
     partial.proprietary = full.proprietary.clone();
     assert!(matches!(
-        check_checkin(&savings.wallet, &partial, delays),
+        check_checkin(&savings.wallet, &partial, delays, FeeCeiling::DEFAULT),
         Err(Error::CheckinMissesCoin { coin }) if coin == coins[1]
     ));
 }
@@ -249,5 +250,46 @@ fn no_confirmed_coins_means_nothing_to_check_in() {
     node.send_to(&address, btc(1.0)); // not mined
     savings.sync(&node);
     let delays = savings.delays();
-    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE), Err(Error::CheckinNoCoins)));
+    assert!(matches!(build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT), Err(Error::CheckinNoCoins)));
+}
+
+#[test]
+fn a_check_in_whose_fee_is_above_the_ceiling_is_refused() {
+    let node = Node::start();
+    let mut savings = Savings::new(Delays::with_heir(20).unwrap());
+    savings.fund(&node, btc(1.0));
+    savings.fund(&node, btc(0.5));
+    let delays = savings.delays();
+
+    // A typo in the fee rate, 5,000 sat/vB for 5: over 0.01 BTC for two
+    // coins, above the 0.005 BTC ceiling.
+    let built = build_checkin(&mut savings.wallet, delays, FeeRate::from_sat_per_vb_u32(5_000), FeeCeiling::DEFAULT);
+    assert!(matches!(built, Err(Error::FeeTooHigh { .. })), "{:?}", built.err());
+
+    // A good check-in whose one output was edited down, signed anyway.
+    let good = build_checkin(&mut savings.wallet, delays, FEE_RATE, FeeCeiling::DEFAULT).unwrap();
+    let mut edited = good.clone();
+    edited.unsigned_tx.output[0].value = btc(0.1);
+    savings.sign(&mut edited, &[Holder::Phone, Holder::Helper]);
+    let checked = check_checkin(&savings.wallet, &edited, delays, FeeCeiling::DEFAULT);
+    assert!(
+        matches!(checked, Err(Error::FeeTooHigh { fee, spent, .. }) if fee == btc(1.4) && spent == btc(1.5)),
+        "{checked:?}"
+    );
+    // The ceiling is a setting: one that allows it lets it through.
+    let generous = FeeCeiling::new(btc(2.0), 100).unwrap();
+    assert!(check_checkin(&savings.wallet, &edited, delays, generous).is_ok());
+    assert!(check_checkin(&savings.wallet, &good, delays, FeeCeiling::DEFAULT).is_ok());
+
+    // In a small Savings, the percentage ceiling refuses what the amount
+    // ceiling allows: 1,000 sat/vB on 0.01 BTC is well over 5%.
+    let mut small = Savings::new(Delays::with_heir(20).unwrap());
+    small.fund(&node, btc(0.01));
+    let small_delays = small.delays();
+    let built = build_checkin(&mut small.wallet, small_delays, FeeRate::from_sat_per_vb_u32(1_000), FeeCeiling::DEFAULT);
+    assert!(
+        matches!(built, Err(Error::FeeTooHigh { fee, .. }) if fee < FeeCeiling::DEFAULT.max_fee()),
+        "{:?}",
+        built.err()
+    );
 }
