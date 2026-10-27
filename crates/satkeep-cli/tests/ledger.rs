@@ -1,5 +1,6 @@
 //! `satkeep sign --ledger` and the wallet's Ledger registration file, with
-//! no Ledger attached: everything it checks before it talks to the device.
+//! no Ledger attached: everything it checks before it talks to the device,
+//! the fee ceiling included.
 //! Signing with a Ledger itself is tested against Ledger's emulator in
 //! `satkeep-ledger`.
 
@@ -8,7 +9,7 @@ mod common;
 use std::fs;
 use std::str::FromStr;
 
-use common::{Cli, Holders, Node, expect_failure};
+use common::{Cli, Holders, Node, expect_failure, expect_ok};
 use satkeep_savings::bitcoin::{Address, Amount, Network};
 
 /// A fake approval code: it's never sent anywhere, and must never be shown.
@@ -74,6 +75,52 @@ fn an_unreadable_registration_is_refused_without_repeating_it() {
         assert!(err.contains("ledger.json"), "{err}");
         assert!(!shown.contains(CODE), "the file was repeated: {shown}");
     }
+}
+
+#[test]
+fn a_check_in_above_the_ceiling_is_refused_before_looking_for_a_ledger() {
+    // A check-in of 0.01 BTC at 1,000 sat/vB: over 5%, under 0.005 BTC.
+    let node = Node::start();
+    let cli = Cli::new(&node);
+    cli.create_with_checkin(&Holders::generate(), 20, 10, 5);
+    let address = cli.ok(&["address"]);
+    let address = Address::from_str(address.trim()).unwrap().require_network(Network::Regtest).unwrap();
+    node.send_to(&address, Amount::from_btc(0.01).unwrap());
+    node.mine(1);
+    let psbt = cli.path("checkin.psbt");
+    let checkin = ["checkin", "--fee-rate", "1000", "--out", &psbt, "--allow-high-fee"];
+    expect_ok(&checkin, cli.run_with_stdin(&checkin, "y\n"));
+    let unsigned = fs::read_to_string(&psbt).unwrap();
+
+    // Registered, so only the ceiling stands between this and the Ledger:
+    // without the flag it refuses, and never gets as far as looking for one.
+    let descriptor = cli.ok(&["export"]);
+    ledger_file(&cli, descriptor.trim());
+    let sign = ["sign", "--psbt", &psbt, "--ledger"];
+    let err = cli.fails(&sign);
+    assert!(err.contains("more than this wallet allows") && err.contains("--allow-high-fee"), "{err}");
+    assert!(!err.contains("Ledger"), "it looked for a Ledger: {err}");
+    assert_eq!(fs::read_to_string(&psbt).unwrap(), unsigned);
+
+    // With the flag, the fee question is asked here first; no refuses.
+    let allowed = [&sign[..], &["--allow-high-fee"]].concat();
+    let out = cli.run_with_stdin(&allowed, "n\n");
+    let shown = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = expect_failure(&allowed, out);
+    assert!(shown.contains("The network fee is 0.00") && shown.contains("Approve this network fee anyway? (y/N)"), "{shown}");
+    assert!(err.contains("the network fee wasn't approved, so nothing was done"), "{err}");
+    assert!(!shown.contains("Ledger's screen"), "the Ledger was asked: {shown}");
+    assert_eq!(fs::read_to_string(&psbt).unwrap(), unsigned);
+
+    // Yes gets past the ceiling to the Ledger's own checks: here, with no
+    // registration, the one before looking for a Ledger.
+    fs::remove_file(cli.wallet_dir().join("ledger.json")).unwrap();
+    let out = cli.run_with_stdin(&allowed, "y\n");
+    let shown = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = expect_failure(&allowed, out);
+    assert!(shown.contains("Check-in to approve"), "{shown}");
+    assert!(err.contains("isn't registered on a Ledger yet"), "{err}");
+    assert_eq!(fs::read_to_string(&psbt).unwrap(), unsigned);
 }
 
 #[test]

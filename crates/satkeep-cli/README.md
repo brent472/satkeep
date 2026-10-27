@@ -107,7 +107,7 @@ satkeep broadcast --psbt checkin.psbt
 | `checkin [--fee-rate 2] --out FILE.psbt` | Prepares a check-in: every coin, through the 2-of-3 path, into one new Savings address. Approve and send it with `sign` and `broadcast`. Only with a beneficiary. | Yes |
 | `export [--split]` | Prints the public descriptor, for backup or for importing into other software | No |
 | `send --to ADDR (--amount BTC \| --all) [--path two-of-three\|heir] [--fee-rate 2] --out FILE.psbt` | Prepares an unsigned payment. The heir path is refused without a beneficiary, and until every coin used has waited long enough. With a beneficiary and the payment rule on, a 2-of-3 payment also spends the coins due for a refresh. | Yes |
-| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin [--yes] \| --ledger)` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place. With `--ledger`, the Ledger shows the payment and signs as DEVICE once you approve it there (see below) | No (reads the wallet folder) |
+| `sign --psbt FILE.psbt (--key-file FILE.key \| --key-stdin [--yes] \| --ledger) [--allow-high-fee]` | Shows what the payment does, asks `Approve? (y/N)`, and only then signs with one holder's key, updating the file in place. With `--ledger`, the Ledger shows the payment and signs as DEVICE once you approve it there (see below) | No (reads the wallet folder) |
 | `ledger-key` | Shows your Ledger's public key for Savings (`m/87'/1'/0'`), after you approve it on the Ledger, for `create --device` | No |
 | `ledger-register` | Registers this wallet on your Ledger, after you check its rules and keys on the Ledger's screen. Saves the registration (`ledger.json`) in the wallet folder | No |
 | `broadcast --psbt FILE.psbt` | Checks the payment has enough approvals and is old enough, then sends it | Yes |
@@ -137,6 +137,7 @@ satkeep sign --psbt pay.psbt --ledger     # the Ledger shows the payment; approv
 ```
 
 - **The Ledger is the approval.** `sign --ledger` shows the payment as usual, but doesn't ask `Approve? (y/N)`: the Ledger shows the payment on its own screen and signs only once you approve there. It takes no key, and no `--yes`.
+- **The fee ceiling comes first.** `sign --ledger` runs the same checks as signing with a key, the fee ceiling included, before looking for a Ledger, so the Ledger never shows a check-in or move the ceiling refuses. With `--allow-high-fee`, the fee question is asked on the PC, before the Ledger shows the payment; the Ledger then shows the same fee on its own screen.
 - **Every wallet is registered once.** `sign --ledger` refuses, before looking for a Ledger, if the wallet folder has no `ledger.json`, or one for another wallet. After `add-heir`, register the new wallet too. The move itself is signed under the old wallet's registration.
 - **The approval code is never shown.** `ledger.json` holds the Ledger's approval code for the wallet. It isn't secret, but `satkeep` never prints it or repeats the file in an error.
 - **The Ledger must sign every coin,** as with a key file; otherwise nothing is saved.
@@ -258,7 +259,7 @@ $null = & $bcli @node generatetoaddress 1 $burn
 - **Fee ceiling on check-ins and moves.** `checkin`, `add-heir`, `sign` and `broadcast` refuse a check-in or move whose network fee is above 0.005 BTC or above 5% of what it spends (placeholders). That catches a fee-rate typo and a PSBT whose one output was edited down. To change it, set `max_fee_sat` and `max_fee_percent` in `savings.json`; `add-heir` copies them to the new wallet. Plain payments have no ceiling yet; `sign` shows their fee.
   - **Approving a higher fee, knowingly:** add `--allow-high-fee` to `checkin`, `add-heir`, `sign` or `broadcast`.
     - **What it does:** above the ceiling, it prints the fee and its percentage of what's spent, then asks "Approve this network fee anyway? (y/N)" on standard input. Only that exact fee is approved.
-    - **Each approver must use it,** and `broadcast` too, so every person sees the fee. On `sign`, the fee question comes before "Approve? (y/N)", and `--yes` can't be combined with it.
+    - **Each approver must use it,** and `broadcast` too, so every person sees the fee. On `sign`, the fee question comes before "Approve? (y/N)", and `--yes` can't be combined with it. With `sign --ledger`, it comes before the Ledger shows the payment.
     - **Why it exists:** on a small Savings with many coins, 5% can block a check-in when fees are high, and a blocked check-in lets the heir path open.
     - **The helper never gets this override.**
 - **Node access.** Over RPC with cookie auth, using raw JSON calls, because `bitcoincore-rpc`'s typed responses lag behind newer Core versions. The tool never changes anything on the node except by broadcasting a payment.
