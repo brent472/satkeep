@@ -1,4 +1,4 @@
-**Do not merge before 27 October (14-day rule for tokio 1.53.3).**
+**tokio 1.53.3's 14-day date (27 October) has passed. Merge only on approval.**
 
 ## A Ledger as DEVICE, step 1: approving Savings payments
 
@@ -14,6 +14,8 @@ A Ledger running the Bitcoin Test app can be DEVICE, the second key of Savings. 
   - `satkeep ledger-key`;
   - `satkeep ledger-register`, which saves the registration as `ledger.json` in the wallet folder. That file is now in `.gitignore`;
   - `satkeep sign --ledger`. The Ledger's screen is the approval, so it takes no `--yes` and no key.
+    - **The fee ceiling comes first.** It runs the same check as signing with a key (`within_fee_ceiling`), before it loads `ledger.json` or looks for a Ledger, so the Ledger never shows a check-in or move the ceiling refuses.
+    - **`--allow-high-fee` works with it** as with a key: the fee and its percentage are shown and the question is asked on the PC, before the Ledger shows the payment.
 - **The approval code isn't secret, but nothing prints it:** not the CLI, not an error, not `Debug`, and no CI step.
 
 Every assumption is written in [`crates/satkeep-ledger/README.md`](../../crates/satkeep-ledger/README.md):
@@ -36,6 +38,11 @@ Every assumption is written in [`crates/satkeep-ledger/README.md`](../../crates/
 - **How the buttons are pressed:** through Speculos's REST API. The test presses right until one of the screens Ledger's own tests approve on, then both buttons.
 - **What a failing test prints:** only redacted screens and error messages, never a PSBT, a registration or a key.
 - **`crates/satkeep-cli/tests/ledger.rs`,** with no Ledger: a missing, unreadable or wrong-wallet `ledger.json` is refused before any device is contacted, and the approval code is never shown.
+  - **`a_check_in_above_the_ceiling_is_refused_before_looking_for_a_ledger`** (0.01 BTC at 1,000 sat/vB: over 5%, under 0.005 BTC):
+    - with this wallet's registration in place, `sign --ledger` without the flag is refused by the ceiling, the error names `--allow-high-fee`, and the PSBT is unchanged. So the refusal comes before any Ledger is looked for;
+    - with the flag, "n" refuses on the PC, after showing the fee and its percentage, and the Ledger is never asked;
+    - "y" gets past the ceiling to the next check (here, no registration), still before the Ledger.
+  - **Not tested in the CLI:** a yes that goes on to a real Ledger, since the CLI only talks to one over USB. The Speculos tests cover the Ledger's signing.
 - **The test harness:** `satkeep-savings/tests/common` gains `Savings::with_device_key`, so the Ledger tests reuse it. Existing tests are unchanged and pass.
 - **Run locally on Windows:**
   - the whole workspace's tests, regtest included;
@@ -43,6 +50,15 @@ Every assumption is written in [`crates/satkeep-ledger/README.md`](../../crates/
   - `cargo deny check` for bans, licences and sources.
 
   The Speculos tests run only in CI.
+
+### Merged with #34 and #35
+
+`main` is merged in again ([brent472/satkeep#34](https://github.com/brent472/satkeep/pull/34), the heir delay fits the check-ins; [brent472/satkeep#35](https://github.com/brent472/satkeep/pull/35), the fee ceiling and `--allow-high-fee`). Everything from both is kept.
+
+- **The conflicts** were only in `crates/satkeep-cli/src/main.rs` and `wallet_dir.rs`:
+  - `sign` keeps both `--ledger` and `--allow-high-fee`;
+  - `wallet_dir.rs` imports both the Ledger registration and the fee ceiling.
+- **The one change in behaviour:** `sign --ledger` now goes through the fee ceiling, as above.
 
 ### CI
 
@@ -138,7 +154,13 @@ Approved on 2026-10-25. Direct dependencies are pinned with `=`. Every crate is 
 
 ### Security review
 
-**None.** A separate agent reviewed the diff (`origin/main...HEAD`) without editing anything, reading async-hwi 0.0.32's source where needed. It checked:
+**Of the merge with #34 and #35: none.** A separate agent reviewed the merge and the new test without editing anything (`git show --cc` of the merge, and the diffs against both sides). It checked:
+- **`sign --ledger`:** the ceiling check runs before `ledger.json` is loaded, before any Ledger is looked for, and before the PSBT is written. Without the flag and a yes, no path reaches the Ledger with a check-in or move above the ceiling. A yes approves exactly the fee shown, and the Ledger signs the same PSBT that was checked.
+- **The flags:** `--ledger` can't be combined with `--yes`, a key file or `--key-stdin`; `--allow-high-fee` can't be combined with `--yes`.
+- **Nothing dropped:** every #34 and #35 check is still in place, and `satkeep-savings` is identical to `main`. So are the Ledger checks: another wallet's registration is refused, and the approval code is never printed.
+- **Leaks:** the fee question shows only amounts and a percentage.
+
+**Of the Ledger change itself: none.** A separate agent reviewed the diff (`origin/main...HEAD`) without editing anything, reading async-hwi 0.0.32's source where needed. It checked:
 - **Ledger signing:** `sign` works on a copy, and keeps it only if every coin gained a signature. async-hwi only adds signatures and never changes other PSBT fields. A device error keeps nothing.
 - **`sign --ledger`:** it runs the same payment checks as a key file: every input is this wallet's own unspent coin, every amount matches the wallet's record, there's one approval path, and moves and check-ins are validated. It can't be combined with `--yes`, a key file or standard input.
 - **A tampered `ledger.json`:**
