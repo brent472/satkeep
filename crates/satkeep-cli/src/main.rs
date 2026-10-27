@@ -14,8 +14,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use satkeep_savings::bitcoin::psbt::Psbt;
 use satkeep_savings::bitcoin::{Address, Amount, Denomination, FeeRate};
 use satkeep_savings::checkin::{self, Reminder};
-use satkeep_savings::spend::{self, Path as SpendPath};
-use satkeep_savings::{DEFAULT_HEIR_DELAY, HolderKey, SavingsPolicy, contains_recovery_phrase, migrate};
+use satkeep_savings::spend::{self, FeeCeiling, Path as SpendPath};
+use satkeep_savings::{
+    DEFAULT_HEIR_DELAY, Delays, Error as SavingsError, HolderKey, SavingsPolicy, contains_recovery_phrase, migrate,
+};
 use zeroize::Zeroizing;
 
 use satkeep_cli::wallet_dir::{self, Config, MovingTo, Opened, TestNetwork};
@@ -92,6 +94,12 @@ enum Command {
         /// File to save the move to. Must not already exist.
         #[arg(long)]
         out: PathBuf,
+        /// Approve, knowingly, a network fee above this wallet's limit for a
+        /// check-in or move: shows the fee and its percentage and asks again
+        /// on standard input. Without it, the limit refuses. Only for a
+        /// person approving; the helper never gets this.
+        #[arg(long)]
+        allow_high_fee: bool,
     },
     /// Show a new address to receive into Savings.
     Address,
@@ -134,14 +142,22 @@ enum Command {
         /// File to save the check-in to. Must not already exist.
         #[arg(long)]
         out: PathBuf,
+        /// Approve, knowingly, a network fee above this wallet's limit for a
+        /// check-in or move: shows the fee and its percentage and asks again
+        /// on standard input. Without it, the limit refuses. Only for a
+        /// person approving; the helper never gets this.
+        #[arg(long)]
+        allow_high_fee: bool,
     },
     /// Show a payment, ask to approve it, then sign with one holder's key.
     /// Updates the PSBT file in place.
     ///
     /// Standard input carries the answer to "Approve? (y/N)" first, then,
     /// with --key-stdin, the key on the next line. A declined payment never
-    /// reads the key. With --ledger, the Ledger shows the payment and asks
-    /// instead.
+    /// reads the key. With --allow-high-fee and a fee above the limit, the
+    /// answer to the fee question comes before both. With --ledger, the
+    /// Ledger shows the payment and asks instead of "Approve? (y/N)"; any
+    /// fee question is still answered here first.
     Sign {
         #[arg(long)]
         psbt: PathBuf,
@@ -160,6 +176,12 @@ enum Command {
         /// (`satkeep ledger-register`).
         #[arg(long)]
         ledger: bool,
+        /// Approve, knowingly, a network fee above this wallet's limit for a
+        /// check-in or move: shows the fee and its percentage and asks again
+        /// on standard input. Without it, the limit refuses. Only for a
+        /// person approving; the helper never gets this.
+        #[arg(long, conflicts_with = "yes")]
+        allow_high_fee: bool,
     },
     /// Show your Ledger's public key for Savings, after you approve it on
     /// the Ledger. Use it as --device in `satkeep create`. The Ledger must
@@ -174,6 +196,12 @@ enum Command {
     Broadcast {
         #[arg(long)]
         psbt: PathBuf,
+        /// Approve, knowingly, a network fee above this wallet's limit for a
+        /// check-in or move: shows the fee and its percentage and asks again
+        /// on standard input. Without it, the limit refuses. Only for a
+        /// person approving; the helper never gets this.
+        #[arg(long)]
+        allow_high_fee: bool,
     },
 }
 
@@ -186,7 +214,8 @@ struct HeirArgs {
     /// Blocks before HEIR can spend alone (placeholder default, about 14 months)
     #[arg(long, requires = "heir")]
     heir_delay: Option<u16>,
-    /// Blocks between check-ins (placeholder default, about 12 months)
+    /// Blocks between check-ins (placeholder default: about 12 months, or
+    /// the heir delay minus the margin if that's shorter)
     #[arg(long, requires = "heir")]
     checkin_interval: Option<u16>,
     /// Blocks the check-in interval must leave before the heir delay
@@ -210,9 +239,17 @@ impl HeirArgs {
     fn apply(&self, config: &mut Config) {
         config.heir = self.heir.clone();
         if self.heir.is_some() {
-            config.heir_delay = Some(self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY));
-            config.checkin_interval = Some(self.checkin_interval.unwrap_or(checkin::DEFAULT_CHECKIN_INTERVAL));
-            config.checkin_margin = Some(self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN));
+            let heir_delay = self.heir_delay.unwrap_or(DEFAULT_HEIR_DELAY);
+            let margin = self.checkin_margin.unwrap_or(checkin::DEFAULT_CHECKIN_MARGIN);
+            config.heir_delay = Some(heir_delay);
+            // Brief 3.27: the default interval fits the heir delay. Where
+            // nothing fits (an heir delay no longer than the margin), it's
+            // left unset, and the check-in rule refuses the wallet.
+            config.checkin_interval = self.checkin_interval.or_else(|| {
+                let delays = Delays::with_heir(heir_delay).ok()?;
+                checkin::default_interval(delays, margin).ok()
+            });
+            config.checkin_margin = Some(margin);
             if self.no_refresh_with_payments {
                 config.refresh_with_payments = Some(false);
             } else {
@@ -366,10 +403,17 @@ fn run(cli: Cli) -> Result<()> {
             println!("Saved, unsigned, to {}.", out.display());
             println!("Needs approval from {}: run `satkeep sign`, then `satkeep broadcast`.", path.who_approves());
         }
-        Command::Sign { ref psbt, ledger: true, .. } => {
+        Command::Sign { ref psbt, ledger: true, allow_high_fee, .. } => {
             let opened = cli.open()?;
             let mut payment = read_psbt(psbt)?;
-            print_payment(&opened, &payment)?;
+            // The same checks as signing with a key, fee limit included: any
+            // fee question is answered here, before looking for a Ledger, so
+            // the Ledger never shows a payment the limit refuses.
+            let stdin = std::io::stdin();
+            let ceiling = opened.config.fee_ceiling()?;
+            within_fee_ceiling(ceiling, allow_high_fee, &mut stdin.lock().lines(), |c| {
+                print_payment(&opened, &payment, c)
+            })?;
             let registration = wallet_dir::load_ledger(&opened.dir, &opened.policy)?;
             let mut device = Ledger::connect()?;
             println!("Check the payment on your Ledger's screen and approve it there.");
@@ -380,17 +424,18 @@ fn run(cli: Cli) -> Result<()> {
             fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
             println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
         }
-        Command::Sign { ref psbt, ref key_file, key_stdin, yes, ledger: false } => {
+        Command::Sign { ref psbt, ref key_file, key_stdin, yes, allow_high_fee, ledger: false } => {
             let opened = cli.open()?;
             let mut payment = read_psbt(psbt)?;
-            print_payment(&opened, &payment)?;
             let stdin = std::io::stdin();
             let mut lines = stdin.lock().lines();
+            let ceiling = opened.config.fee_ceiling()?;
+            within_fee_ceiling(ceiling, allow_high_fee, &mut lines, |c| print_payment(&opened, &payment, c))?;
             if !yes {
                 print!("Approve? (y/N) ");
                 std::io::stdout().flush()?;
                 let answer = lines.next().transpose().context("reading the answer")?.unwrap_or_default();
-                if !matches!(without_bom(&answer).trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+                if !is_yes(&answer) {
                     println!();
                     bail!("not approved; nothing was signed");
                 }
@@ -425,7 +470,7 @@ fn run(cli: Cli) -> Result<()> {
             fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
             println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
         }
-        Command::Checkin { fee_rate, ref out } => {
+        Command::Checkin { fee_rate, ref out, allow_high_fee } => {
             let (mut opened, _client) = open_and_sync(&cli)?;
             if opened.config.checkin_rule()?.is_none() {
                 bail!("this Savings has no beneficiary, so it has no delayed path and needs no check-in");
@@ -434,7 +479,11 @@ fn run(cli: Cli) -> Result<()> {
                 .filter(|r| *r >= FeeRate::from_sat_per_vb_u32(1))
                 .context("the fee rate must be at least 1 sat/vB")?;
             let delays = opened.policy.delays();
-            let psbt = checkin::build_checkin(&mut opened.wallet, delays, fee_rate)?;
+            let ceiling = opened.config.fee_ceiling()?;
+            let stdin = std::io::stdin();
+            let (psbt, _) = within_fee_ceiling(ceiling, allow_high_fee, &mut stdin.lock().lines(), |c| {
+                Ok(checkin::build_checkin(&mut opened.wallet, delays, fee_rate, c)?)
+            })?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
@@ -457,14 +506,18 @@ fn run(cli: Cli) -> Result<()> {
             }
             println!("Needs approval from any 2 of PHONE, DEVICE, HELPER: run `satkeep sign`, then `satkeep broadcast`.");
         }
-        Command::Broadcast { ref psbt } => {
+        Command::Broadcast { ref psbt, allow_high_fee } => {
             let (mut opened, client) = open_and_sync(&cli)?;
             let payment = read_psbt(psbt)?;
             // Synced just now: refuses if a coin arrived since it was built.
-            if checkin::is_checkin(&payment) {
-                checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays())?;
-            }
-            let moved_to = checked_move(&opened, &payment)?;
+            let ceiling = opened.config.fee_ceiling()?;
+            let stdin = std::io::stdin();
+            let (moved_to, _) = within_fee_ceiling(ceiling, allow_high_fee, &mut stdin.lock().lines(), |c| {
+                if checkin::is_checkin(&payment) {
+                    checkin::check_checkin(&opened.wallet, &payment, opened.policy.delays(), c)?;
+                }
+                checked_move(&opened, &payment, c)
+            })?;
             spend::check_inputs(&opened.wallet, &payment)?;
             let tx = spend::finalize(&opened.wallet, &payment)?;
             let txid = node::broadcast(&client, &tx)?;
@@ -494,6 +547,8 @@ fn run(cli: Cli) -> Result<()> {
                 refresh_window: None,
                 min_heir_delay,
                 moving_to: None,
+                max_fee_sat: None,
+                max_fee_percent: None,
                 device_r: None,
             };
             heir.apply(&mut config);
@@ -506,7 +561,7 @@ fn run(cli: Cli) -> Result<()> {
             print_rules(&opened.config);
             println!("Settings: {}", wallet_dir::config_path(&dir).display());
         }
-        Command::AddHeir { ref new_wallet_dir, ref heir, fee_rate, ref out } => {
+        Command::AddHeir { ref new_wallet_dir, ref heir, fee_rate, ref out, allow_high_fee } => {
             if heir.heir.is_none() {
                 bail!("add-heir needs --heir, the beneficiary's public key");
             }
@@ -528,21 +583,32 @@ fn run(cli: Cli) -> Result<()> {
                 refresh_window: None,
                 min_heir_delay: opened.config.min_heir_delay,
                 moving_to: None,
+                max_fee_sat: opened.config.max_fee_sat,
+                max_fee_percent: opened.config.max_fee_percent,
                 device_r: None,
             };
             heir.apply(&mut config);
             let to = config.policy()?;
             config.checkin_rule()?;
             config.payment_rule()?;
-            let min_heir_delay = opened.config.min_heir_delay();
-            let psbt = migrate::build_move(&mut opened.wallet, &opened.policy, &to, min_heir_delay, fee_rate)?;
+            let ceiling = opened.config.fee_ceiling()?;
+            let rules = config.heir_delay_rules();
+            let stdin = std::io::stdin();
+            let (psbt, _) = within_fee_ceiling(ceiling, allow_high_fee, &mut stdin.lock().lines(), |c| {
+                Ok(migrate::build_move(&mut opened.wallet, &opened.policy, &to, rules, fee_rate, c)?)
+            })?;
             let mut new = wallet_dir::create(new_wallet_dir, config)?;
             new.persist()?;
             write_new(out, psbt.to_string().as_bytes())?;
             opened.persist()?;
             // What sign and broadcast check the move against, here.
             let heir_delay = to.delays().heir().expect("a wallet with a beneficiary");
-            opened.config.moving_to = Some(MovingTo { heir: new.config.heir.clone().expect("set above"), heir_delay });
+            opened.config.moving_to = Some(MovingTo {
+                heir: new.config.heir.clone().expect("set above"),
+                heir_delay,
+                checkin_interval: new.config.checkin_interval,
+                checkin_margin: new.config.checkin_margin,
+            });
             opened.save_config()?;
             let total: Amount = psbt.inputs.iter().filter_map(|i| i.witness_utxo.as_ref()).map(|o| o.value).sum();
             println!("Created the new Savings wallet in {}.", new_wallet_dir.display());
@@ -675,6 +741,55 @@ fn without_bom(text: &str) -> &str {
     text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
+fn is_yes(answer: &str) -> bool {
+    matches!(without_bom(answer).trim(), "y" | "Y" | "yes" | "Yes" | "YES")
+}
+
+/// Runs `check`, which builds or checks a check-in or move, against
+/// `ceiling`, this wallet's fee limit. Above it, without `allow_high_fee`,
+/// it's refused as before. With it, the person sees the fee and its
+/// percentage and is asked again, on `answers`; on yes, `check` runs once
+/// more with a ceiling of exactly that fee, so only the fee they saw is
+/// approved. Returns `check`'s result and the ceiling it passed.
+///
+/// Only for a person approving at the command line. The helper never gets
+/// this override (see the satkeep-savings README).
+fn within_fee_ceiling<T>(
+    ceiling: FeeCeiling,
+    allow_high_fee: bool,
+    answers: &mut dyn Iterator<Item = std::io::Result<String>>,
+    mut check: impl FnMut(FeeCeiling) -> Result<T>,
+) -> Result<(T, FeeCeiling)> {
+    let refused = match check(ceiling) {
+        Ok(done) => return Ok((done, ceiling)),
+        Err(e) => e,
+    };
+    let Some(&SavingsError::FeeTooHigh { fee, spent, max_fee, max_percent }) = refused.downcast_ref::<SavingsError>() else {
+        return Err(refused);
+    };
+    if !allow_high_fee {
+        bail!("{refused:#}; or, to approve this one fee knowingly, run it again with --allow-high-fee");
+    }
+    let hundredths = u128::from(fee.to_sat()) * 10_000 / u128::from(spent.to_sat().max(1));
+    println!(
+        "The network fee is {}, {}.{:02}% of the {} this spends: above this wallet's limit of {} and {max_percent}%.",
+        btc(fee),
+        hundredths / 100,
+        hundredths % 100,
+        btc(spent),
+        btc(max_fee),
+    );
+    print!("Approve this network fee anyway? (y/N) ");
+    std::io::stdout().flush()?;
+    let answer = answers.next().transpose().context("reading the answer")?.unwrap_or_default();
+    if !is_yes(&answer) {
+        println!();
+        bail!("the network fee wasn't approved, so nothing was done");
+    }
+    let approved = FeeCeiling::new(fee, 100)?;
+    Ok((check(approved)?, approved))
+}
+
 fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork) -> Result<Client> {
     let url = url.clone().unwrap_or_else(|| node::default_url(network));
     let cookie = cookie.clone().unwrap_or_else(|| node::default_cookie(network));
@@ -684,8 +799,9 @@ fn connect(url: &Option<String>, cookie: &Option<PathBuf>, network: TestNetwork)
 /// Prints what a payment does, so a holder sees it before approving:
 /// every output's address and amount (marking money that comes back to
 /// Savings), the network fee, and which path it needs. Refuses a payment
-/// that doesn't spend this wallet's coins.
-fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
+/// that doesn't spend this wallet's coins, and a check-in or move whose
+/// fee is above `ceiling`.
+fn print_payment(opened: &Opened, payment: &Psbt, ceiling: FeeCeiling) -> Result<()> {
     let wallet = &opened.wallet;
     for (i, input) in payment.unsigned_tx.input.iter().enumerate() {
         if wallet.get_utxo(input.previous_output).is_none() {
@@ -702,11 +818,11 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
         .context("this payment's inputs ask for different approval paths")?;
     let network = opened.network().network();
     if checkin::is_checkin(payment) {
-        checkin::check_checkin(wallet, payment, opened.policy.delays())?;
+        checkin::check_checkin(wallet, payment, opened.policy.delays(), ceiling)?;
         let heir_delay = opened.policy.delays().heir().expect("check-ins need a beneficiary");
         println!("Check-in to approve: every Savings coin goes into one new Savings address,");
         println!("restarting the heir delay ({}).", blocks_and_about(heir_delay.into()));
-    } else if let Some(to) = checked_move(opened, payment)? {
+    } else if let Some(to) = checked_move(opened, payment, ceiling)? {
         let heir_delay = to.delays().heir().expect("a move goes to a wallet with a beneficiary");
         let heir = to.keys().get(satkeep_savings::Role::Heir).expect("a move goes to a wallet with a beneficiary");
         println!("Move to approve: every Savings coin goes to the new Savings wallet set up in this");
@@ -751,9 +867,9 @@ fn print_payment(opened: &Opened, payment: &Psbt) -> Result<()> {
 /// For a move, the wallet it goes to, rebuilt from this wallet's own
 /// settings (its keys plus the beneficiary set up by `add-heir`), after
 /// checking the move goes there and nowhere else. A PSBT is treated as a
-/// move if it's marked as one or pays that wallet. `None` for any other
-/// payment.
-fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>> {
+/// move if it's marked as one or pays that wallet, and its fee must be no
+/// higher than `ceiling`. `None` for any other payment.
+fn checked_move(opened: &Opened, payment: &Psbt, ceiling: FeeCeiling) -> Result<Option<SavingsPolicy>> {
     let to = opened.config.move_target(&opened.policy)?;
     let is_move = migrate::is_move(payment) || to.as_ref().is_some_and(|to| migrate::pays_to(payment, to));
     if !is_move {
@@ -763,7 +879,8 @@ fn checked_move(opened: &Opened, payment: &Psbt) -> Result<Option<SavingsPolicy>
         "this is a move to a new Savings wallet, but no move is set up in this wallet's settings, \
          so there's nothing to check where it goes against (set one up with `satkeep add-heir`)",
     )?;
-    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, opened.config.min_heir_delay())?;
+    let rules = opened.config.move_rules().expect("a move is set up");
+    migrate::check_move(&opened.wallet, payment, &opened.policy, &to, rules, ceiling)?;
     Ok(Some(to))
 }
 

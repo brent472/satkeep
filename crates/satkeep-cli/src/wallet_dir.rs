@@ -9,10 +9,11 @@ use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
 use satkeep_ledger::Registration;
-use satkeep_savings::bitcoin::Network;
 use satkeep_savings::bitcoin::hex::{DisplayHex, FromHex};
+use satkeep_savings::bitcoin::{Amount, Network};
+use satkeep_savings::spend::{DEFAULT_MAX_FEE, DEFAULT_MAX_FEE_PERCENT, FeeCeiling};
 use satkeep_savings::checkin::{
-    CheckinRule, DEFAULT_CHECKIN_INTERVAL, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, PaymentRule,
+    self, CheckinRule, DEFAULT_CHECKIN_MARGIN, DEFAULT_REFRESH_WINDOW, HeirDelayRules, PaymentRule,
 };
 use satkeep_savings::miniscript::descriptor::DescriptorPublicKey;
 use satkeep_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, SavingsKeys, SavingsPolicy, migrate};
@@ -90,6 +91,15 @@ pub struct Config {
     /// anywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving_to: Option<MovingTo>,
+    /// The most network fee a check-in or a move may pay, in sats. Missing
+    /// means [`DEFAULT_MAX_FEE`], a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fee_sat: Option<u64>,
+    /// The most network fee a check-in or a move may pay, as a percentage
+    /// of what it spends. Missing means [`DEFAULT_MAX_FEE_PERCENT`], a
+    /// placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fee_percent: Option<u8>,
     /// Only in wallets made before the card-only delayed path was removed.
     /// Read so such a wallet gets a clear error; never written.
     #[serde(default, skip_serializing)]
@@ -97,11 +107,18 @@ pub struct Config {
 }
 
 /// Where a move set up in this wallet goes: this wallet's PHONE, DEVICE and
-/// HELPER plus this beneficiary.
+/// HELPER plus this beneficiary, in a wallet with these check-ins.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MovingTo {
     pub heir: String,
     pub heir_delay: u16,
+    /// The new wallet's check-in interval and margin, which the heir delay
+    /// must leave room for. Missing in moves set up by earlier versions,
+    /// which get the defaults, if they fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkin_interval: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkin_margin: Option<u16>,
 }
 
 impl Config {
@@ -139,13 +156,45 @@ impl Config {
         })
     }
 
+    /// The most network fee a check-in or a move may pay.
+    pub fn fee_ceiling(&self) -> Result<FeeCeiling> {
+        let max_fee = Amount::from_sat(self.max_fee_sat.unwrap_or(DEFAULT_MAX_FEE.to_sat()));
+        FeeCeiling::new(max_fee, self.max_fee_percent.unwrap_or(DEFAULT_MAX_FEE_PERCENT))
+            .context("max_fee_sat and max_fee_percent in this wallet's settings")
+    }
+
     /// The shortest heir delay this wallet accepts.
     pub fn min_heir_delay(&self) -> u16 {
         self.min_heir_delay.unwrap_or(DEFAULT_MIN_HEIR_DELAY)
     }
 
+    /// What this wallet's heir delay must allow: its minimum, and room for
+    /// its check-ins (the default margin if none is set, and the default
+    /// interval for the heir delay, which always fits).
+    pub fn heir_delay_rules(&self) -> HeirDelayRules {
+        HeirDelayRules {
+            min_heir_delay: self.min_heir_delay(),
+            checkin_interval: self.checkin_interval,
+            checkin_margin: self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN),
+        }
+    }
+
+    /// What the heir delay of the move set up here must allow: this
+    /// wallet's minimum, and room for the new wallet's check-ins. `None` if
+    /// no move is set up.
+    pub fn move_rules(&self) -> Option<HeirDelayRules> {
+        let moving_to = self.moving_to.as_ref()?;
+        Some(HeirDelayRules {
+            min_heir_delay: self.min_heir_delay(),
+            checkin_interval: moving_to.checkin_interval,
+            checkin_margin: moving_to.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN),
+        })
+    }
+
     /// The wallet a move set up here goes to, rebuilt from this wallet's
-    /// own keys and `moving_to`, or `None` if no move is set up.
+    /// own keys and `moving_to`, or `None` if no move is set up. Refused if
+    /// its heir delay is below this wallet's minimum or leaves no room for
+    /// the new wallet's check-ins.
     pub fn move_target(&self, from: &SavingsPolicy) -> Result<Option<SavingsPolicy>> {
         let Some(moving_to) = &self.moving_to else { return Ok(None) };
         let heir: DescriptorPublicKey = moving_to
@@ -153,7 +202,8 @@ impl Config {
             .parse()
             .map_err(|e| anyhow::anyhow!("the HEIR key set up for the move isn't a valid public key: {e}"))?;
         let delays = Delays::with_heir(moving_to.heir_delay)?;
-        let to = migrate::wallet_with_heir(from, heir, delays, self.min_heir_delay())
+        let rules = self.move_rules().expect("a move is set up");
+        let to = migrate::wallet_with_heir(from, heir, delays, rules)
             .context("the move set up in this wallet's settings")?;
         Ok(Some(to))
     }
@@ -167,17 +217,21 @@ impl Config {
 
     /// The check-in rule, or `None` for Savings with no beneficiary, which
     /// needs no check-in. A wallet made before check-ins existed gets the
-    /// defaults, if they fit its heir delay.
+    /// default margin and the default interval for its heir delay, if the
+    /// heir delay is longer than the margin.
     pub fn checkin_rule(&self) -> Result<Option<CheckinRule>> {
         let delays = self.delays()?;
         if delays.heir().is_none() {
             return Ok(None);
         }
-        let interval = self.checkin_interval.unwrap_or(DEFAULT_CHECKIN_INTERVAL);
         let margin = self.checkin_margin.unwrap_or(DEFAULT_CHECKIN_MARGIN);
-        CheckinRule::new(interval, margin, delays).map(Some).map_err(|e| {
+        let rule = match self.checkin_interval {
+            Some(interval) => CheckinRule::new(interval, margin, delays),
+            None => checkin::default_interval(delays, margin).and_then(|i| CheckinRule::new(i, margin, delays)),
+        };
+        rule.map(Some).map_err(|e| {
             if self.checkin_interval.is_none() {
-                anyhow::anyhow!("this wallet has no check-in interval set and the defaults don't fit it ({e})")
+                anyhow::anyhow!("this wallet has no check-in interval set and the default doesn't fit it ({e})")
             } else {
                 e.into()
             }
