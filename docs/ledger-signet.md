@@ -16,11 +16,15 @@ The Ledger gets a new key on the test path, and the wallets here are new: nothin
   - the Ledger plus HELPER pays.
 - **At the end:** what's left goes back to the faucet.
 
-Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\twofold-ledger` (this PR's branch).
+Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\twofold`, on `main`.
 
 ## Before you start
 
-1. **Wait for the signet run** (step list A) to finish, and keep the signet node running and synced:
+1. **Start the signet node** in its own PowerShell window, pruned as in the signet run, and leave it running:
+   ```powershell
+   & "C:\Program Files\Bitcoin\daemon\bitcoind.exe" -signet -prune=550
+   ```
+   Then, in your main window, check it has caught up:
    ```powershell
    & "C:\Program Files\Bitcoin\daemon\bitcoin-cli.exe" -signet getblockchaininfo
    ```
@@ -31,14 +35,16 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
    - Then, in **My Ledger**, install **Bitcoin Test** from the app catalog. It needs version 2.2.1 or later; take the latest.
    - Leave the normal Bitcoin app alone.
 4. **Close Ledger Live completely,** including from the system tray. Only one program can talk to the Ledger at a time.
-5. **Get the branch and build the tool:**
+5. **Plug in the Ledger with its USB cable.** `satkeep` talks to a Ledger over USB only, so a Nano X's Bluetooth won't work.
+6. **Get `main` and build the tool:**
    ```powershell
-   cd C:\Users\Brent\Documents\twofold-ledger
+   cd C:\Users\Brent\Documents\twofold
+   git switch main
    git pull
    cargo build -p satkeep-cli
    $sk = ".\target\debug\satkeep.exe"
    ```
-6. **Open the Bitcoin Test app:** plug in the Ledger, unlock it with its PIN, and open **Bitcoin Test**.
+7. **Open the Bitcoin Test app:** unlock the Ledger with its PIN, and open **Bitcoin Test**.
 
 ## A. Savings with no beneficiary
 
@@ -90,7 +96,7 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
    - The Ledger shows the same payment: 0.00001 to the faucet's address, the network fee, and the wallet name. Approve it on the Ledger.
    - The tool says "Added 1 signature".
 
-   Then PHONE approves, and it's sent:
+   Then PHONE approves (answer `y` at "Approve? (y/N)"), and it's sent:
    ```powershell
    & $sk --wallet-dir $w sign --psbt "$w\pay-ledger-phone.psbt" --key-file "$env:USERPROFILE\.satkeep\signet\keys\ledger-phone.key"
    & $sk --wallet-dir $w broadcast --psbt "$w\pay-ledger-phone.psbt"
@@ -112,6 +118,8 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
    $w2 = "$env:USERPROFILE\.satkeep\signet-ledger-heir"
    & $sk --wallet-dir $w add-heir --heir $heir --heir-delay 12 --checkin-interval 6 --checkin-margin 3 --refresh-window 2 --new-wallet-dir $w2 --out "$w\move.psbt"
    ```
+   - Note the address it prints as "the new wallet's first address".
+   - The move's network fee must be within this wallet's limit: at most 0.005 BTC and 5% of what it moves. At 2 sat/vB on about 20,000 sats it's about 2%. If it's refused as too high, stop and send me the message: don't add `--allow-high-fee`.
 9. **Approve the move with the Ledger and PHONE:**
    ```powershell
    & $sk --wallet-dir $w sign --psbt "$w\move.psbt" --ledger
@@ -119,7 +127,7 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
    - The tool shows "Move to approve", with HEIR's key and the heir delay.
    - The Ledger shows the move as one payment of everything, less the fee, to one address. That address must be the one the tool shows for the move, which `add-heir` also printed as "the new wallet's first address". Approve on the Ledger.
 
-   Then PHONE approves, and it's sent:
+   Then PHONE approves (answer `y`), and it's sent:
    ```powershell
    & $sk --wallet-dir $w sign --psbt "$w\move.psbt" --key-file "$env:USERPROFILE\.satkeep\signet\keys\ledger-phone.key"
    & $sk --wallet-dir $w broadcast --psbt "$w\move.psbt"
@@ -139,8 +147,8 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
     & $sk --wallet-dir $w2 sign --psbt "$w2\pay-ledger-helper.psbt" --key-file "$env:USERPROFILE\.satkeep\signet\keys\ledger-helper.key"
     & $sk --wallet-dir $w2 broadcast --psbt "$w2\pay-ledger-helper.psbt"
     ```
-    Approve on the Ledger when it asks. Note the transaction ID.
-12. **Send what's left back to the faucet,** with the Ledger and PHONE, after the payment above confirms:
+    Approve on the Ledger when it asks, and answer `y` for HELPER. Note the transaction ID.
+12. **Send what's left back to the faucet,** with the Ledger and PHONE (answer `y`), after the payment above confirms:
     ```powershell
     & $sk --wallet-dir $w2 balance
     & $sk --wallet-dir $w2 send --to $faucet --all --out "$w2\return.psbt"
@@ -162,6 +170,6 @@ Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\
 
 ## Notes
 
-- **If the tool says "no Ledger found",** check that the Ledger is unlocked, Bitcoin Test is open, and Ledger Live is fully closed. Then try again.
+- **If the tool says "no Ledger found",** check that the Ledger is plugged in by USB, unlocked, with Bitcoin Test open, and that Ledger Live is fully closed. Then try again.
 - **If you decline on the Ledger,** the tool says the Ledger refused, and the PSBT file is unchanged.
 - **Nothing here touches your real bitcoin.** Bitcoin Test uses a different key tree (coin type 1') and refuses mainnet addresses.
