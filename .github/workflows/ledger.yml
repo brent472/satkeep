@@ -1,0 +1,145 @@
+# A Ledger as DEVICE: satkeep-ledger's tests against Ledger's Speculos
+# emulator running the Bitcoin Test app, on regtest. Both Savings shapes,
+# the allowed 2-of-3 spends with the Ledger and the forbidden ones. See
+# crates/satkeep-ledger/README.md.
+#
+# Everything downloaded is pinned by identity: the app's source by commit,
+# Ledger's build image by digest, Speculos and its Python dependencies by
+# SHA256 (.github/ledger/speculos-requirements.txt), Bitcoin Core by its
+# signed checksums, and the checkout action by commit. Speculos runs on its
+# public default seed. Nothing here prints a key, a seed or the Ledger's
+# approval code: Speculos's own log (which traces every message to and from
+# the app) is never shown, and the tests print only redacted screens.
+name: Ledger
+
+on:
+  workflow_dispatch:
+  # Every PR, so the job always reports and can be a required check. The
+  # first step decides from the PR's own changes whether the tests run; a PR
+  # that changes nothing they use passes in seconds.
+  pull_request:
+  # Every push to main runs them, never the skip.
+  push:
+    branches: [main]
+
+concurrency:
+  group: ledger-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # LedgerHQ/app-bitcoin-new: the commit behind tag 2.4.6 (checked on
+  # 2026-10-25), built for the Nano X as the testnet app (COIN=bitcoin_testnet,
+  # the Makefile's default).
+  APP_BITCOIN_COMMIT: fc8d7ab610afd834fe512542ba258cf65661ee08
+  # Ledger's app builder image, tag 5.3.2 (created 2026-04-27), by the digest
+  # of its multi-platform index (checked on 2026-10-25). Its Nano X SDK matches
+  # the app at 2.4.6 and Speculos 0.26.6, the set async-hwi's own CI uses.
+  APP_BUILDER_IMAGE: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-builder@sha256:d231791ef0e785361360b0d7cbc991e112b4f7fa05f5d296f82a3664cf482714
+  # Same pins as ci.yml and exit-drill.yml.
+  CORE_VERSION: "31.1"
+  CORE_TARBALL_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
+  CORE_MIN_SIGNATURES: "3"
+
+jobs:
+  ledger:
+    name: Ledger (Speculos)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, for the merge base with the PR's base branch.
+          fetch-depth: 0
+
+      # On a PR, the tests run if the PR changes anything they use: the
+      # crates they build (satkeep-ledger, and satkeep-savings with its test
+      # harness, satkeep-backup and satkeep-testenv under it), the Speculos
+      # pins, this workflow, the Bitcoin Core script, or the toolchain and
+      # dependencies. Same method as the exit drill. When in doubt, they run.
+      - name: Decide whether the tests run
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          run_it() { echo "run=true" >> "$GITHUB_OUTPUT"; echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          [ "$EVENT" = "pull_request" ] || run_it "Ledger tests: a $EVENT run always runs them."
+          base=$(git merge-base "origin/$BASE_REF" "$HEAD_SHA") || run_it "Ledger tests: couldn't find the merge base with $BASE_REF."
+          changed=$(git -c core.quotePath=false diff --no-renames --name-only "$base" "$HEAD_SHA") || run_it "Ledger tests: couldn't list the changed files."
+          [ -n "$changed" ] || run_it "Ledger tests: the PR lists no changed files."
+          used='^(crates/(satkeep-ledger|satkeep-savings|satkeep-backup|satkeep-testenv)/|\.github/ledger/|\.github/scripts/|\.cargo/|rust-toolchain)|^(Cargo\.toml|Cargo\.lock|\.github/workflows/ledger\.yml)$'
+          hits=$(grep -E "$used" <<< "$changed" || true)
+          if [ -n "$hits" ]; then
+            run_it "Ledger tests: changed: $(head -5 <<< "$hits" | paste -sd ' ')$( [ "$(wc -l <<< "$hits")" -gt 5 ] && echo ' …')"
+          fi
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "Nothing the Ledger tests use changed: skipped (changed files: $(wc -l <<< "$changed"))." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the Ledger Bitcoin app from its pinned commit in Ledger's pinned build image
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/app-bitcoin-new"
+          git init -q "$app" && cd "$app"
+          git fetch -q --depth 1 https://github.com/LedgerHQ/app-bitcoin-new "$APP_BITCOIN_COMMIT"
+          git checkout -q FETCH_HEAD
+          if [ "$(git rev-parse HEAD)" != "$APP_BITCOIN_COMMIT" ]; then
+            echo "::error::app-bitcoin-new isn't at the pinned commit"; exit 1
+          fi
+          docker pull -q "$APP_BUILDER_IMAGE"
+          # A release build (no DEBUG), so the app logs nothing.
+          docker run --rm --user "$(id -u):$(id -g)" -v "$app:/app" -w /app "$APP_BUILDER_IMAGE" \
+            bash -c 'make -j"$(nproc)" BOLOS_SDK="$NANOX_SDK" COIN=bitcoin_testnet' > "$RUNNER_TEMP/app-build.log" 2>&1 \
+            || { tail -50 "$RUNNER_TEMP/app-build.log"; exit 1; }
+          test -f bin/app.elf
+          echo "APP_ELF=$app/bin/app.elf" >> "$GITHUB_ENV"
+
+      - name: Install Speculos and its dependencies, each checked against its pinned SHA256
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # libudev: hidapi (USB) for satkeep-ledger. qemu: runs the app's
+          # ARM code. SDL: Speculos's display libraries, even headless.
+          sudo apt-get install -y -qq --no-install-recommends libudev-dev qemu-user-static libsdl2-image-2.0-0
+          python3 -m venv "$RUNNER_TEMP/speculos-venv"
+          "$RUNNER_TEMP/speculos-venv/bin/pip" install -q --require-hashes --only-binary :all: --no-deps \
+            -r .github/ledger/speculos-requirements.txt
+          "$RUNNER_TEMP/speculos-venv/bin/pip" check
+          echo "$RUNNER_TEMP/speculos-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Download Bitcoin Core and verify it against its signed checksums
+        if: steps.scope.outputs.run == 'true'
+        run: .github/scripts/fetch-bitcoin-core.sh
+
+      - name: Build the tests
+        if: steps.scope.outputs.run == 'true'
+        run: cargo test -p satkeep-ledger --test speculos --locked --no-run
+
+      - name: Start Speculos (Nano X, default seed)
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          set -uo pipefail
+          # Its log traces every message to and from the app, keys included,
+          # so it stays in a file that is never printed or uploaded.
+          nohup speculos --model nanox --display headless --apdu-port 9999 --api-port 5000 "$APP_ELF" \
+            > "$RUNNER_TEMP/speculos.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if (echo > /dev/tcp/127.0.0.1/9999) 2>/dev/null && (echo > /dev/tcp/127.0.0.1/5000) 2>/dev/null; then
+              echo "Speculos is up."; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Speculos didn't start (its log isn't shown: it can hold keys)"; exit 1
+
+      # One test at a time: Speculos has one APDU socket and one screen.
+      - name: Run the Ledger tests
+        if: steps.scope.outputs.run == 'true'
+        timeout-minutes: 15
+        run: cargo test -p satkeep-ledger --test speculos --locked -- --ignored --test-threads=1

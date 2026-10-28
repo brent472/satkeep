@@ -16,6 +16,9 @@ Cargo.lock.bak
 .env.*
 wallet-data/
 savings.json
+# A wallet's Ledger registration (its approval code isn't secret, but stays
+# out of commits like the rest of the wallet folder)
+ledger.json
 bitcoin-data/
 
 # OS / editor

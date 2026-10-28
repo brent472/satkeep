@@ -21,6 +21,7 @@ use satkeep_savings::{
 use zeroize::Zeroizing;
 
 use satkeep_cli::wallet_dir::{self, Config, MovingTo, Opened, TestNetwork};
+use satkeep_ledger::Ledger;
 use satkeep_cli::node;
 
 #[derive(Parser)]
@@ -154,20 +155,27 @@ enum Command {
     /// Standard input carries the answer to "Approve? (y/N)" first, then,
     /// with --key-stdin, the key on the next line. A declined payment never
     /// reads the key. With --allow-high-fee and a fee above the limit, the
-    /// answer to the fee question comes before both.
+    /// answer to the fee question comes before both. With --ledger, the
+    /// Ledger shows the payment and asks instead of "Approve? (y/N)"; any
+    /// fee question is still answered here first.
     Sign {
         #[arg(long)]
         psbt: PathBuf,
         /// Approve without asking (for scripts and tests)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "ledger")]
         yes: bool,
         /// File holding the private key (from `satkeep keygen`). There is
         /// deliberately no way to pass the key itself as an argument.
-        #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
+        #[arg(long, required_unless_present_any = ["key_stdin", "ledger"], conflicts_with_all = ["key_stdin", "ledger"])]
         key_file: Option<PathBuf>,
         /// Read the private key from standard input instead
-        #[arg(long)]
+        #[arg(long, conflicts_with = "ledger")]
         key_stdin: bool,
+        /// Sign as DEVICE with the Ledger on USB, after you approve the
+        /// payment on its screen. The wallet must be registered on it
+        /// (`satkeep ledger-register`).
+        #[arg(long)]
+        ledger: bool,
         /// Approve, knowingly, a network fee above this wallet's limit for a
         /// check-in or move: shows the fee and its percentage and asks again
         /// on standard input. Without it, the limit refuses. Only for a
@@ -175,6 +183,15 @@ enum Command {
         #[arg(long, conflicts_with = "yes")]
         allow_high_fee: bool,
     },
+    /// Show your Ledger's public key for Savings, after you approve it on
+    /// the Ledger. Use it as --device in `satkeep create`. The Ledger must
+    /// run the Bitcoin Test app.
+    LedgerKey,
+    /// Register this Savings wallet on your Ledger, after you check its rules
+    /// and keys on the Ledger's screen. Needed once per wallet before the
+    /// Ledger can approve its payments, so again for the new wallet after
+    /// `add-heir`. Saves the registration as ledger.json in the wallet folder.
+    LedgerRegister,
     /// Check a payment has the approvals it needs and send it to the network.
     Broadcast {
         #[arg(long)]
@@ -386,7 +403,28 @@ fn run(cli: Cli) -> Result<()> {
             println!("Saved, unsigned, to {}.", out.display());
             println!("Needs approval from {}: run `satkeep sign`, then `satkeep broadcast`.", path.who_approves());
         }
-        Command::Sign { ref psbt, ref key_file, key_stdin, yes, allow_high_fee } => {
+        Command::Sign { ref psbt, ledger: true, allow_high_fee, .. } => {
+            let opened = cli.open()?;
+            let mut payment = read_psbt(psbt)?;
+            // The same checks as signing with a key, fee limit included: any
+            // fee question is answered here, before looking for a Ledger, so
+            // the Ledger never shows a payment the limit refuses.
+            let stdin = std::io::stdin();
+            let ceiling = opened.config.fee_ceiling()?;
+            within_fee_ceiling(ceiling, allow_high_fee, &mut stdin.lock().lines(), |c| {
+                print_payment(&opened, &payment, c)
+            })?;
+            let registration = wallet_dir::load_ledger(&opened.dir, &opened.policy)?;
+            let mut device = Ledger::connect()?;
+            println!("Check the payment on your Ledger's screen and approve it there.");
+            // The Ledger shows the payment itself and signs only once its owner
+            // approves; like a key file, it must sign every coin, or nothing
+            // is saved.
+            let added = device.sign(&registration, &mut payment)?;
+            fs::write(psbt, payment.to_string()).with_context(|| format!("writing {}", psbt.display()))?;
+            println!("Added {added} signature{} to {}.", if added == 1 { "" } else { "s" }, psbt.display());
+        }
+        Command::Sign { ref psbt, ref key_file, key_stdin, yes, allow_high_fee, ledger: false } => {
             let opened = cli.open()?;
             let mut payment = read_psbt(psbt)?;
             let stdin = std::io::stdin();
@@ -608,6 +646,35 @@ fn run(cli: Cli) -> Result<()> {
             let (mut opened, client) = open_and_sync(&cli)?;
             print_balance(&opened, &client)?;
             opened.persist()?;
+        }
+        Command::LedgerKey => {
+            let mut device = Ledger::connect()?;
+            println!("Check the public key on your Ledger's screen and approve it there.");
+            let key = device.public_key()?;
+            println!("DEVICE's public key, from your Ledger:");
+            println!("  {key}");
+            println!("Use it as --device in `satkeep create`.");
+        }
+        Command::LedgerRegister => {
+            let opened = cli.open()?;
+            let mut device = Ledger::connect()?;
+            println!("Check this wallet's name, rules and keys on your Ledger's screen, and approve them there:");
+            println!("  Name: {}", satkeep_ledger::WALLET_NAME);
+            for role in satkeep_savings::Role::ALL {
+                if let Some(key) = opened.policy.keys().get(role) {
+                    println!("  {role}: {key}");
+                }
+            }
+            if let satkeep_savings::miniscript::Descriptor::Tr(tr) = opened.policy.descriptor() {
+                // The Ledger lists it as a key too.
+                println!("  Unspendable internal key (nobody can sign with it): {}", tr.internal_key());
+            }
+            let registration = device.register(&opened.policy)?;
+            wallet_dir::save_ledger(&opened.dir, &registration)?;
+            println!(
+                "Registered on your Ledger. Saved the registration to {}.",
+                wallet_dir::ledger_path(&opened.dir).display()
+            );
         }
         Command::Export { split } => {
             let opened = cli.open()?;

@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
 use serde::{Deserialize, Serialize};
+use satkeep_ledger::Registration;
+use satkeep_savings::bitcoin::hex::{DisplayHex, FromHex};
 use satkeep_savings::bitcoin::{Amount, Network};
 use satkeep_savings::spend::{DEFAULT_MAX_FEE, DEFAULT_MAX_FEE_PERCENT, FeeCeiling};
 use satkeep_savings::checkin::{
@@ -18,6 +20,8 @@ use satkeep_savings::{DEFAULT_MIN_HEIR_DELAY, Delays, SavingsKeys, SavingsPolicy
 
 const CONFIG_FILE: &str = "savings.json";
 const DATABASE_FILE: &str = "wallet.sqlite";
+/// The Ledger registration of this wallet, when DEVICE is a Ledger.
+const LEDGER_FILE: &str = "ledger.json";
 
 /// The test networks Satkeep runs on. There is deliberately no mainnet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -307,4 +311,46 @@ fn write_config(dir: &Path, config: &Config) -> Result<()> {
 
 pub fn config_path(dir: &Path) -> PathBuf {
     dir.join(CONFIG_FILE)
+}
+
+/// A Ledger registration as saved in the wallet folder. The approval code
+/// isn't secret (it only proves to the Ledger that it registered this
+/// wallet), but Satkeep never prints it.
+#[derive(Serialize, Deserialize)]
+struct LedgerFile {
+    name: String,
+    descriptor: String,
+    approval_code: String,
+}
+
+/// Saves this wallet's Ledger registration, replacing any earlier one.
+pub fn save_ledger(dir: &Path, registration: &Registration) -> Result<()> {
+    let file = LedgerFile {
+        name: registration.name.clone(),
+        descriptor: registration.descriptor.clone(),
+        approval_code: registration.hmac.to_lower_hex_string(),
+    };
+    let path = dir.join(LEDGER_FILE);
+    fs::write(&path, serde_json::to_string_pretty(&file)?).with_context(|| format!("writing {}", path.display()))
+}
+
+/// This wallet's Ledger registration. Refuses one for another wallet.
+pub fn load_ledger(dir: &Path, policy: &SavingsPolicy) -> Result<Registration> {
+    let path = dir.join(LEDGER_FILE);
+    let text = fs::read_to_string(&path).with_context(|| {
+        format!("this wallet isn't registered on a Ledger yet: run `satkeep ledger-register` (no {})", path.display())
+    })?;
+    // Never echo the file: it holds the approval code.
+    let file: LedgerFile = serde_json::from_str(&text).map_err(|_| anyhow::anyhow!("{} isn't readable", path.display()))?;
+    let hmac = <[u8; 32]>::from_hex(&file.approval_code)
+        .map_err(|_| anyhow::anyhow!("{} has no readable approval code", path.display()))?;
+    let registration = Registration { name: file.name, descriptor: file.descriptor, hmac };
+    if !registration.is_for(policy) {
+        bail!("{} is for another wallet: run `satkeep ledger-register` for this one", path.display());
+    }
+    Ok(registration)
+}
+
+pub fn ledger_path(dir: &Path) -> PathBuf {
+    dir.join(LEDGER_FILE)
 }
