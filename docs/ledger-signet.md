@@ -18,6 +18,25 @@ The Ledger gets a new key on the test path, and the wallets here are new: nothin
 
 Run everything in one Windows PowerShell window, from `C:\Users\Brent\Documents\twofold`, on `main`.
 
+**Paste one command at a time, on an empty prompt.** Pasting several at once, or onto a line that isn't empty, can run them together on one line.
+
+## Results: passed on 29 October 2026
+
+**Every step worked as written,** on `main` at `91ce841`, with a real **Ledger Nano X** running **Bitcoin Test 2.5.1**, on signet (blocks 328,592–328,597). Each transaction below was checked against the signet node, and each spends the one before it.
+
+| Step | What | Approved by | Block | Network fee | Transaction |
+| --- | --- | --- | --- | --- | --- |
+| 5 | Funding, from a public faucet: output 37, 2,531,619 sats | the faucet | 328,592 | — | [`12b3a861…01e9f`](https://mempool.space/signet/tx/12b3a8612fcf4a442b3603879069b7955e0b50801a2e195e771267b728a01e9f) |
+| 6 | Savings with no beneficiary pays 1,000 sats to the faucet | Ledger + PHONE | 328,594 | 402 sats (201 vB) | [`40a16019…3b619`](https://mempool.space/signet/tx/40a1601992561bfcda9554502490cdd6d2a05ce37aea775a30cabccf57f3b619) |
+| 7 | The Ledger alone: refused by `broadcast` with "not enough keys have approved this payment"; nothing sent | Ledger | — | — | — |
+| 9 | The move to the wallet with HEIR: everything, in one payment | Ledger + PHONE | 328,596 | 316 sats (158 vB) | [`1daacb8c…35ef9`](https://mempool.space/signet/tx/1daacb8c129c1f859c8be9e394c32df8ea92c95f5200e6cdf5f70cfe50935ef9) |
+| 11 | The Taproot wallet pays 1,000 sats to the faucet | Ledger + HELPER | 328,597 | 428 sats (214 vB) | [`bb9820c4…32a9b`](https://mempool.space/signet/tx/bb9820c41962315c23dc8e0501c7627c69ca5dda1c60b0e8399c1ea371332a9b) |
+| 12 | The rest, 2,528,131 sats, back to the faucet | Ledger + PHONE | unconfirmed: in the mempool when checked, at block 328,597 | 342 sats (171 vB) | [`0f8368fc…f145e`](https://mempool.space/signet/tx/0f8368fc347fcce1a137623df170174d049b6fc0af4a949cadd5b467873f145e) |
+
+- **The faucet sent far more than needed:** about 0.025 signet BTC, not 0.0002. Step 12 gave it all back, less the network fees.
+- **The move's fee** was 0.01% of what it moved, far inside the 5% ceiling.
+- **One thing to fix in these steps:** twice, pasted commands ran together onto one line in PowerShell. The guide now says to paste one command at a time, on an empty prompt.
+
 ## Before you start
 
 1. **Start the signet node** in its own PowerShell window, pruned as in the signet run, and leave it running:
