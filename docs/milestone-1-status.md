@@ -105,5 +105,5 @@ You ran [`ledger-signet.md`](ledger-signet.md) on 29 October, on `main`, with a 
 
 - **Without a beneficiary:** the Ledger showed and gave its key, and registered the wallet. The Ledger plus PHONE paid ([`40a16019…3b619`](https://mempool.space/signet/tx/40a1601992561bfcda9554502490cdd6d2a05ce37aea775a30cabccf57f3b619)), and the Ledger alone was refused.
 - **Adding a beneficiary:** the Ledger approved the move ([`1daacb8c…35ef9`](https://mempool.space/signet/tx/1daacb8c129c1f859c8be9e394c32df8ea92c95f5200e6cdf5f70cfe50935ef9)) and registered the new wallet. The Ledger plus HELPER paid from it ([`bb9820c4…32a9b`](https://mempool.space/signet/tx/bb9820c41962315c23dc8e0501c7627c69ca5dda1c60b0e8399c1ea371332a9b)).
-- **The rest was sent back to the faucet** ([`0f8368fc…f145e`](https://mempool.space/signet/tx/0f8368fc347fcce1a137623df170174d049b6fc0af4a949cadd5b467873f145e), still unconfirmed when this was written).
+- **The rest went back to the faucet** ([`0f8368fc…f145e`](https://mempool.space/signet/tx/0f8368fc347fcce1a137623df170174d049b6fc0af4a949cadd5b467873f145e)).
 - **One change to the steps:** pasted commands twice ran together onto one line in PowerShell, so the guide now says to paste one command at a time, on an empty prompt.

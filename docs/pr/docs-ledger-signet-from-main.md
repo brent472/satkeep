@@ -24,7 +24,7 @@
   - step 6, the Ledger plus PHONE (block 328,594);
   - step 9, the move (block 328,596);
   - step 11, the Ledger plus HELPER (block 328,597);
-  - step 12, the return to the faucet (unconfirmed: in the node's mempool when checked, with the tip at 328,597).
+  - step 12, the return to the faucet (block 328,598).
 - **Each one spends the one before it.** Steps 6 and 11 each paid 1,000 sats to the faucet's address, and step 12 sent it the rest.
 - **Step 7** (the Ledger alone) was refused with "not enough keys have approved this payment", and sent nothing.
 - **`milestone-1-status.md`** also gets:
