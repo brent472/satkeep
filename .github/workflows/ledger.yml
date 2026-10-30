@@ -37,7 +37,8 @@ env:
   APP_BITCOIN_COMMIT: fc8d7ab610afd834fe512542ba258cf65661ee08
   # Ledger's app builder image, tag 5.3.2 (created 2026-04-27), by the digest
   # of its multi-platform index (checked on 2026-10-25). Its Nano X SDK matches
-  # the app at 2.4.6 and Speculos 0.26.6, the set async-hwi's own CI uses.
+  # the app at 2.4.6 and Speculos 0.26.6, the set async-hwi's own CI uses;
+  # Speculos is now 0.27.0, for a patched Pillow (see the requirements file).
   APP_BUILDER_IMAGE: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-builder@sha256:d231791ef0e785361360b0d7cbc991e112b4f7fa05f5d296f82a3664cf482714
   # Same pins as ci.yml and exit-drill.yml.
   CORE_VERSION: "31.1"
