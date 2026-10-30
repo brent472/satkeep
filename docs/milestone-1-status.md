@@ -1,6 +1,6 @@
 # Milestone 1: where it stands
 
-Status on 25 October 2026, after the signet run and the Sparrow import. The milestone itself is [`milestone-1.md`](milestone-1.md). This page says, for each item, whether it's **done** or **left**, then lists the open decisions. Test networks only throughout.
+Status on 29 October 2026, after the signet run, the Sparrow import and the Ledger test on signet. The milestone itself is [`milestone-1.md`](milestone-1.md). This page says, for each item, whether it's **done** or **left**, then lists the open decisions. Test networks only throughout.
 
 ## The milestone's items
 
@@ -62,6 +62,7 @@ These weren't in the milestone's list, but were needed for it:
   - the old-phone second key (#26).
 - **RustCrypto on one current generation, Rust 1.87,** and wiping inside the libraries (#25, #27).
 - **The draft exit guide** for family and helpers ([`exit-guide.md`](exit-guide.md)).
+- **A Ledger as DEVICE, step 1:** a Ledger running Bitcoin Test approves Savings payments (#31). It's tested against Ledger's emulator in CI, and passed with a real Nano X on signet on 29 October (below).
 
 ## Open decisions
 
@@ -83,7 +84,7 @@ These weren't in the milestone's list, but were needed for it:
    - a check that iPhones and Android phones give the same shared value for the old-phone unlock (`backup-format.md`, section 7);
    - the helper-assisted claim's wait (placeholder 3 months);
    - the recovery contact's unlock, which the format reserves but nothing builds yet.
-7. **A small GitHub setting:** the new `Fuzz second_phone (60 s)` check isn't in the "Protect main" ruleset's required checks yet. The other five fuzz targets, the drill and CodeQL are. Adding it is in the repository's Settings, under Rules.
+7. **A small GitHub setting:** the `Ledger (Speculos)` check (#31) isn't in the "Protect main" ruleset's required checks. All six fuzz targets, the drill and CodeQL are. Adding it is in the repository's Settings, under Rules; it skips in seconds when nothing it uses changed.
 
 ## The signet run and the Sparrow import: done
 
@@ -97,3 +98,12 @@ You did both on 25 October, on your Windows PC, with the step lists this page ha
   - Importing needs a start date before **Create Wallet** works.
   - **Mnemonic Words (BIP39)** starts at 24 words; Satkeep's keys need **Use 12 Words**.
   - The words go in with **Create Keystore**, then **Import Keystore**, with the path already filled in. There's no "Show Derivation..." step unless the path changes.
+
+## The Ledger on signet: done
+
+You ran [`ledger-signet.md`](ledger-signet.md) on 29 October, on `main`, with a real Ledger Nano X and Bitcoin Test 2.5.1. Every step worked as written; the results are in [`ledger-signet.md`](ledger-signet.md#results-passed-on-29-october-2026).
+
+- **Without a beneficiary:** the Ledger showed and gave its key, and registered the wallet. The Ledger plus PHONE paid ([`40a16019…3b619`](https://mempool.space/signet/tx/40a1601992561bfcda9554502490cdd6d2a05ce37aea775a30cabccf57f3b619)), and the Ledger alone was refused.
+- **Adding a beneficiary:** the Ledger approved the move ([`1daacb8c…35ef9`](https://mempool.space/signet/tx/1daacb8c129c1f859c8be9e394c32df8ea92c95f5200e6cdf5f70cfe50935ef9)) and registered the new wallet. The Ledger plus HELPER paid from it ([`bb9820c4…32a9b`](https://mempool.space/signet/tx/bb9820c41962315c23dc8e0501c7627c69ca5dda1c60b0e8399c1ea371332a9b)).
+- **The rest went back to the faucet** ([`0f8368fc…f145e`](https://mempool.space/signet/tx/0f8368fc347fcce1a137623df170174d049b6fc0af4a949cadd5b467873f145e)).
+- **One change to the steps:** pasted commands twice ran together onto one line in PowerShell, so the guide now says to paste one command at a time, on an empty prompt.
