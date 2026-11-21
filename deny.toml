@@ -23,6 +23,20 @@ ignore = [
     # tests. 0.7.7 stays until 0.7.9 is 14 days old, 2026-11-08; then move to
     # 0.7.9 and remove this entry.
     { crate = "crypto-bigint@0.7.7", reason = "yanked for the 0.7.9 breaking fix (crypto-bigint#1373), whose code p256 doesn't use; move to 0.7.9 on 2026-11-08" },
+    # RUSTSEC-2026-0459 (CVE-2026-119375), published November 2026: SQLite
+    # before 3.54.0 can return stale process memory when it opens a database
+    # together with a crafted `-wal` file whose page size differs. The bundled
+    # SQLite comes from libsqlite3-sys 0.28 via rusqlite 0.31 via bdk_chain
+    # 0.23.4, the newest bdk_chain; the fix needs rusqlite >= 0.41, which no
+    # bdk_chain release uses yet, so it can't be updated from here.
+    # Exposure: only satkeep-cli opens SQLite, and only its own
+    # `wallet.sqlite` in the user's own wallet folder (wallet_dir.rs). The
+    # attack needs a planted database and `-wal` pair in that folder, and
+    # anyone who can write there can already change the wallet's files. The
+    # restore tool has no SQLite. Test networks only. Remove this entry when
+    # a bdk_chain release moves to rusqlite >= 0.41 and that release is 14
+    # days old.
+    { id = "RUSTSEC-2026-0459", reason = "bundled SQLite via bdk_chain's rusqlite 0.31, no fixed bdk_chain yet; satkeep-cli only opens its own wallet.sqlite; remove when bdk_chain uses rusqlite >= 0.41" },
 ]
 
 [bans]
