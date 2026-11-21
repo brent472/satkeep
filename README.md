@@ -12,7 +12,15 @@ You can replace the helper anytime, and if Satkeep ever disappeared you could st
 
 ## Status
 
-Pre-alpha. **Milestone 1** is in progress: proving the Savings wallet rules on test bitcoin (regtest and signet) before any app work. Nothing here touches real bitcoin.
+Pre-alpha. Nothing here touches real bitcoin.
+
+**Milestone 1 (the Savings rules) is built and tested, and waiting on outside review.**
+- **Regtest:** every allowed path spends and every forbidden case fails, in both shapes, including the full-length heir delay (61,320 blocks).
+- **Signet:** every allowed path was spent on the public test network on 25 October 2026, with HEIR alone refused until a short test heir delay had passed ([`docs/signet-demo.md`](docs/signet-demo.md)).
+- **Real hardware:** a Ledger Nano X signed on signet on 29 October ([`docs/ledger-signet.md`](docs/ledger-signet.md)).
+- **Leaving without Satkeep:** Sparrow imported Savings and signed a payment on signet with no Satkeep code; Liana and Bitcoin Core do the same on regtest on every PR.
+
+What's done and what's left, item by item: [`docs/milestone-1-status.md`](docs/milestone-1-status.md). The timelocks are placeholders until an outside Bitcoin reviewer signs off.
 
 **Renamed from Twofold** (brief v3.14). The crates, the `satkeep` tool, its `~/.satkeep` folder and `SATKEEP_` environment variables, and the identifiers inside PSBTs and phone key backups all changed. Test wallets, PSBTs and backups made before the rename won't work: make them again.
 
